@@ -6,7 +6,6 @@
 #define DESENGINE_DESENGINE_INCLUDE_CLASSES_SCENE_HPP_
 
 #include "../Interfaces/LogicObject.hpp"
-#include "../Widgets/glmainwindow.hpp"
 #include "CameraObject.hpp"
 #include "LightObject.hpp"
 #include "Material.hpp"
@@ -18,12 +17,30 @@
 #include <string>
 #include <functional>
 #include <chrono>
+#include <nlohmann/json.hpp>
 #include <QOpenGLShaderProgram>
+
+namespace std
+{
+    template<>
+    struct hash<std::pair<std::string, std::string>>
+    {
+        size_t operator()(const std::pair<std::string, std::string>& pair) const
+        {
+            hash<std::string> h;
+
+            return h(pair.first) + h(pair.second);
+        }
+    };
+}
 
 namespace DesEngine
 {
 
-	class Scene final
+    class GLMainWindow;
+
+
+	class Scene : public QObject
 	{
 		Q_OBJECT
 
@@ -43,17 +60,18 @@ namespace DesEngine
 
 		std::unordered_map<id_t, std::shared_ptr<LogicObject>> _renderable_objects;
 
-		//TODO: JSONs
-		std::unordered_map<std::string, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>>> _obj_loaders;
-		std::unordered_map<std::string, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>> _game_mode_loaders;
+		std::unordered_map<std::string, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>>> _obj_loaders;
+		std::unordered_map<std::string, std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)>> _game_mode_loaders;
 
 		GLMainWindow* _parent;
 
 		std::chrono::steady_clock::time_point _previous_frame_time;
 
+        float aspect_ratio;
+
 	public:
 
-		Scene(GLMainWindow* parent);
+		explicit Scene(GLMainWindow* parent);
 
 		void init_in_edit_mode();
 
@@ -62,7 +80,11 @@ namespace DesEngine
 
 		[[nodiscard("At every call scene`s max id increments")]] id_t get_new_id();
 
+        void update();
 		void draw(QOpenGLFunctions& functions);
+
+        float get_aspect_ratio() const;
+        void set_aspect_ratio(float ratio);
 
 		std::shared_ptr<CameraObject> get_current_camera();
 		std::shared_ptr<CameraObject> get_game_camera();
@@ -77,14 +99,12 @@ namespace DesEngine
 		void end_pause();
 
 		GLMainWindow* get_window();
-		// TODO: get_widget
 
 		/**
 		 * Returns material if exists in library,
 		 * otherwise adds to library all materials from file with scene wide unique names.
 		 *
-		 * If material wasn`t added throws exception
-		 * TODO: ecxeption type
+		 * If material wasn`t added throws runtime_error
 		 */
 		std::shared_ptr<Material> get_material(std::string name, std::string path);
 		QOpenGLShaderProgram& get_program(std::string vsh_path, std::string fsh_path);
@@ -98,14 +118,14 @@ namespace DesEngine
 		void register_renderable(id_t, std::shared_ptr<LogicObject>);
 		void remove_renderable(id_t);
 
-		std::shared_ptr<LogicObject> load_object(std::string class_name);
+		std::shared_ptr<LogicObject> load_object(std::string class_name, const nlohmann::json& json);
 
 		/**
 		 * @param class_name
 		 * @param functions - first function to call at load from file, other - in editor, with dialog
 		 */
-		void add_object_loader(std::string class_name, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>> functions);
-		void add_gamemode_loader(std::string class_name, std::function<std::shared_ptr<GameMode>(Scene*, id_t)> func);
+		void add_object_loader(std::string class_name, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>> functions);
+		void add_gamemode_loader(std::string class_name, std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)> func);
 
 	};
 

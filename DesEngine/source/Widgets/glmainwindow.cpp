@@ -6,13 +6,18 @@
 
 #include "Widgets/glmainwindow.hpp"
 #include "ui_GLMainWindow.h"
+#include "Widgets/glwidget.hpp"
 
 namespace DesEngine
 {
 	GLMainWindow::GLMainWindow(QWidget *parent) :
-		QMainWindow(parent), ui(new Ui::GLMainWindow)
+		QMainWindow(parent), ui(new Ui::GLMainWindow), scene(this)
 	{
 		ui->setupUi(this);
+
+        glwidget = new GLWidget(this);
+
+        setCentralWidget(glwidget);
 	}
 
 	GLMainWindow::~GLMainWindow()

@@ -6,9 +6,12 @@
 #define DESENGINE_DESENGINE_INCLUDE_WIDGETS_GLMAINWINDOW_HPP_
 
 #include <QMainWindow>
+#include "../Classes/Scene.hpp"
 
 namespace DesEngine
 {
+    class GLWidget;
+
 	QT_BEGIN_NAMESPACE
 	namespace Ui { class GLMainWindow; }
 	QT_END_NAMESPACE
@@ -22,8 +25,11 @@ namespace DesEngine
 
 		~GLMainWindow() override;
 
+        Scene scene;
+
 	private:
 		Ui::GLMainWindow *ui;
+        GLWidget* glwidget;
 	};
 } // DesEngine
 

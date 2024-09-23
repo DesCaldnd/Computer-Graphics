@@ -10,12 +10,14 @@ add_library(DesEngine SHARED
         include/Classes/MeshObject.hpp
         source/Widgets/glwidget.cpp
         include/Widgets/glwidget.hpp
-        include/Widgets/glwidget.ui
+        source/Widgets/glwidget.ui
         source/Widgets/glmainwindow.cpp
         include/Widgets/glmainwindow.hpp
-        include/Widgets/glmainwindow.ui
+        source/Widgets/glmainwindow.ui
         source/Classes/LightObject.cpp
-        include/Classes/LightObject.hpp source/Classes/GroupObject.cpp include/Classes/GroupObject.hpp source/Classes/CameraObject.cpp include/Classes/CameraObject.hpp source/Classes/GameMode.cpp include/Classes/GameMode.hpp source/Classes/Material.cpp include/Classes/Material.hpp source/Classes/Scene.cpp include/Classes/Scene.hpp source/Classes/Serializable.cpp include/Classes/BasicTypes.hpp)
+        include/Classes/LightObject.hpp source/Classes/GroupObject.cpp include/Classes/GroupObject.hpp source/Classes/CameraObject.cpp include/Classes/CameraObject.hpp source/Classes/GameMode.cpp include/Classes/GameMode.hpp source/Classes/Material.cpp include/Classes/Material.hpp source/Classes/Scene.cpp include/Classes/Scene.hpp source/Classes/Serializable.cpp include/Classes/BasicTypes.hpp
+        source/Classes/SkyBoxObject.cpp
+        include/Classes/SkyBoxObject.hpp)
 
 target_include_directories(DesEngine PUBLIC ./include)
 target_link_libraries(DesEngine
@@ -24,3 +26,13 @@ target_link_libraries(DesEngine
         Qt::Widgets
         Qt::OpenGLWidgets
         )
+target_link_libraries(DesEngine ${BULLET_LIBRARIES})
+target_link_libraries(
+        DesEngine
+        nlohmann_json::nlohmann_json)
+
+add_custom_command(
+        TARGET DesEngine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/DesEngine/Shaders
+        ${CMAKE_CURRENT_BINARY_DIR}/Shaders)

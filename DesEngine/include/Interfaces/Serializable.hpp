@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <string>
+#include <nlohmann/json.hpp>
 
 namespace DesEngine
 {
@@ -23,7 +24,7 @@ namespace DesEngine
 		virtual std::string get_class_name() const =0;
 		id_t get_id() const;
 
-		//TODO: Serialize with JSON
+        virtual nlohmann::json serialize() const =0;
 
 		virtual ~Serializable() =default;
 	};

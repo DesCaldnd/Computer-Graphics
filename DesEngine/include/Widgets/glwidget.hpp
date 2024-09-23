@@ -9,6 +9,7 @@
 
 namespace DesEngine
 {
+    class GLMainWindow;
 	QT_BEGIN_NAMESPACE
 	namespace Ui { class GLWidget; }
 	QT_END_NAMESPACE
@@ -22,8 +23,15 @@ namespace DesEngine
 
 		~GLWidget() override;
 
+    protected:
+
+        void initializeGL() override;
+        void paintGL() override;
+        void resizeGL(int w, int h) override;
+
 	private:
 		Ui::GLWidget *ui;
+        GLMainWindow* _parent;
 	};
 } // DesEngine
 
