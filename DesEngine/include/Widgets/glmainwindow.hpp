@@ -26,10 +26,10 @@ namespace DesEngine
 		~GLMainWindow() override;
 
         Scene scene;
+        GLWidget* glwidget;
 
 	private:
 		Ui::GLMainWindow *ui;
-        GLWidget* glwidget;
 	};
 } // DesEngine
 

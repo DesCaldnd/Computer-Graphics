@@ -47,13 +47,14 @@ namespace DesEngine
 	private:
 
 		bool _is_in_edit, _is_in_pause = true;
-		id_t _max_id;
+		id_t _max_id = 1;
 
 		std::shared_ptr<CameraObject> edit_camera, play_camera;
 		std::shared_ptr<GameMode> _game_mode, _edit_mode;
 
 		std::unordered_map<std::string, std::shared_ptr<Material>> _mat_lib;
-		std::unordered_map<std::pair<std::string, std::string>, QOpenGLShaderProgram> _prog_lib;
+		std::unordered_map<std::pair<std::string, std::string>, std::shared_ptr<QOpenGLShaderProgram>> _prog_lib;
+        std::shared_ptr<QOpenGLShaderProgram> _current_prog;
 
 		std::unordered_set<id_t> _lights;
 		std::unordered_map<id_t, std::shared_ptr<LogicObject>> _all_objects;
@@ -61,7 +62,7 @@ namespace DesEngine
 		std::unordered_map<id_t, std::shared_ptr<LogicObject>> _renderable_objects;
 
 		std::unordered_map<std::string, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>>> _obj_loaders;
-		std::unordered_map<std::string, std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)>> _game_mode_loaders;
+		std::unordered_map<std::string, std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>>> _game_mode_loaders;
 
 		GLMainWindow* _parent;
 
@@ -92,8 +93,8 @@ namespace DesEngine
 
 		std::shared_ptr<GameMode> get_game_mode();
 		void set_game_mode(std::shared_ptr<GameMode> gm);
-		void set_game_mode(std::string);
-		std::shared_ptr<GameMode> load_game_mode(std::string);
+		void set_game_mode(const std::string&);
+		std::shared_ptr<GameMode> load_game_mode(const std::string&);
 
 		void start_pause();
 		void end_pause();
@@ -107,10 +108,12 @@ namespace DesEngine
 		 * If material wasn`t added throws runtime_error
 		 */
 		std::shared_ptr<Material> get_material(std::string name, std::string path);
-		QOpenGLShaderProgram& get_program(std::string vsh_path, std::string fsh_path);
+        std::shared_ptr<QOpenGLShaderProgram> get_program(std::string vsh_path, std::string fsh_path);
 
 		void register_light(id_t);
 		void remove_light(id_t);
+        size_t light_count();
+        void clear_lights();
 
 		void register_object(id_t id, std::shared_ptr<LogicObject>);
 		void remove_object(id_t);
@@ -120,12 +123,19 @@ namespace DesEngine
 
 		std::shared_ptr<LogicObject> load_object(std::string class_name, const nlohmann::json& json);
 
+        /**
+         * Can return nullptr
+         * @param id
+         * @return
+         */
+        std::shared_ptr<LogicObject> get_object(id_t id);
+
 		/**
 		 * @param class_name
 		 * @param functions - first function to call at load from file, other - in editor, with dialog
 		 */
 		void add_object_loader(std::string class_name, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>> functions);
-		void add_gamemode_loader(std::string class_name, std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)> func);
+		void add_gamemode_loader(std::string class_name, std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>> func);
 
 	};
 

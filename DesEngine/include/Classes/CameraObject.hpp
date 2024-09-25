@@ -37,7 +37,7 @@ namespace DesEngine
 		bool get_is_orthogonal() const;
 		void set_is_orthogonal(bool orth);
 
-		void set_aspect_ratio();
+		void set_aspect_ratio(float aspect_ratio);
 
 		QMatrix4x4 get_look_matrix() const;
 		QMatrix4x4 get_projection_matrix() const;

@@ -5,10 +5,12 @@
 #ifndef DESENGINE_DESENGINE_INCLUDE_CLASSES_GAMEMODE_HPP_
 #define DESENGINE_DESENGINE_INCLUDE_CLASSES_GAMEMODE_HPP_
 
+#include "Interfaces/Playable.hpp"
+
 namespace DesEngine
 {
 
-	class GameMode
+	class GameMode : public Playable
 	{
 
 	};
