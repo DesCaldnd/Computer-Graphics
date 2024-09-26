@@ -15,7 +15,8 @@ namespace DesEngine
 	{
 		ui->setupUi(this);
 
-        glwidget = new GLWidget(this);
+        glwidget = new GLWidget(ui->centralwidget);
+
 
         setCentralWidget(glwidget);
 	}

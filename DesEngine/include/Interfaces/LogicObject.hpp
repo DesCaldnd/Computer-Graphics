@@ -24,7 +24,7 @@ namespace DesEngine
 
 	public:
 
-		LogicObject(Scene* );
+		LogicObject(Scene* scene, id_t id);
 	};
 
 }

@@ -6,4 +6,8 @@
 
 namespace DesEngine
 {
+    MeshObject::MeshObject(Scene * scene, id_t id, const std::string &path) : LogicObject(scene, id), _filepath(path)
+    {
+        //TODO: load mesh from file
+    }
 } // DesEngine

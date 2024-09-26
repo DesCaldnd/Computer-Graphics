@@ -17,6 +17,7 @@
 #include <string>
 #include <functional>
 #include <chrono>
+#include <QTimer>
 #include <nlohmann/json.hpp>
 #include <QOpenGLShaderProgram>
 
@@ -68,7 +69,13 @@ namespace DesEngine
 
 		std::chrono::steady_clock::time_point _previous_frame_time;
 
+        QTimer _timer;
+
         float aspect_ratio;
+
+    public slots:
+
+        void update();
 
 	public:
 
@@ -81,7 +88,6 @@ namespace DesEngine
 
 		[[nodiscard("At every call scene`s max id increments")]] id_t get_new_id();
 
-        void update();
 		void draw(QOpenGLFunctions& functions);
 
         float get_aspect_ratio() const;
@@ -108,6 +114,9 @@ namespace DesEngine
 		 * If material wasn`t added throws runtime_error
 		 */
 		std::shared_ptr<Material> get_material(std::string name, std::string path);
+
+
+        std::shared_ptr<QOpenGLShaderProgram> load_program(std::string vsh_path, std::string fsh_path);
         std::shared_ptr<QOpenGLShaderProgram> get_program(std::string vsh_path, std::string fsh_path);
 
 		void register_light(id_t);
@@ -115,10 +124,10 @@ namespace DesEngine
         size_t light_count();
         void clear_lights();
 
-		void register_object(id_t id, std::shared_ptr<LogicObject>);
+		void register_object(std::shared_ptr<LogicObject>);
 		void remove_object(id_t);
 
-		void register_renderable(id_t, std::shared_ptr<LogicObject>);
+		void register_renderable(std::shared_ptr<LogicObject>);
 		void remove_renderable(id_t);
 
 		std::shared_ptr<LogicObject> load_object(std::string class_name, const nlohmann::json& json);
