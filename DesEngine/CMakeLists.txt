@@ -1,4 +1,4 @@
-add_library(DesEngine SHARED
+add_library(DesEngine
         include/Interfaces/Transformable.hpp
         include/Interfaces/Serializable.hpp
         include/Interfaces/Drawable.hpp
@@ -17,18 +17,19 @@ add_library(DesEngine SHARED
         include/Classes/LightObject.hpp source/Classes/GroupObject.cpp include/Classes/GroupObject.hpp source/Classes/CameraObject.cpp include/Classes/CameraObject.hpp source/Classes/GameMode.cpp include/Classes/GameMode.hpp source/Classes/Material.cpp include/Classes/Material.hpp source/Classes/Scene.cpp include/Classes/Scene.hpp source/Classes/Serializable.cpp include/Classes/BasicTypes.hpp
         source/Classes/SkyBoxObject.cpp
         include/Classes/SkyBoxObject.hpp
+        source/Classes/LogicObject.cpp
 )
 
 target_include_directories(DesEngine PUBLIC ./include)
-target_link_libraries(DesEngine
+target_link_libraries(DesEngine PUBLIC
         Qt::Core
         Qt::Gui
         Qt::Widgets
         Qt::OpenGLWidgets
         )
-target_link_libraries(DesEngine ${BULLET_LIBRARIES})
+target_link_libraries(DesEngine PUBLIC ${BULLET_LIBRARIES})
 target_link_libraries(
-        DesEngine
+        DesEngine PUBLIC
         nlohmann_json::nlohmann_json)
 
 set(DESENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/DesEngine/")
@@ -38,3 +39,9 @@ add_custom_command(
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/DesEngine/Shaders
         ${CMAKE_CURRENT_BINARY_DIR}/Shaders)
+
+add_custom_command(
+        TARGET DesEngine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/DesEngine/Primitives
+        ${CMAKE_CURRENT_BINARY_DIR}/Primitives)

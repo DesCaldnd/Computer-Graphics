@@ -81,6 +81,8 @@ namespace DesEngine
 
 		explicit Scene(GLMainWindow* parent);
 
+        void init();
+
 		void init_in_edit_mode();
 
 		void load_from_file(std::string path, bool in_edit);
@@ -92,6 +94,8 @@ namespace DesEngine
 
         float get_aspect_ratio() const;
         void set_aspect_ratio(float ratio);
+
+        std::shared_ptr<QOpenGLShaderProgram> get_current_prog();
 
 		std::shared_ptr<CameraObject> get_current_camera();
 		std::shared_ptr<CameraObject> get_game_camera();

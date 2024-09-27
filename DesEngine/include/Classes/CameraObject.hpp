@@ -14,11 +14,11 @@ namespace DesEngine
 	{
 	private:
 
-		float _angle, _near_plane, _far_plane;
+		float _angle = 85, _near_plane = 0.1, _far_plane = 1000;
 		float _aspect_ratio;
-		bool is_orthogonal;
+		bool is_orthogonal = false;
 
-		QMatrix4x4 local_transform, global_transform;
+//		QMatrix4x4 local_transform, global_transform;
 
 	public:
 

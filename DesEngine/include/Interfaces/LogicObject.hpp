@@ -27,6 +27,8 @@ namespace DesEngine
 		LogicObject(Scene* scene, id_t id);
 	};
 
+
+
 }
 
 #endif //DESENGINE_DESENGINE_INCLUDE_INTERFACES_LOGICOBJECT_HPP_

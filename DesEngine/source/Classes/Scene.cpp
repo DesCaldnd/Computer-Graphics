@@ -14,12 +14,9 @@ namespace DesEngine
         _obj_loaders.insert(std::make_pair("Mesh", std::make_pair(&MeshObject::default_mesh_object_json_loader, &MeshObject::default_mesh_object_dialog_loader)));
         _obj_loaders.insert(std::make_pair("Camera", std::make_pair(&CameraObject::default_camera_object_json_loader, &CameraObject::default_camera_object_dialog_loader)));
 
-        _game_mode_loaders.insert(std::make_pair("Gamemode", std::make_pair(&EditGameMode::default_gamemode_json_loader,
+        _game_mode_loaders.insert(std::make_pair("EditGamemode", std::make_pair(&EditGameMode::default_gamemode_json_loader,
                                                                             &EditGameMode::default_gamemode_dialog_loader)));
 
-        load_program("Shaders/pbr.vsh", "Shaders/pbr.fsh");
-        load_program("Shaders/depth.vsh", "Shaders/depth.fsh");
-        load_program("Shaders/color_index.vsh", "Shaders/color_index.fsh");
     }
 
     void Scene::init_in_edit_mode()
@@ -33,6 +30,9 @@ namespace DesEngine
         play_camera = std::make_shared<CameraObject>(this, get_new_id());
 
         register_object(play_camera);
+        edit_camera->translate(QVector3D(0, 0, 10));
+
+        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkey.obj");
 
         connect(&_timer, &QTimer::timeout, this, &Scene::update);
         _is_in_pause = false;
@@ -61,6 +61,9 @@ namespace DesEngine
 
     void Scene::draw(QOpenGLFunctions &functions)
     {
+        if (_is_in_pause)
+            return;
+
         auto new_frame_time = std::chrono::steady_clock::now();
 
         double seconds = std::chrono::duration<double, std::ratio<1, 1>>(new_frame_time - _previous_frame_time).count();
@@ -185,6 +188,7 @@ namespace DesEngine
             return it->second;
 
         //TODO: load material
+        return nullptr;
 
         it = _mat_lib.find(name);
 
@@ -286,16 +290,51 @@ namespace DesEngine
     {
         std::shared_ptr<QOpenGLShaderProgram> prog = std::make_shared<QOpenGLShaderProgram>();
 
+
+        prog->bind();
+
         bool res1 = prog->addShaderFromSourceFile(QOpenGLShader::ShaderTypeBit::Vertex, vsh_path.c_str());
+
+        if (!res1)
+        {
+            prog->log();
+        }
+
         bool res2 = prog->addShaderFromSourceFile(QOpenGLShader::ShaderTypeBit::Fragment, fsh_path.c_str());
 
+        if (!res2)
+        {
+            prog->log();
+        }
+
         bool res3 = prog->link();
+
+        if (!res3)
+        {
+            prog->log();
+        }
 
         if (!(res1 && res2 && res3))
         {
             throw std::runtime_error("Program could not be compiled");
         }
 
+        prog->release();
+
+        _prog_lib.insert(std::make_pair(std::make_pair(vsh_path, fsh_path), prog));
+
         return prog;
+    }
+
+    std::shared_ptr<QOpenGLShaderProgram> Scene::get_current_prog()
+    {
+        return _current_prog;
+    }
+
+    void Scene::init()
+    {
+        load_program("Shaders/pbr.vsh", "Shaders/pbr.fsh");
+//        load_program("Shaders/depth.vsh", "Shaders/depth.fsh");
+//        load_program("Shaders/color_index.vsh", "Shaders/color_index.fsh");
     }
 } // DesEngine

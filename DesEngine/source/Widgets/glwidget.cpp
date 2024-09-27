@@ -13,8 +13,8 @@
 
 namespace DesEngine
 {
-	GLWidget::GLWidget(QWidget *parent) :
-		QOpenGLWidget(parent), ui(new Ui::GLWidget)
+	GLWidget::GLWidget(QWidget *parent_widget, GLMainWindow* parent) :
+		QOpenGLWidget(parent_widget), ui(new Ui::GLWidget)
 	{
         _parent = dynamic_cast<GLMainWindow*>(parent);
 

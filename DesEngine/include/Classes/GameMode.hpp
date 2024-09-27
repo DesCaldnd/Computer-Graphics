@@ -16,7 +16,7 @@ namespace DesEngine
 
 	class GameMode : public Playable, public Serializable
 	{
-
+        Scene* _scene;
     public:
         GameMode(Scene*, id_t);
 	};

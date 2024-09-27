@@ -8,16 +8,27 @@
 #include "../Interfaces/LogicObject.hpp"
 #include "Material.hpp"
 #include <string>
+#include <QOpenGLBuffer>
 #include <vector>
 
 namespace DesEngine
 {
 
     class Scene;
+    class MeshObject;
 
-	class MeshSubObject : public LogicObject
+	class MeshSubObject
 	{
 		std::shared_ptr<Material> _mat;
+
+    public:
+
+        friend MeshObject;
+
+        QOpenGLBuffer _vert_buffer;
+        size_t count;
+
+        MeshSubObject(Scene* scene, const std::string& mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it, std::vector<QVector2D>::iterator uv_it, std::vector<QVector3D>::iterator normal_it, std::string&);
 	};
 
 	class MeshObject : public LogicObject
@@ -27,7 +38,26 @@ namespace DesEngine
 		std::string _filepath = "";
 		std::vector<MeshSubObject> _subs;
 
+        static std::vector<std::string> split(const std::string& str, const std::string& delemeter);
+
+        enum class file_param_type
+        {
+            comment, mtllib, vertex, uv, normal, f, usemtl, unknown
+        };
+
+        static file_param_type get_param_type(const std::string& val);
+
+    protected:
+
+        QQuaternion _rotation;
+        QVector3D _translate;
+        QVector3D _scale;
+
+        QMatrix4x4 _global_transform;
+
 	public:
+
+        friend MeshSubObject;
 
         MeshObject(Scene*, id_t, const std::string& path);
 

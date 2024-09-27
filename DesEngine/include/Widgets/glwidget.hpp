@@ -19,7 +19,7 @@ namespace DesEngine
 	Q_OBJECT
 
 	public:
-		explicit GLWidget(QWidget *parent = nullptr);
+		explicit GLWidget(QWidget *parent_widget, GLMainWindow* parent);
 
 		~GLWidget() override;
 

@@ -16,14 +16,14 @@ namespace DesEngine
 	{
 	public:
 
-		virtual void begin_play();
-		virtual void event_loop(double seconds);
-		virtual void end_play();
+		virtual void begin_play(){};
+		virtual void event_loop(double seconds){};
+		virtual void end_play(){};
 
-		virtual void begin_overlap(std::shared_ptr<LogicObject> obj);
-		virtual void end_overlap(std::shared_ptr<LogicObject> obj);
+		virtual void begin_overlap(std::shared_ptr<LogicObject> obj){};
+		virtual void end_overlap(std::shared_ptr<LogicObject> obj){};
 
-		virtual void event_hit(std::shared_ptr<LogicObject> obj);
+		virtual void event_hit(std::shared_ptr<LogicObject> obj){};
 
 		virtual ~Playable() =default;
 	};

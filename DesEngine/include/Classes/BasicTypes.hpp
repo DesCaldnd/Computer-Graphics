@@ -17,13 +17,16 @@ namespace DesEngine
 
 	struct vertex
 	{
-		float x, y, z;
-		float u, v;
+		QVector3D point;
+        QVector2D uv; 
 		QVector3D normal;
+
+        vertex(const QVector3D& coord, const QVector2D& uvs, const QVector3D& normals) : point(coord), uv(uvs), normal(normals){}
 	};
 
 	struct bounding_box_t
 	{
+        // TODO: object aligned cube
 		basic_point center;
 		float half_side;
 
