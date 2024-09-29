@@ -19,7 +19,7 @@ namespace DesEngine
 	Q_OBJECT
 
 	public:
-		explicit GLWidget(QWidget *parent_widget, GLMainWindow* parent);
+		explicit GLWidget(GLMainWindow* parent);
 
 		~GLWidget() override;
 
@@ -29,7 +29,7 @@ namespace DesEngine
         void paintGL() override;
         void resizeGL(int w, int h) override;
 
-	private:
+    private:
 		Ui::GLWidget *ui;
         GLMainWindow* _parent;
 	};

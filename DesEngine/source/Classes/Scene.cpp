@@ -5,6 +5,7 @@
 #include <QFile>
 #include "Classes/Scene.hpp"
 #include "Widgets/glmainwindow.hpp"
+#include "Classes/TetCube.hpp"
 #include "Widgets/glwidget.hpp"
 
 namespace DesEngine
@@ -30,13 +31,16 @@ namespace DesEngine
         play_camera = std::make_shared<CameraObject>(this, get_new_id());
 
         register_object(play_camera);
-        edit_camera->translate(QVector3D(0, 0, 10));
+        edit_camera->translate(QVector3D(-2, 0, 0));
+
+        set_aspect_ratio(_parent->glwidget->width() / (float) _parent->glwidget->height());
 
         std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkey.obj");
+        register_renderable(testMesh);
 
-        connect(&_timer, &QTimer::timeout, this, &Scene::update);
+
         _is_in_pause = false;
-        _timer.start(1);
+        _timer.start(1, this);
     }
 
     void Scene::load_from_file(std::string path, bool in_edit)
@@ -61,14 +65,15 @@ namespace DesEngine
 
     void Scene::draw(QOpenGLFunctions &functions)
     {
-        if (_is_in_pause)
-            return;
 
         auto new_frame_time = std::chrono::steady_clock::now();
 
         double seconds = std::chrono::duration<double, std::ratio<1, 1>>(new_frame_time - _previous_frame_time).count();
 
         _previous_frame_time = new_frame_time;
+
+        if (_is_in_pause)
+            return;
 
         for (auto &&object: _renderable_objects)
         {
@@ -82,12 +87,14 @@ namespace DesEngine
 
         auto sh_it = get_program("Shaders/pbr.vsh", "Shaders/pbr.fsh");
 
-        sh_it->bind();
+        bool g = sh_it->bind();
 
         sh_it->setUniformValue("proj", proj);
         sh_it->setUniformValue("view", view);
 
         _current_prog = sh_it;
+
+        functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         for (auto&& renderable : _renderable_objects)
         {
@@ -106,6 +113,11 @@ namespace DesEngine
     void Scene::set_aspect_ratio(float ratio)
     {
         aspect_ratio = ratio;
+        if (edit_camera != nullptr)
+            edit_camera->set_aspect_ratio(aspect_ratio);
+
+        if (play_camera != nullptr)
+            play_camera->set_aspect_ratio(aspect_ratio);
     }
 
     std::shared_ptr<CameraObject> Scene::get_current_camera()
@@ -171,7 +183,7 @@ namespace DesEngine
 
         _previous_frame_time = std::chrono::steady_clock::now();
 
-        _timer.start(1);
+        _timer.start(1, this);
     }
 
     GLMainWindow *Scene::get_window()
@@ -291,7 +303,7 @@ namespace DesEngine
         std::shared_ptr<QOpenGLShaderProgram> prog = std::make_shared<QOpenGLShaderProgram>();
 
 
-        prog->bind();
+//        prog->bind();
 
         bool res1 = prog->addShaderFromSourceFile(QOpenGLShader::ShaderTypeBit::Vertex, vsh_path.c_str());
 
@@ -319,7 +331,7 @@ namespace DesEngine
             throw std::runtime_error("Program could not be compiled");
         }
 
-        prog->release();
+//        prog->release();
 
         _prog_lib.insert(std::make_pair(std::make_pair(vsh_path, fsh_path), prog));
 
@@ -336,5 +348,10 @@ namespace DesEngine
         load_program("Shaders/pbr.vsh", "Shaders/pbr.fsh");
 //        load_program("Shaders/depth.vsh", "Shaders/depth.fsh");
 //        load_program("Shaders/color_index.vsh", "Shaders/color_index.fsh");
+    }
+
+    void Scene::timerEvent(QTimerEvent *)
+    {
+        update();
     }
 } // DesEngine

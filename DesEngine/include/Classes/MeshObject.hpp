@@ -19,13 +19,15 @@ namespace DesEngine
 
 	class MeshSubObject
 	{
-		std::shared_ptr<Material> _mat;
 
     public:
 
         friend MeshObject;
 
+        std::shared_ptr<Material> _mat;
+
         QOpenGLBuffer _vert_buffer;
+        QOpenGLBuffer _index_buffer;
         size_t count;
 
         MeshSubObject(Scene* scene, const std::string& mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it, std::vector<QVector2D>::iterator uv_it, std::vector<QVector3D>::iterator normal_it, std::string&);
@@ -54,6 +56,7 @@ namespace DesEngine
         QVector3D _scale;
 
         QMatrix4x4 _global_transform;
+
 
 	public:
 
@@ -85,7 +88,9 @@ namespace DesEngine
 
         std::string get_class_name() const override;
         nlohmann::json serialize() const override;
-	};
+
+        void event_loop(double seconds) override;
+    };
 
 } // DesEngine
 

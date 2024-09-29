@@ -10,6 +10,12 @@ int main(int argc, char *argv[])
 {
 	QApplication a(argc, argv);
 
+    QSurfaceFormat format;
+    format.setSamples(16);
+//    format.setSwapBehavior(QSurfaceFormat::SwapBehavior::SingleBuffer);
+    format.setDepthBufferSize(24);
+    QSurfaceFormat::setDefaultFormat(format);
+
     DesEngine::GLMainWindow window;
     window.show();
 

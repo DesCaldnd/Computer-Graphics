@@ -15,7 +15,8 @@ namespace DesEngine
 	{
 		ui->setupUi(this);
 
-        glwidget = new GLWidget(ui->centralwidget, this);
+        glwidget = new GLWidget(this);
+        ui->hlayout->addWidget(glwidget);
 	}
 
 	GLMainWindow::~GLMainWindow()

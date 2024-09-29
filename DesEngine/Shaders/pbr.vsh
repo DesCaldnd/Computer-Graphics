@@ -7,8 +7,11 @@ uniform highp mat4 proj;
 uniform highp mat4 view;
 uniform highp mat4 model;
 
+varying vec2 v_texcoord;
+
 void main()
 {
-//    gl_Position = proj * view * model * vec4(a_position, 1);
+    gl_Position = proj * view * model * vec4(a_position, 1);
 //    gl_FrontColor = vec4(1);
+    v_texcoord = a_uv;
 }

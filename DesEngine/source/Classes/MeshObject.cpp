@@ -8,14 +8,14 @@
 
 namespace DesEngine
 {
-    MeshObject::MeshObject(Scene * scene, id_t id, const std::string &path) : LogicObject(scene, id), _filepath(path), _translate(0, 0, 0), _rotation(0, 0, 0, 0), _scale(1, 1, 1)
+    MeshObject::MeshObject(Scene * scene, id_t id, const std::string &path) : LogicObject(scene, id), _filepath(path), _translate(0, 0, 0), _scale(1, 1, 1)
     {
+        _rotation.normalize();
+        _global_transform.setToIdentity();
 
         if (_filepath.empty())
             return;
 
-
-        _global_transform.setToIdentity();
         std::ifstream file(_filepath);
 
         if (!file.is_open())
@@ -94,6 +94,7 @@ namespace DesEngine
         model.setToIdentity();
         model.translate(_translate);
         model.rotate(_rotation);
+        model.rotate(_rotation);
         model.scale(_scale);
         model = _global_transform * model;
 
@@ -101,6 +102,11 @@ namespace DesEngine
 
         for(auto&& subobj : _subs)
         {
+//            auto&& subobj = _subs[0];
+
+            if (!subobj._vert_buffer.isCreated() || ! subobj._index_buffer.isCreated())
+                throw std::runtime_error("Mesh object buffer didn't created");
+
             subobj._vert_buffer.bind();
 
             int offset = 0;
@@ -123,9 +129,15 @@ namespace DesEngine
 
             offset += sizeof(QVector3D);
 
+            subobj._index_buffer.bind();
+
+            subobj._mat->set_program(prog);
+
             funcs.glDrawElements(GL_TRIANGLES, subobj.count, GL_UNSIGNED_INT, 0);
 
             subobj._vert_buffer.release();
+            subobj._index_buffer.release();
+            subobj._mat->release();
         }
     }
 
@@ -141,12 +153,14 @@ namespace DesEngine
 
     void MeshObject::rotate(const QQuaternion &quat)
     {
-        _rotation = quat * _rotation;
+        _rotation = quat.normalized() * _rotation;
+        _rotation.normalize();
     }
 
     void MeshObject::set_rotation(const QQuaternion &quat)
     {
         _rotation = quat;
+        _rotation;
     }
 
     QQuaternion MeshObject::get_rotation() const
@@ -274,12 +288,26 @@ namespace DesEngine
         return file_param_type::unknown;
     }
 
+    void MeshObject::event_loop(double seconds)
+    {
+        float angle = 45;
+
+        rotate(QQuaternion::fromAxisAndAngle(QVector3D(0, 0, 1), angle * seconds));
+
+//        translate(QVector3D(0, 0, 0.01 * seconds));
+    }
+
     MeshSubObject::MeshSubObject(Scene *scene, const std::string &mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it,
-                                 std::vector<QVector2D>::iterator uv_it, std::vector<QVector3D>::iterator normal_it, std::string& out_str)
+                                 std::vector<QVector2D>::iterator uv_it, std::vector<QVector3D>::iterator normal_it, std::string& out_str) : _vert_buffer(QOpenGLBuffer::VertexBuffer), _index_buffer(QOpenGLBuffer::IndexBuffer)
     {
         std::vector<vertex> vertexes;
+        std::vector<GLuint> indices;
 
-        _mat = scene->get_material(out_str, mat_file);
+        // TODO: real material loading
+//        _mat = scene->get_material(out_str, mat_file);
+
+        _mat = std::make_shared<Material>();
+        _mat->load_albedo("Primitives/albedo.png");
 
         while (!stream.eof())
         {
@@ -302,6 +330,7 @@ namespace DesEngine
 
                     vertexes.emplace_back(*(coord_it + std::stoull(plist[0]) - 1), *(uv_it + std::stoull(plist[1]) - 1),
                                           *(normal_it + std::stoull(plist[2]) - 1));
+                    indices.emplace_back(indices.size());
                 }
             } else if (type == MeshObject::file_param_type::usemtl)
             {
@@ -315,6 +344,11 @@ namespace DesEngine
         _vert_buffer.allocate(vertexes.data(), vertexes.size() * sizeof(vertex));
         _vert_buffer.release();
 
-        count = vertexes.size();
+
+        _index_buffer.create();
+        _index_buffer.bind();
+        _index_buffer.allocate(indices.data(), indices.size() * sizeof(GLuint));
+
+        count = indices.size();
     }
 } // DesEngine

@@ -13,8 +13,7 @@
 
 namespace DesEngine
 {
-	GLWidget::GLWidget(QWidget *parent_widget, GLMainWindow* parent) :
-		QOpenGLWidget(parent_widget), ui(new Ui::GLWidget)
+	GLWidget::GLWidget(GLMainWindow* parent) : ui(new Ui::GLWidget)
 	{
         _parent = dynamic_cast<GLMainWindow*>(parent);
 
@@ -22,6 +21,7 @@ namespace DesEngine
             throw std::runtime_error("Parent of GLWidget must be GLMainWindow");
 
 		ui->setupUi(this);
+        setUpdateBehavior(QOpenGLWidget::UpdateBehavior::PartialUpdate);
 	}
 
 	GLWidget::~GLWidget()
@@ -32,6 +32,9 @@ namespace DesEngine
     void GLWidget::initializeGL()
     {
         auto&& funcs = *context()->functions();
+
+        funcs.initializeOpenGLFunctions();
+
         funcs.glClearColor(0, 0, 0, 1);
 
         funcs.glEnable(GL_DEPTH_TEST);
@@ -41,6 +44,8 @@ namespace DesEngine
     void GLWidget::paintGL()
     {
         auto funcs = *context()->functions();
+
+
         _parent->scene.draw(funcs);
     }
 
@@ -54,4 +59,5 @@ namespace DesEngine
         funcs.glViewport(0, 0, w, h);
         _parent->scene.update();
     }
+
 } // DesEngine

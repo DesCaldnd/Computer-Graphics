@@ -17,7 +17,7 @@
 #include <string>
 #include <functional>
 #include <chrono>
-#include <QTimer>
+#include <QBasicTimer>
 #include <nlohmann/json.hpp>
 #include <QOpenGLShaderProgram>
 
@@ -69,7 +69,7 @@ namespace DesEngine
 
 		std::chrono::steady_clock::time_point _previous_frame_time;
 
-        QTimer _timer;
+        QBasicTimer _timer;
 
         float aspect_ratio;
 
@@ -150,6 +150,7 @@ namespace DesEngine
 		void add_object_loader(std::string class_name, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>> functions);
 		void add_gamemode_loader(std::string class_name, std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>> func);
 
+        void timerEvent(QTimerEvent*) override;
 	};
 
 } // DesEngine

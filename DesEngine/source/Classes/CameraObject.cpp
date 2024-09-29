@@ -75,7 +75,23 @@ QMatrix4x4 DesEngine::CameraObject::get_look_matrix() const
     model.scale(_scale);
     model = _global_transform * model;
 
-    return model.inverted();
+//    model = model.inverted();
+
+    QVector4D eye(0, 0, 0, 1);
+    QVector4D lookat(1, 0, 0, 0);
+
+    eye = model * eye;
+    lookat = model * lookat;
+//
+//    QMatrix4x4 view;
+//    view.setToIdentity();
+//    view.lookAt(eye.toVector3D(), lookat.toVector3D(), QVector3D(0, 0, 1));
+
+    QMatrix4x4 view;
+    view.setToIdentity();
+    view.lookAt(eye.toVector3D(), lookat.toVector3D(), QVector3D(0, 0, 1));
+
+    return view;
 }
 
 QMatrix4x4 DesEngine::CameraObject::get_projection_matrix() const
