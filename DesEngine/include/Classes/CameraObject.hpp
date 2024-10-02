@@ -7,8 +7,11 @@
 
 #include "MeshObject.hpp"
 
+class QKeyEvent;
+
 namespace DesEngine
 {
+
 
 	class CameraObject : public MeshObject
 	{
@@ -70,9 +73,33 @@ namespace DesEngine
 
         static std::shared_ptr<LogicObject> default_camera_object_json_loader(Scene*, id_t, nlohmann::json);
         static std::shared_ptr<LogicObject> default_camera_object_dialog_loader(Scene*, id_t);
-
 	};
 
+    class FlyingCamera : public CameraObject
+    {
+        Q_OBJECT
+
+    private:
+
+        void control_button_press(bool activated, int axis, bool direction);
+
+    private slots:
+
+        void keyPressEvent(::QKeyEvent* event);
+        void keyReleaseEvent(::QKeyEvent* event);
+
+    public:
+
+        FlyingCamera(Scene* scene, id_t id);
+
+        void event_loop(double seconds) override;
+
+    protected:
+
+        QVector3D _direction = QVector3D(0, 0, 0);
+        float _speed = 1;
+
+    };
 }
 
 #endif //DESENGINE_DESENGINE_INCLUDE_CLASSES_CAMERAOBJECT_HPP_

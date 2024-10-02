@@ -12,6 +12,5 @@ varying vec2 v_texcoord;
 void main()
 {
     gl_Position = proj * view * model * vec4(a_position, 1);
-//    gl_FrontColor = vec4(1);
     v_texcoord = a_uv;
 }

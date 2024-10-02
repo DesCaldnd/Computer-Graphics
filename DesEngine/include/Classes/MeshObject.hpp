@@ -8,6 +8,7 @@
 #include "../Interfaces/LogicObject.hpp"
 #include "Material.hpp"
 #include <string>
+#include <filesystem>
 #include <QOpenGLBuffer>
 #include <vector>
 
@@ -30,7 +31,7 @@ namespace DesEngine
         QOpenGLBuffer _index_buffer;
         size_t count;
 
-        MeshSubObject(Scene* scene, const std::string& mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it, std::vector<QVector2D>::iterator uv_it, std::vector<QVector3D>::iterator normal_it, std::string&);
+        MeshSubObject(Scene* scene, const std::filesystem::path& mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it, std::vector<QVector2D>::iterator uv_it, std::vector<QVector3D>::iterator normal_it, std::string&);
 	};
 
 	class MeshObject : public LogicObject
@@ -40,7 +41,6 @@ namespace DesEngine
 		std::string _filepath = "";
 		std::vector<MeshSubObject> _subs;
 
-        static std::vector<std::string> split(const std::string& str, const std::string& delemeter);
 
         enum class file_param_type
         {

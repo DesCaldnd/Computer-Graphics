@@ -20,6 +20,32 @@ add_library(DesEngine
         source/Classes/LogicObject.cpp
         source/Classes/TetCube.cpp
         include/Classes/TetCube.hpp
+        include/Classes/Utils.hpp
+        source/Classes/Utils.cpp
+)
+
+qt_add_resources(DesEngine "additional_files"
+        PREFIX "/"
+        FILES
+
+        Shaders/pbr.fsh
+        Shaders/pbr.vsh
+        Shaders/depth.fsh
+        Shaders/depth.vsh
+        Shaders/color_index.fsh
+        Shaders/color_index.vsh
+
+        Primitives/albedo.png
+        Primitives/cube.mtl
+        Primitives/cube.obj
+        Primitives/cubes.mtl
+        Primitives/cubes.obj
+        Primitives/monkey.mtl
+        Primitives/monkey.obj
+        Primitives/monkeys.mtl
+        Primitives/monkeys.obj
+        Primitives/realmat.mtl
+        Primitives/realmat.obj
 )
 
 target_include_directories(DesEngine PUBLIC ./include)
@@ -34,7 +60,7 @@ target_link_libraries(
         DesEngine PUBLIC
         nlohmann_json::nlohmann_json)
 
-set(DESENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/DesEngine/")
+set(DESENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/DesEngine/" CACHE PATH "DESENGINE_LIB_DIR")
 
 add_custom_command(
         TARGET DesEngine POST_BUILD

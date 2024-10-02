@@ -27,15 +27,16 @@ namespace DesEngine
         _edit_mode = std::make_shared<EditGameMode>(this, get_new_id());
         _game_mode = std::make_shared<EditGameMode>(this, get_new_id());
 
-        edit_camera = std::make_shared<CameraObject>(this, get_new_id());
+        edit_camera = std::make_shared<FlyingCamera>(this, get_new_id());
         play_camera = std::make_shared<CameraObject>(this, get_new_id());
 
         register_object(play_camera);
-        edit_camera->translate(QVector3D(-2, 0, 0));
+        register_object(edit_camera);
+        edit_camera->translate(QVector3D(0, -2, 0));
 
         set_aspect_ratio(_parent->glwidget->width() / (float) _parent->glwidget->height());
 
-        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkey.obj");
+        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
         register_renderable(testMesh);
 
 
@@ -75,7 +76,7 @@ namespace DesEngine
         if (_is_in_pause)
             return;
 
-        for (auto &&object: _renderable_objects)
+        for (auto &&object: _all_objects)
         {
             object.second->event_loop(seconds);
         }
@@ -192,22 +193,21 @@ namespace DesEngine
     }
 
 
-    std::shared_ptr<Material> Scene::get_material(std::string name, std::string path)
+    std::shared_ptr<Material> Scene::get_material(const std::string& name, const std::filesystem::path& path)
     {
         auto it = _mat_lib.find(name);
 
         if (it != _mat_lib.end())
             return it->second;
 
-        //TODO: load material
-        return nullptr;
+        Material::parse_file_to_map(path, _mat_lib);
 
         it = _mat_lib.find(name);
 
         if (it != _mat_lib.end())
             return it->second;
         else
-            throw std::runtime_error("Material request failed: material with name: " + name + "doesn't exist in library or in file " + path);
+            throw std::runtime_error("Material request failed: material with name: " + name + "doesn't exist in library or in file " + path.string());
     }
 
     std::shared_ptr<QOpenGLShaderProgram> Scene::get_program(std::string vsh_path, std::string fsh_path)
@@ -245,6 +245,11 @@ namespace DesEngine
     void Scene::register_renderable(std::shared_ptr<LogicObject> obj)
     {
         _renderable_objects.insert(std::make_pair(obj->get_id(), obj));
+
+        if (!_all_objects.contains(obj->get_id()))
+        {
+            _all_objects.insert(std::make_pair(obj->get_id(), obj));
+        }
     }
 
     void Scene::remove_renderable(id_t id)
@@ -353,5 +358,10 @@ namespace DesEngine
     void Scene::timerEvent(QTimerEvent *)
     {
         update();
+    }
+
+    GLMainWindow *Scene::get_parent()
+    {
+        return _parent;
     }
 } // DesEngine

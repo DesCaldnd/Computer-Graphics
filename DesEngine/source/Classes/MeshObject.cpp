@@ -5,6 +5,7 @@
 #include "Classes/MeshObject.hpp"
 #include <fstream>
 #include <Classes/Scene.hpp>
+#include "Classes/Utils.hpp"
 
 namespace DesEngine
 {
@@ -25,7 +26,7 @@ namespace DesEngine
         std::vector<QVector2D> uvs;
         std::vector<QVector3D> normals;
 
-        std::string mat_file;
+        std::filesystem::path mat_file;
 
         std::vector<vertex> vertexes;
 
@@ -51,8 +52,11 @@ namespace DesEngine
                         qDebug() << "Comment: " << lst[1].c_str();
                         break;
                     case file_param_type::mtllib:
-                        mat_file = lst[1];
+                    {
+                        mat_file = std::filesystem::path(path);
+                        mat_file.replace_filename(lst[1]);
                         break;
+                    }
                     case file_param_type::vertex:
                         coords.emplace_back(std::stof(lst[1]), std::stof(lst[2]), std::stof(lst[3]));
                         break;
@@ -102,9 +106,9 @@ namespace DesEngine
 
         for(auto&& subobj : _subs)
         {
-//            auto&& subobj = _subs[0];
 
-            if (!subobj._vert_buffer.isCreated() || ! subobj._index_buffer.isCreated())
+            if (!subobj._vert_buffer.isCreated() || !subobj._index_buffer.isCreated()
+            )
                 throw std::runtime_error("Mesh object buffer didn't created");
 
             subobj._vert_buffer.bind();
@@ -244,30 +248,6 @@ namespace DesEngine
         return res;
     }
 
-    std::vector<std::string> MeshObject::split(const std::string &str, const std::string &delemeter)
-    {
-        std::vector<std::string> res;
-
-        size_t pos = 0, prev = 0;
-
-
-        while ((pos = str.find(delemeter, prev)) != std::string::npos)
-        {
-            if (pos - prev != 0)
-            {
-                res.emplace_back(str.substr(prev, pos - prev));
-            }
-            prev = pos + std::max<size_t>(1, delemeter.size());
-        }
-
-        if (prev < str.size())
-        {
-            res.emplace_back(str.substr(prev, str.size() - prev));
-        }
-
-        return res;
-    }
-
     MeshObject::file_param_type MeshObject::get_param_type(const std::string &val)
     {
         if (val == "#")
@@ -297,17 +277,13 @@ namespace DesEngine
 //        translate(QVector3D(0, 0, 0.01 * seconds));
     }
 
-    MeshSubObject::MeshSubObject(Scene *scene, const std::string &mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it,
+    MeshSubObject::MeshSubObject(Scene *scene, const std::filesystem::path &mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it,
                                  std::vector<QVector2D>::iterator uv_it, std::vector<QVector3D>::iterator normal_it, std::string& out_str) : _vert_buffer(QOpenGLBuffer::VertexBuffer), _index_buffer(QOpenGLBuffer::IndexBuffer)
     {
         std::vector<vertex> vertexes;
         std::vector<GLuint> indices;
 
-        // TODO: real material loading
-//        _mat = scene->get_material(out_str, mat_file);
-
-        _mat = std::make_shared<Material>();
-        _mat->load_albedo("Primitives/albedo.png");
+        _mat = scene->get_material(out_str, mat_file);
 
         while (!stream.eof())
         {
@@ -315,7 +291,7 @@ namespace DesEngine
 
             std::getline(stream, line);
 
-            auto lst = MeshObject::split(line, " ");
+            auto lst = split(line, " ");
 
             if (lst.empty())
                 continue;
@@ -326,7 +302,7 @@ namespace DesEngine
             {
                 for (int i = 0; i < 3; ++i)
                 {
-                    auto plist = MeshObject::split(lst[i + 1], "/");
+                    auto plist = split(lst[i + 1], "/");
 
                     vertexes.emplace_back(*(coord_it + std::stoull(plist[0]) - 1), *(uv_it + std::stoull(plist[1]) - 1),
                                           *(normal_it + std::stoull(plist[2]) - 1));

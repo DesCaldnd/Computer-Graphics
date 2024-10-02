@@ -3,6 +3,11 @@
 //
 
 #include "Classes/CameraObject.hpp"
+#include "Classes/Scene.hpp"
+#include "Widgets/glmainwindow.hpp"
+#include <QKeyEvent>
+#include <QShortcut>
+#include <QCoreApplication>
 
 DesEngine::CameraObject::CameraObject(DesEngine::Scene *scene, DesEngine::id_t id) : MeshObject(scene, id, "")
 {
@@ -78,14 +83,12 @@ QMatrix4x4 DesEngine::CameraObject::get_look_matrix() const
 //    model = model.inverted();
 
     QVector4D eye(0, 0, 0, 1);
-    QVector4D lookat(1, 0, 0, 0);
+    QVector4D lookat(0, 1, 0, 0);
 
     eye = model * eye;
     lookat = model * lookat;
-//
-//    QMatrix4x4 view;
-//    view.setToIdentity();
-//    view.lookAt(eye.toVector3D(), lookat.toVector3D(), QVector3D(0, 0, 1));
+
+    lookat += eye;
 
     QMatrix4x4 view;
     view.setToIdentity();
@@ -194,4 +197,92 @@ std::shared_ptr<DesEngine::LogicObject>
 DesEngine::CameraObject::default_camera_object_dialog_loader(DesEngine::Scene *, DesEngine::id_t)
 {
     return std::shared_ptr<LogicObject>();
+}
+
+void DesEngine::FlyingCamera::event_loop(double seconds)
+{
+    QMatrix4x4 model;
+
+    model.setToIdentity();
+    model.rotate(_rotation);
+    model = _global_transform * model;
+
+
+    QVector3D forward = _direction;
+    forward.normalize();
+    forward *= _speed;
+    forward *= seconds;
+    forward = (model * QVector4D(forward, 0)).toVector3D();
+
+    translate(forward);
+}
+
+DesEngine::FlyingCamera::FlyingCamera(DesEngine::Scene *scene, DesEngine::id_t id) : CameraObject(scene, id)
+{
+    connect(_scene->get_parent(), &GLMainWindow::keyPressSignal, this, &FlyingCamera::keyPressEvent);
+    connect(_scene->get_parent(), &GLMainWindow::keyReleaseSignal, this, &FlyingCamera::keyReleaseEvent);
+}
+
+void DesEngine::FlyingCamera::control_button_press(bool activated, int axis, bool direction)
+{
+    float diff = 1;
+    if (!activated)
+        diff *= -1;
+
+    if (!direction)
+        diff *= -1;
+
+    switch(axis)
+    {
+        case 0:
+            _direction.setX(_direction.x() + diff);
+            break;
+        case 1:
+            _direction.setY(_direction.y() + diff);
+            break;
+        case 2:
+            _direction.setZ(_direction.z() + diff);
+            break;
+    }
+}
+
+
+void DesEngine::FlyingCamera::keyReleaseEvent(::QKeyEvent *event)
+{
+    if (!event->isAutoRepeat())
+    {
+        if (event->key() == Qt::Key_W)
+            control_button_press(false, 1, true);
+        if (event->key() == Qt::Key_D)
+            control_button_press(false, 0, true);
+        if (event->key() == Qt::Key_E)
+            control_button_press(false, 2, true);
+        if (event->key() == Qt::Key_S)
+            control_button_press(false, 1, false);
+        if (event->key() == Qt::Key_A)
+            control_button_press(false, 0, false);
+        if (event->key() == Qt::Key_Q)
+            control_button_press(false, 2, false);
+        if (event->key() == Qt::Key_F)
+            _direction = QVector3D(0, 0, 0);
+    }
+}
+
+void DesEngine::FlyingCamera::keyPressEvent(::QKeyEvent *event)
+{
+    if (!event->isAutoRepeat())
+    {
+        if (event->key() == Qt::Key_W)
+            control_button_press(true, 1, true);
+        if (event->key() == Qt::Key_D)
+            control_button_press(true, 0, true);
+        if (event->key() == Qt::Key_E)
+            control_button_press(true, 2, true);
+        if (event->key() == Qt::Key_S)
+            control_button_press(true, 1, false);
+        if (event->key() == Qt::Key_A)
+            control_button_press(true, 0, false);
+        if (event->key() == Qt::Key_Q)
+            control_button_press(true, 2, false);
+    }
 }

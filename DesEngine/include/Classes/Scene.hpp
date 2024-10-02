@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <forward_list>
 #include <memory>
+#include <filesystem>
 #include <string>
 #include <functional>
 #include <chrono>
@@ -81,6 +82,8 @@ namespace DesEngine
 
 		explicit Scene(GLMainWindow* parent);
 
+        GLMainWindow* get_parent();
+
         void init();
 
 		void init_in_edit_mode();
@@ -117,7 +120,7 @@ namespace DesEngine
 		 *
 		 * If material wasn`t added throws runtime_error
 		 */
-		std::shared_ptr<Material> get_material(std::string name, std::string path);
+		std::shared_ptr<Material> get_material(const std::string& name, const std::filesystem::path& path);
 
 
         std::shared_ptr<QOpenGLShaderProgram> load_program(std::string vsh_path, std::string fsh_path);

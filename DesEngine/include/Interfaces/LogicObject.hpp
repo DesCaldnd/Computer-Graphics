@@ -11,14 +11,17 @@
 #include "Editable.hpp"
 #include "Playable.hpp"
 #include "Physicable.hpp"
+#include <QObject>
 
 namespace DesEngine
 {
 
 	class Scene;
 
-	class LogicObject : public Serializable, public Drawable, public Editable, public Playable, public Physicable
+	class LogicObject : public QObject, public Serializable, public Drawable, public Editable, public Playable, public Physicable
 	{
+        Q_OBJECT
+
 	protected:
 		Scene* _scene;
 

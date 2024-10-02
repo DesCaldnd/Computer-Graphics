@@ -25,7 +25,7 @@ namespace DesEngine
 //		std::vector<basic_point> collision_points;
 //		std::string collision_name;
 //		bool _need_phys;
-//		QVector3D speed;
+//		QVector3D _speed;
 //		float bounce;
 //
 	public:
