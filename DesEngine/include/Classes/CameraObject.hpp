@@ -8,6 +8,7 @@
 #include "MeshObject.hpp"
 
 class QKeyEvent;
+class QWheelEvent;
 
 namespace DesEngine
 {
@@ -87,6 +88,8 @@ namespace DesEngine
 
         void keyPressEvent(::QKeyEvent* event);
         void keyReleaseEvent(::QKeyEvent* event);
+
+        void wheelEvent(::QWheelEvent* event);
 
     public:
 

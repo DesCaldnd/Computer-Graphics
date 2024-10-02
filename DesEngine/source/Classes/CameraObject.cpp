@@ -221,6 +221,7 @@ DesEngine::FlyingCamera::FlyingCamera(DesEngine::Scene *scene, DesEngine::id_t i
 {
     connect(_scene->get_parent(), &GLMainWindow::keyPressSignal, this, &FlyingCamera::keyPressEvent);
     connect(_scene->get_parent(), &GLMainWindow::keyReleaseSignal, this, &FlyingCamera::keyReleaseEvent);
+    connect(_scene->get_parent(), &GLMainWindow::wheelSignal, this, &FlyingCamera::wheelEvent);
 }
 
 void DesEngine::FlyingCamera::control_button_press(bool activated, int axis, bool direction)
@@ -284,5 +285,18 @@ void DesEngine::FlyingCamera::keyPressEvent(::QKeyEvent *event)
             control_button_press(true, 0, false);
         if (event->key() == Qt::Key_Q)
             control_button_press(true, 2, false);
+    }
+}
+
+void DesEngine::FlyingCamera::wheelEvent(::QWheelEvent *event)
+{
+    auto degree = event->angleDelta().y();
+
+    if (degree > 0)
+    {
+        _speed *= 1.25 * (degree / 90.0f);
+    } else if (degree < 0)
+    {
+        _speed /= 1.25 * (-degree / 90.0f);
     }
 }
