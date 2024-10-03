@@ -11,7 +11,6 @@ namespace DesEngine
 
     void Material::set_program(std::shared_ptr<QOpenGLShaderProgram> prog)
     {
-        //TODO: fully set material to program
         prog->setUniformValue("u_use_diffuse_map", _use_diffuse_map);
         if (_use_diffuse_map)
         {
@@ -22,12 +21,63 @@ namespace DesEngine
         {
             prog->setUniformValue("u_diffuse_color", _diffuse_color);
         }
+
+        prog->setUniformValue("u_use_ambient_map", _use_ambient_map);
+        if (_use_ambient_map)
+        {
+            auto diff_loc = prog->uniformLocation("u_ambient_map");
+            _ambient_map->bind(diff_loc);
+            prog->setUniformValue("u_ambient_map", diff_loc);
+        } else
+        {
+            prog->setUniformValue("u_ambient_color", _ambient_color);
+        }
+
+        prog->setUniformValue("u_use_specular_map", _use_specular_map);
+        if (_use_specular_map)
+        {
+            auto diff_loc = prog->uniformLocation("u_specular_map");
+            _specular_map->bind(diff_loc);
+            prog->setUniformValue("u_specular_map", diff_loc);
+        } else
+        {
+            prog->setUniformValue("u_specular_color", _specular_color);
+        }
+
+        prog->setUniformValue("u_use_specexp_map", _use_specexp_map);
+        if (_use_specexp_map)
+        {
+            auto diff_loc = prog->uniformLocation("u_specexp_map");
+            _specexp_map->bind(diff_loc);
+            prog->setUniformValue("u_specexp_map", diff_loc);
+        } else
+        {
+            prog->setUniformValue("u_specexp_value", _specexp_color);
+        }
+
+        prog->setUniformValue("u_use_normal_map", _use_normal_map);
+        if (_use_normal_map)
+        {
+            auto diff_loc = prog->uniformLocation("u_normal_map");
+            _normal_map->bind(diff_loc);
+            prog->setUniformValue("u_normal_map", diff_loc);
+        }
+
+        prog->setUniformValue("u_d", _transparent);
     }
 
     void Material::release()
     {
         if (_use_diffuse_map)
             _diffuse_map->release();
+        if (_use_ambient_map)
+            _ambient_map->release();
+        if (_use_specular_map)
+            _specular_map->release();
+        if (_use_specexp_map)
+            _specexp_map->release();
+        if (_use_normal_map)
+            _normal_map->release();
     }
 
     void Material::parse_file_to_map(const std::filesystem::path& path, std::unordered_map<std::string, std::shared_ptr<Material>> &map)
