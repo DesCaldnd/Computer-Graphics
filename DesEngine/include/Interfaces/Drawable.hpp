@@ -17,7 +17,6 @@ namespace DesEngine
 	{
 	public:
 
-		// TODO: draw function argument
 		virtual void draw(QOpenGLFunctions& funcs) =0;
 
 		/**

@@ -17,9 +17,6 @@ namespace DesEngine
 
 	class Material
 	{
-        //TODO: flat/smooth shading
-        bool _flat = true;
-
         bool _use_diffuse_map = false;
         QVector3D _diffuse_color = QVector3D(1, 1, 1);
         std::unique_ptr<QOpenGLTexture> _diffuse_map;
@@ -33,13 +30,13 @@ namespace DesEngine
         std::unique_ptr<QOpenGLTexture> _specular_map;
 
         bool _use_specexp_map = false;
-        double _specexp_color = 10;
+        GLfloat _specexp_color = 10;
         std::unique_ptr<QOpenGLTexture> _specexp_map;
 
         bool _use_normal_map = false;
         std::unique_ptr<QOpenGLTexture> _normal_map;
 
-        float _transparent = 1;
+        GLfloat _transparent = 1;
 
         /**
          * Kd - diffuse
