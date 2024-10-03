@@ -21,8 +21,10 @@ namespace DesEngine
             throw std::runtime_error("Parent of GLWidget must be GLMainWindow");
 
 		ui->setupUi(this);
-        setUpdateBehavior(QOpenGLWidget::UpdateBehavior::PartialUpdate);
-	}
+//        setUpdateBehavior(QOpenGLWidget::UpdateBehavior::PartialUpdate);
+        setFocusPolicy(Qt::FocusPolicy::StrongFocus);
+    }
+
 
 	GLWidget::~GLWidget()
 	{
@@ -58,6 +60,41 @@ namespace DesEngine
 
         funcs.glViewport(0, 0, w, h);
         _parent->scene.update();
+    }
+
+    void GLWidget::mousePressEvent(::QMouseEvent *event)
+    {
+        emit mousePressSignal(event);
+    }
+
+    void GLWidget::mouseReleaseEvent(::QMouseEvent *event)
+    {
+        emit mouseReleaseSignal(event);
+    }
+
+    void GLWidget::mouseDoubleClickEvent(::QMouseEvent *event)
+    {
+        emit mouseDoubleClickSignal(event);
+    }
+
+    void GLWidget::mouseMoveEvent(::QMouseEvent *event)
+    {
+        emit mouseMoveSignal(event);
+    }
+
+    void GLWidget::wheelEvent(::QWheelEvent *event)
+    {
+        emit wheelSignal(event);
+    }
+
+    void GLWidget::keyPressEvent(::QKeyEvent *event)
+    {
+        emit keyPressSignal(event);
+    }
+
+    void GLWidget::keyReleaseEvent(::QKeyEvent *event)
+    {
+        emit keyReleaseSignal(event);
     }
 
 } // DesEngine

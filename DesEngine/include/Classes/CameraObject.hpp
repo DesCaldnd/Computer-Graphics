@@ -9,6 +9,7 @@
 
 class QKeyEvent;
 class QWheelEvent;
+class QMouseEvent;
 
 namespace DesEngine
 {
@@ -90,6 +91,8 @@ namespace DesEngine
         void keyReleaseEvent(::QKeyEvent* event);
 
         void wheelEvent(::QWheelEvent* event);
+        void mouseMoveEvent(::QMouseEvent *event);
+        void mousePressEvent(::QMouseEvent *event);
 
     public:
 
@@ -97,10 +100,18 @@ namespace DesEngine
 
         void event_loop(double seconds) override;
 
+        void rotate_x(float angle);
+        void rotate_y(float angle);
+
     protected:
 
         QVector3D _direction = QVector3D(0, 0, 0);
         float _speed = 1;
+
+        QVector2D _mouse_position;
+
+        QQuaternion _rotate_x, _rotate_y;
+
 
     };
 }

@@ -272,7 +272,7 @@ namespace DesEngine
     {
         float angle = 45;
 
-        rotate(QQuaternion::fromAxisAndAngle(QVector3D(0, 0, 1), angle * seconds));
+//        rotate(QQuaternion::fromAxisAndAngle(QVector3D(0, 0, 1), angle * seconds));
 
 //        translate(QVector3D(0, 0, 0.01 * seconds));
     }

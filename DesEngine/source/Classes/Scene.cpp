@@ -3,9 +3,10 @@
 //
 
 #include <QFile>
+#include <QImageReader>
 #include "Classes/Scene.hpp"
 #include "Widgets/glmainwindow.hpp"
-#include "Classes/TetCube.hpp"
+#include "Classes/SkyBoxObject.hpp"
 #include "Widgets/glwidget.hpp"
 
 namespace DesEngine
@@ -18,6 +19,7 @@ namespace DesEngine
         _game_mode_loaders.insert(std::make_pair("EditGamemode", std::make_pair(&EditGameMode::default_gamemode_json_loader,
                                                                             &EditGameMode::default_gamemode_dialog_loader)));
 
+        QImageReader::setAllocationLimit(256);
     }
 
     void Scene::init_in_edit_mode()
@@ -39,6 +41,8 @@ namespace DesEngine
         std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
         register_renderable(testMesh);
 
+        std::shared_ptr<SkyBoxObject> sbox = std::make_shared<SkyBoxObject>(this, get_new_id());
+        register_renderable(sbox);
 
         _is_in_pause = false;
         _timer.start(1, this);
@@ -305,6 +309,9 @@ namespace DesEngine
 
     std::shared_ptr<QOpenGLShaderProgram> Scene::load_program(std::string vsh_path, std::string fsh_path)
     {
+        if (_prog_lib.contains(std::make_pair(vsh_path, fsh_path)))
+            return _prog_lib.at(std::make_pair(vsh_path, fsh_path));
+
         std::shared_ptr<QOpenGLShaderProgram> prog = std::make_shared<QOpenGLShaderProgram>();
 
 

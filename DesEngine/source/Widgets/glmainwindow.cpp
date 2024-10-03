@@ -43,38 +43,4 @@ namespace DesEngine
         }
     }
 
-    void GLMainWindow::mousePressEvent(QMouseEvent *event)
-    {
-        emit mousePressSignal(event);
-    }
-
-    void GLMainWindow::mouseReleaseEvent(QMouseEvent *event)
-    {
-        emit mouseReleaseSignal(event);
-    }
-
-    void GLMainWindow::mouseDoubleClickEvent(QMouseEvent *event)
-    {
-        emit mouseDoubleClickSignal(event);
-    }
-
-    void GLMainWindow::mouseMoveEvent(QMouseEvent *event)
-    {
-        emit mouseMoveSignal(event);
-    }
-
-    void GLMainWindow::wheelEvent(QWheelEvent *event)
-    {
-        emit wheelSignal(event);
-    }
-
-    void GLMainWindow::keyPressEvent(::QKeyEvent *event)
-    {
-        emit keyPressSignal(event);
-    }
-
-    void GLMainWindow::keyReleaseEvent(::QKeyEvent *event)
-    {
-        emit keyReleaseSignal(event);
-    }
 } // DesEngine

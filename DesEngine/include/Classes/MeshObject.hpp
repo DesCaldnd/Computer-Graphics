@@ -39,8 +39,6 @@ namespace DesEngine
 	private:
 
 		std::string _filepath = "";
-		std::vector<MeshSubObject> _subs;
-
 
         enum class file_param_type
         {
@@ -50,6 +48,8 @@ namespace DesEngine
         static file_param_type get_param_type(const std::string& val);
 
     protected:
+
+        std::vector<MeshSubObject> _subs;
 
         QQuaternion _rotation;
         QVector3D _translate;

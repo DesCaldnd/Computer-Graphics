@@ -4,10 +4,12 @@
 
 #include "Classes/CameraObject.hpp"
 #include "Classes/Scene.hpp"
+#include "Widgets/glwidget.hpp"
 #include "Widgets/glmainwindow.hpp"
 #include <QKeyEvent>
 #include <QShortcut>
 #include <QCoreApplication>
+#include <QApplication>
 
 DesEngine::CameraObject::CameraObject(DesEngine::Scene *scene, DesEngine::id_t id) : MeshObject(scene, id, "")
 {
@@ -16,7 +18,7 @@ DesEngine::CameraObject::CameraObject(DesEngine::Scene *scene, DesEngine::id_t i
 
 void DesEngine::CameraObject::set_look_at(const QVector3D &look_at)
 {
-
+    // TODO: set look at
 }
 
 QVector3D DesEngine::CameraObject::get_look_at() const
@@ -99,11 +101,14 @@ QMatrix4x4 DesEngine::CameraObject::get_look_matrix() const
 
 QMatrix4x4 DesEngine::CameraObject::get_projection_matrix() const
 {
-    // TODO: make orthogonal
     QMatrix4x4 proj;
 
     proj.setToIdentity();
-    proj.perspective(_angle, _aspect_ratio, _near_plane, _far_plane);
+
+    if (!is_orthogonal)
+        proj.perspective(_angle, _aspect_ratio, _near_plane, _far_plane);
+    else
+        proj.ortho(-1 * _aspect_ratio, 1 * _aspect_ratio, -1, 1, _near_plane, _far_plane);
 
     return proj;
 }
@@ -207,8 +212,11 @@ void DesEngine::FlyingCamera::event_loop(double seconds)
     model.rotate(_rotation);
     model = _global_transform * model;
 
-
     QVector3D forward = _direction;
+//    auto z = forward.z();
+//    auto y = forward.y();
+//    forward.setY(-z);
+//    forward.setZ(y);
     forward.normalize();
     forward *= _speed;
     forward *= seconds;
@@ -219,9 +227,16 @@ void DesEngine::FlyingCamera::event_loop(double seconds)
 
 DesEngine::FlyingCamera::FlyingCamera(DesEngine::Scene *scene, DesEngine::id_t id) : CameraObject(scene, id)
 {
-    connect(_scene->get_parent(), &GLMainWindow::keyPressSignal, this, &FlyingCamera::keyPressEvent);
-    connect(_scene->get_parent(), &GLMainWindow::keyReleaseSignal, this, &FlyingCamera::keyReleaseEvent);
-    connect(_scene->get_parent(), &GLMainWindow::wheelSignal, this, &FlyingCamera::wheelEvent);
+    connect(_scene->get_parent()->glwidget, &GLWidget::keyPressSignal, this, &FlyingCamera::keyPressEvent);
+    connect(_scene->get_parent()->glwidget, &GLWidget::keyReleaseSignal, this, &FlyingCamera::keyReleaseEvent);
+    connect(_scene->get_parent()->glwidget, &GLWidget::wheelSignal, this, &FlyingCamera::wheelEvent);
+    connect(_scene->get_parent()->glwidget, &GLWidget::mouseMoveSignal, this, &FlyingCamera::mouseMoveEvent);
+    connect(_scene->get_parent()->glwidget, &GLWidget::mousePressSignal, this, &FlyingCamera::mousePressEvent);
+
+    QPointF globalCursorPos = QCursor::pos();
+    QPointF local_cursor_pos = _scene->get_parent()->glwidget->mapFromGlobal(globalCursorPos);
+    _mouse_position.setX(local_cursor_pos.x());
+    _mouse_position.setY(local_cursor_pos.y());
 }
 
 void DesEngine::FlyingCamera::control_button_press(bool activated, int axis, bool direction)
@@ -285,6 +300,14 @@ void DesEngine::FlyingCamera::keyPressEvent(::QKeyEvent *event)
             control_button_press(true, 0, false);
         if (event->key() == Qt::Key_Q)
             control_button_press(true, 2, false);
+        if (event->key() == Qt::Key_F5)
+            set_is_orthogonal(!get_is_orthogonal());
+        if (event->key() == Qt::Key_Escape)
+        {
+//            _scene->get_parent()->glwidget->setCursor(Qt::CursorShape::ArrowCursor);
+//            _scene->get_parent()->glwidget->releaseKeyboard();
+//            _scene->get_parent()->glwidget->releaseMouse();
+        }
     }
 }
 
@@ -294,9 +317,48 @@ void DesEngine::FlyingCamera::wheelEvent(::QWheelEvent *event)
 
     if (degree > 0)
     {
-        _speed *= 1.25 * (degree / 90.0f);
+        _speed *= 1.25 * (degree / 240.0f + 1);
     } else if (degree < 0)
     {
-        _speed /= 1.25 * (-degree / 90.0f);
+        _speed /= 1.25 * (-degree / 240.0f + 1);
     }
+}
+
+void DesEngine::FlyingCamera::mouseMoveEvent(::QMouseEvent *event)
+{
+    if (event->buttons() != Qt::LeftButton)
+        return;
+
+    QVector2D diff = QVector2D(event->position()) - _mouse_position;
+    _mouse_position = QVector2D(event->position());
+
+    float angle = diff.length() / 2.0;
+
+    rotate_x(diff.x() / 2);
+    rotate_y(diff.y() / 2);
+}
+
+void DesEngine::FlyingCamera::mousePressEvent(::QMouseEvent *event)
+{
+    if (event->buttons() == Qt::LeftButton)
+    {
+        _mouse_position = QVector2D(event->position());
+//        _scene->get_parent()->glwidget->setCursor(Qt::CursorShape::BlankCursor);
+//        _scene->get_parent()->glwidget->grabKeyboard();
+//        _scene->get_parent()->glwidget->grabMouse();
+    }
+}
+
+void DesEngine::FlyingCamera::rotate_x(float angle)
+{
+    QQuaternion quat = QQuaternion::fromAxisAndAngle(QVector3D(0, 0, 1), -angle);
+    _rotate_x = quat * _rotate_x;
+    _rotation = _rotate_x * _rotate_y;
+}
+
+void DesEngine::FlyingCamera::rotate_y(float angle)
+{
+    QQuaternion quat = QQuaternion::fromAxisAndAngle(QVector3D(1, 0, 0), -angle);
+    _rotate_y = quat * _rotate_y;
+    _rotation = _rotate_x * _rotate_y;
 }

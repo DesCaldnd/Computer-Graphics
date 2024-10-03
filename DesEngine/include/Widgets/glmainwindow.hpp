@@ -8,10 +8,6 @@
 #include <QMainWindow>
 #include "../Classes/Scene.hpp"
 
-class QKeyEvent;
-class QMouseEvent;
-class QWheelEvent;
-
 namespace DesEngine
 {
     class GLWidget;
@@ -32,36 +28,7 @@ namespace DesEngine
         Scene scene;
         GLWidget* glwidget;
 
-    public slots:
-        void mousePressEvent(QMouseEvent *event) override;
 
-        void mouseReleaseEvent(QMouseEvent *event) override;
-
-        void mouseDoubleClickEvent(QMouseEvent *event) override;
-
-        void mouseMoveEvent(QMouseEvent *event) override;
-
-        void wheelEvent(QWheelEvent *event) override;
-
-        void keyPressEvent(::QKeyEvent *event) override;
-
-        void keyReleaseEvent(::QKeyEvent *event) override;
-
-    signals:
-
-        void mousePressSignal(QMouseEvent *event);
-
-        void mouseReleaseSignal(QMouseEvent *event);
-
-        void mouseDoubleClickSignal(QMouseEvent *event);
-
-        void mouseMoveSignal(QMouseEvent *event);
-
-        void wheelSignal(QWheelEvent *event);
-
-        void keyPressSignal(::QKeyEvent *event);
-
-        void keyReleaseSignal(::QKeyEvent *event);
 
     public slots:
         void slot_shortcut_windowstate();
