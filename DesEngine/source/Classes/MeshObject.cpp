@@ -133,6 +133,18 @@ namespace DesEngine
 
             offset += sizeof(QVector3D);
 
+            int tangloc = prog->attributeLocation("a_tangent");
+            prog->enableAttributeArray(tangloc);
+            prog->setAttributeBuffer(tangloc, GL_FLOAT, offset, 3, sizeof(vertex));
+
+            offset += sizeof(QVector3D);
+
+            int bitangloc = prog->attributeLocation("a_bitangent");
+            prog->enableAttributeArray(bitangloc);
+            prog->setAttributeBuffer(bitangloc, GL_FLOAT, offset, 3, sizeof(vertex));
+
+            offset += sizeof(QVector3D);
+
             subobj._index_buffer.bind();
 
             subobj._mat->set_program(prog);
@@ -313,6 +325,31 @@ namespace DesEngine
                 out_str = lst[1];
                 break;
             }
+        }
+
+        for (size_t i = 0; i < vertexes.size(); i += 3)
+        {
+            auto&& v1 = vertexes[i];
+            auto&& v2 = vertexes[i + 1];
+            auto&& v3 = vertexes[i + 2];
+
+            QVector3D delta_pos_1 = v2.point - v1.point;
+            QVector3D delta_pos_2 = v3.point - v1.point;
+
+            QVector2D delta_uv_1 = v2.uv - v1.uv;
+            QVector2D delta_uv_2 = v3.uv - v1.uv;
+
+            float r = 1.0f / (delta_uv_1.x() * delta_uv_2.y() - delta_uv_1.y() * delta_uv_2.x());
+            QVector3D tangent = (delta_pos_1 * delta_uv_2.y() - delta_pos_2 * delta_uv_1.y()) * r;
+            QVector3D bitangent = (delta_pos_1 * delta_uv_1.x() - delta_pos_2 * delta_uv_2.x()) * r;
+
+            v1.tangent = tangent;
+            v2.tangent = tangent;
+            v3.tangent = tangent;
+
+            v1.bitangent = bitangent;
+            v2.bitangent = bitangent;
+            v3.bitangent = bitangent;
         }
 
         _vert_buffer.create();

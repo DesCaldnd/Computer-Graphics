@@ -37,6 +37,8 @@ varying vec2 v_texcoord;
 varying vec3 v_normal;
 varying vec3 v_position;
 
+varying mat3 v_tbn_mat;
+
 vec4 dumb_multiply(vec4 a, vec4 b)
 {
     return vec4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w);
@@ -53,12 +55,26 @@ void main()
     else
         diffuse_mat_color = vec4(u_diffuse_color, u_d);
 
+
+    vec3 using_normal = v_normal;
+
+    if (u_use_normal_map)
+        using_normal = normalize(texture2D(u_normal_map, v_texcoord).rgb * 2.0 - 1);
+
     vec3 light_pos = vec3(view * vec4(u_light_pos, 1));
 
     vec3 eye_vec = normalize(v_position - u_eye_pos);
     vec3 light_vec = normalize(v_position - light_pos);
-    vec3 reflect_light = normalize(reflect(light_vec, v_normal));
-    float len = length(v_position - u_eye_pos);
+
+    if (u_use_normal_map)
+    {
+        eye_vec = normalize(v_tbn_mat * eye_vec);
+        light_vec = normalize(v_tbn_mat * light_vec);
+    }
+
+    vec3 reflect_light = normalize(reflect(light_vec, using_normal));
+    float len = length(v_position - u_eye_pos) + length(v_position - light_pos);
+    len /= 5;
 
     float spec_exp;
 
@@ -82,7 +98,7 @@ void main()
         specular_color = vec4(u_specular_color, u_d);
 
 
-    vec4 diffuse_color = diffuse_mat_color * u_light_power * max(0.0, dot(v_normal, -light_vec)) / (1 + 0.25 * pow(len, 2));
+    vec4 diffuse_color = diffuse_mat_color * u_light_power * max(0.0, dot(using_normal, -light_vec)) / (1 + 0.25 * pow(len, 2));
 
     result_color += diffuse_color;
 

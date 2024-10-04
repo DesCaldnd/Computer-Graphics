@@ -8,4 +8,6 @@ Kd 0.8 0.8 0.8
 Ks 0.8 0.8 0.8
 d 1
 illum 2
-map_Kd albedo.png
+map_Kd beige_leather_5_diffuse.png
+map_Ks beige_leather_5_glossiness.png
+map_bump beige_leather_5_normal.png

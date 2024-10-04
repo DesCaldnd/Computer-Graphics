@@ -174,7 +174,7 @@ namespace DesEngine
             return file_param_type::map_Ks;
         if (str == "d")
             return file_param_type::d;
-        if (str == "map_Bump")
+        if (str == "map_bump")
             return file_param_type::map_Bump;
 
         return Material::file_param_type::undef;

@@ -44,6 +44,7 @@ namespace DesEngine
          * Ns - specular exponent
          * Ks - specular
          * d - transparency
+         * map_Bump - normal map
          */
 
         enum class file_param_type

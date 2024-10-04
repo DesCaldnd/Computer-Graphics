@@ -98,7 +98,7 @@ namespace DesEngine
         sh_it->setUniformValue("view", view);
 
         sh_it->setUniformValue("u_light_pos", QVector3D(10, 10, 10));
-        sh_it->setUniformValue("u_light_power", 2.0f);
+        sh_it->setUniformValue("u_light_power", 5.0f);
 //        sh_it->setUniformValue("u_eye_pos", get_current_camera()->get_translate());
 
         _current_prog = sh_it;

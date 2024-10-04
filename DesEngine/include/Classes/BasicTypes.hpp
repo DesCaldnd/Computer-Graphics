@@ -20,7 +20,7 @@ namespace DesEngine
 		QVector3D point;
         QVector2D uv; 
 		QVector3D normal;
-        QVector3D binormal;
+        QVector3D bitangent;
         QVector3D tangent;
 
         vertex(const QVector3D& coord, const QVector2D& uvs, const QVector3D& normals) : point(coord), uv(uvs), normal(normals){}
