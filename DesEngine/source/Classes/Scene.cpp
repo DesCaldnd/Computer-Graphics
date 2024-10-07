@@ -43,7 +43,7 @@ namespace DesEngine
 
         std::shared_ptr<MeshObject> testPlane = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/plane.obj");
         register_renderable(testPlane);
-        testPlane->scale(QVector3D(10, 10, 10));
+        testPlane->scale(QVector3D(13, 7, 10));
         testPlane->translate(QVector3D(0, 0, -5));
         testPlane->rotate(QQuaternion::fromAxisAndAngle(QVector3D(1, 0, 0), 90));
 

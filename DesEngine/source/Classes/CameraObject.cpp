@@ -224,6 +224,7 @@ DesEngine::FlyingCamera::FlyingCamera(DesEngine::Scene *scene, DesEngine::id_t i
     connect(_scene->get_parent()->glwidget, &GLWidget::wheelSignal, this, &FlyingCamera::wheelEvent);
     connect(_scene->get_parent()->glwidget, &GLWidget::mouseMoveSignal, this, &FlyingCamera::mouseMoveEvent);
     connect(_scene->get_parent()->glwidget, &GLWidget::mousePressSignal, this, &FlyingCamera::mousePressEvent);
+    connect(_scene->get_parent()->glwidget, &GLWidget::mouseReleaseSignal, this, &FlyingCamera::mouseReleaseEvent);
 
     QPointF globalCursorPos = QCursor::pos();
     QPointF local_cursor_pos = _scene->get_parent()->glwidget->mapFromGlobal(globalCursorPos);
@@ -335,9 +336,7 @@ void DesEngine::FlyingCamera::mousePressEvent(::QMouseEvent *event)
     if (event->buttons() == Qt::LeftButton)
     {
         _mouse_position = QVector2D(event->position());
-//        _scene->get_parent()->glwidget->setCursor(Qt::CursorShape::BlankCursor);
-//        _scene->get_parent()->glwidget->grabKeyboard();
-//        _scene->get_parent()->glwidget->grabMouse();
+        _scene->get_parent()->glwidget->setCursor(Qt::CursorShape::BlankCursor);
     }
 }
 
@@ -353,4 +352,12 @@ void DesEngine::FlyingCamera::rotate_y(float angle)
     QQuaternion quat = QQuaternion::fromAxisAndAngle(QVector3D(1, 0, 0), -angle);
     _rotate_y = quat * _rotate_y;
     _rotation = _rotate_x * _rotate_y;
+}
+
+void DesEngine::FlyingCamera::mouseReleaseEvent(::QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton)
+    {
+        _scene->get_parent()->glwidget->setCursor(Qt::CursorShape::ArrowCursor);
+    }
 }
