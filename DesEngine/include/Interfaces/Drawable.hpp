@@ -23,7 +23,7 @@ namespace DesEngine
 		 * You need to call uniform_values_loader on this and then call help_draw on all subobjects
 		 * @param uniform_values_loader
 		 */
-		virtual void help_draw(std::function<void(LogicObject*)> uniform_values_loader) =0;
+		virtual void help_draw(std::function<void(LogicObject*)> uniform_values_loader, QOpenGLFunctions& funcs) =0;
 
 		virtual ~Drawable() =default;
 	};

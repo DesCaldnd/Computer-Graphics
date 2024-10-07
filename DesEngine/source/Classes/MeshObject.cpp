@@ -97,7 +97,7 @@ namespace DesEngine
 
         model.setToIdentity();
         model.translate(_translate);
-        model.rotate(_rotation);
+//        model.rotate(_rotation);
         model.rotate(_rotation);
         model.scale(_scale);
         model = _global_transform * model;
@@ -157,9 +157,33 @@ namespace DesEngine
         }
     }
 
-    void MeshObject::help_draw(std::function<void(LogicObject *)> uniform_values_loader)
+    void MeshObject::help_draw(std::function<void(LogicObject *)> uniform_values_loader, QOpenGLFunctions& funcs)
     {
+        uniform_values_loader(this);
+        auto prog = _scene->get_current_prog();
 
+        for(auto&& subobj : _subs)
+        {
+
+            if (!subobj._vert_buffer.isCreated() || !subobj._index_buffer.isCreated()
+                    )
+                throw std::runtime_error("Mesh object buffer didn't created");
+
+            subobj._vert_buffer.bind();
+
+            int offset = 0;
+
+            int vertloc = prog->attributeLocation("a_position");
+            prog->enableAttributeArray(vertloc);
+            prog->setAttributeBuffer(vertloc, GL_FLOAT, offset, 3, sizeof(vertex));
+
+            subobj._index_buffer.bind();
+
+            funcs.glDrawElements(GL_TRIANGLES, subobj.count, GL_UNSIGNED_INT, 0);
+
+            subobj._vert_buffer.release();
+            subobj._index_buffer.release();
+        }
     }
 
     std::vector<property_t> MeshObject::get_properties()

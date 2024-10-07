@@ -41,6 +41,12 @@ namespace DesEngine
         std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
         register_renderable(testMesh);
 
+        std::shared_ptr<MeshObject> testPlane = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/plane.obj");
+        register_renderable(testPlane);
+        testPlane->scale(QVector3D(10, 10, 10));
+        testPlane->translate(QVector3D(0, 0, -5));
+        testPlane->rotate(QQuaternion::fromAxisAndAngle(QVector3D(1, 0, 0), 90));
+
         std::shared_ptr<SkyBoxObject> sbox = std::make_shared<SkyBoxObject>(this, get_new_id());
         register_renderable(sbox);
 
@@ -88,17 +94,74 @@ namespace DesEngine
         auto view = get_current_camera()->get_look_matrix();
         auto proj = get_current_camera()->get_projection_matrix();
 
-        //TODO: shadow and light passes
+        auto dpth_prog = get_program("Shaders/depth.vsh", "Shaders/depth.fsh");
+
+        _depth_buffer->bind();
+        _current_prog = dpth_prog;
+        dpth_prog->bind();
+
+        QMatrix4x4 proj_light;
+        proj_light.setToIdentity();
+        proj_light.ortho(-40, 40, -40, 40, -40, 40);
+
+        QMatrix4x4 light, shadow_light;
+
+        shadow_light.setToIdentity();
+        shadow_light.rotate(-30.0f, 1.0f, 0.0f, 0.0f);
+        shadow_light.rotate(-40.0f, 0.0f, 1.0f, 0.0f);
+
+        light = shadow_light.inverted();
+//        light.setToIdentity();
+//        light.rotate(40.0f, 0.0f, 1.0f, 0.0f);
+//        light.rotate(30.0f, 1.0f, 0.0f, 0.0f);
+
+
+        dpth_prog->setUniformValue("proj_light", proj_light);
+        dpth_prog->setUniformValue("shadow_light", shadow_light);
+
+        functions.glViewport(0, 0, _depth_buffer_size.width(), _depth_buffer_size.height());
+        functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        auto depth_loader = [dpth_prog](LogicObject* p){
+            QMatrix4x4 model;
+
+            model.setToIdentity();
+            model.translate(p->get_translate());
+            model.rotate(p->get_rotation());
+            model.scale(p->get_scale());
+            model = p->get_global_transform() * model;
+            dpth_prog->setUniformValue("model", model);
+        };
+
+        for (auto&& renderable : _renderable_objects)
+        {
+            renderable.second->help_draw(depth_loader, functions);
+        }
+
+        dpth_prog->release();
+        _depth_buffer->release();
+
+        GLuint texture = _depth_buffer->texture();
+
+        functions.glActiveTexture(GL_TEXTURE0);
+        functions.glBindTexture(GL_TEXTURE_2D, texture);
+
+        functions.glViewport(0, 0, _parent->glwidget->width(), _parent->glwidget->height());
 
         auto sh_it = get_program("Shaders/pbr.vsh", "Shaders/pbr.fsh");
 
         bool g = sh_it->bind();
 
+        sh_it->setUniformValue("u_shadow_map", 0);
         sh_it->setUniformValue("proj", proj);
         sh_it->setUniformValue("view", view);
+        sh_it->setUniformValue("proj_light", proj_light);
+        sh_it->setUniformValue("shadow_light", shadow_light);
+        sh_it->setUniformValue("light", light);
+        sh_it->setUniformValue("light", light);
 
-        sh_it->setUniformValue("u_light_pos", QVector3D(10, 10, 10));
-        sh_it->setUniformValue("u_light_power", 5.0f);
+        sh_it->setUniformValue("u_light_direction", QVector3D(0, 0, -1));
+        sh_it->setUniformValue("u_light_power", 1.0f);
 //        sh_it->setUniformValue("u_eye_pos", get_current_camera()->get_translate());
 
         _current_prog = sh_it;
@@ -359,11 +422,15 @@ namespace DesEngine
         return _current_prog;
     }
 
-    void Scene::init()
+    void Scene::init(QSize depth_buffer_size)
     {
         load_program("Shaders/pbr.vsh", "Shaders/pbr.fsh");
-//        load_program("Shaders/depth.vsh", "Shaders/depth.fsh");
+        load_program("Shaders/depth.vsh", "Shaders/depth.fsh");
 //        load_program("Shaders/color_index.vsh", "Shaders/color_index.fsh");
+
+        _depth_buffer_size = depth_buffer_size;
+        _depth_buffer = std::make_unique<QOpenGLFramebufferObject>(depth_buffer_size, QOpenGLFramebufferObject::Depth);
+
     }
 
     void Scene::timerEvent(QTimerEvent *)

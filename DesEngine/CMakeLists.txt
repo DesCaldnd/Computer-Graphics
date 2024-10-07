@@ -18,8 +18,6 @@ add_library(DesEngine
         source/Classes/SkyBoxObject.cpp
         include/Classes/SkyBoxObject.hpp
         source/Classes/LogicObject.cpp
-        source/Classes/TetCube.cpp
-        include/Classes/TetCube.hpp
         include/Classes/Utils.hpp
         source/Classes/Utils.cpp
 )

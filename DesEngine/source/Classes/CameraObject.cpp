@@ -113,14 +113,6 @@ QMatrix4x4 DesEngine::CameraObject::get_projection_matrix() const
     return proj;
 }
 
-void DesEngine::CameraObject::draw(QOpenGLFunctions &funcs)
-{
-}
-
-void DesEngine::CameraObject::help_draw(std::function<void(LogicObject * )> uniform_values_loader)
-{
-    MeshObject::help_draw(uniform_values_loader);
-}
 
 std::vector<DesEngine::property_t> DesEngine::CameraObject::get_properties()
 {

@@ -49,9 +49,6 @@ namespace DesEngine
 		QMatrix4x4 get_look_matrix() const;
 		QMatrix4x4 get_projection_matrix() const;
 
-
-        void draw(QOpenGLFunctions& funcs) override;
-        void help_draw(std::function<void(LogicObject*)> uniform_values_loader) override;
         std::vector<property_t> get_properties() override;
 
         void rotate(const QQuaternion& quat) override;

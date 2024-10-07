@@ -5,10 +5,12 @@
 #ifndef DESENGINE_DESENGINE_INCLUDE_CLASSES_LIGHTOBJECT_HPP_
 #define DESENGINE_DESENGINE_INCLUDE_CLASSES_LIGHTOBJECT_HPP_
 
+#include "Interfaces/LogicObject.hpp"
+
 namespace DesEngine
 {
 
-	class LightObject
+	class LightObject : public LogicObject
 	{
 
 	};

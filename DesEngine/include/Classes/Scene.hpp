@@ -21,6 +21,7 @@
 #include <QBasicTimer>
 #include <nlohmann/json.hpp>
 #include <QOpenGLShaderProgram>
+#include <QOpenGLFramebufferObject>
 
 namespace std
 {
@@ -74,6 +75,10 @@ namespace DesEngine
 
         float aspect_ratio;
 
+        std::unique_ptr<QOpenGLFramebufferObject> _depth_buffer;
+
+        QSize _depth_buffer_size;
+
     public slots:
 
         void update();
@@ -84,7 +89,7 @@ namespace DesEngine
 
         GLMainWindow* get_parent();
 
-        void init();
+        void init(QSize depth_buffer_size = QSize(4096, 4096));
 
 		void init_in_edit_mode();
 

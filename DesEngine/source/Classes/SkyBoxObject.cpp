@@ -15,6 +15,7 @@ namespace DesEngine
         QMatrix4x4 model;
 
         model.setToIdentity();
+        model.translate(_scene->get_current_camera()->get_translate());
         model.translate(_translate);
         model.rotate(_rotation);
         model.rotate(_rotation);

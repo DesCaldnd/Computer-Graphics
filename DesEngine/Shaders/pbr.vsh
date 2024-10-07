@@ -10,11 +10,19 @@ uniform highp mat4 view;
 uniform highp mat4 model;
 
 
+uniform highp mat4 proj_light;
+uniform highp mat4 shadow_light;
+uniform highp mat4 light;
+
+uniform vec3 u_light_direction;
+
 varying vec2 v_texcoord;
 varying vec3 v_normal;
 varying vec3 v_position;
 
 varying mat3 v_tbn_mat;
+varying vec4 v_light_direction;
+varying vec4 v_position_light;
 
 mat3 transpose(in mat3 mat)
 {
@@ -47,4 +55,7 @@ void main()
     vec3 normal = normalize(vec3(mv_mat * vec4(a_normal, 0)));
 
     v_tbn_mat = transpose(mat3(tangent, bitangent, normal));
-}
+
+    v_light_direction = view * light * vec4(u_light_direction, 0);
+    v_position_light = proj_light * shadow_light * model * vec4(a_position, 1);
+ }

@@ -68,7 +68,7 @@ namespace DesEngine
         static std::shared_ptr<LogicObject> default_mesh_object_dialog_loader(Scene*, id_t);
 
         void draw(QOpenGLFunctions& funcs) override;
-        void help_draw(std::function<void(LogicObject*)> uniform_values_loader) override;
+        void help_draw(std::function<void(LogicObject*)> uniform_values_loader, QOpenGLFunctions& funcs) override;
         std::vector<property_t> get_properties() override;
 
         void rotate(const QQuaternion& quat) override;
