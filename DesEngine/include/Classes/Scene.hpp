@@ -23,6 +23,8 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLFramebufferObject>
 
+#define MAX_LIGHTS 5
+
 namespace std
 {
     template<>
@@ -49,18 +51,20 @@ namespace DesEngine
 
 	private:
 
-		bool _is_in_edit, _is_in_pause = true;
+		bool _is_in_edit = true, _is_in_pause = true;
 		id_t _max_id = 1;
 
 		std::shared_ptr<CameraObject> edit_camera, play_camera;
 		std::shared_ptr<GameMode> _game_mode, _edit_mode;
 
 		std::unordered_map<std::string, std::shared_ptr<Material>> _mat_lib;
-		std::unordered_map<std::pair<std::string, std::string>, std::shared_ptr<QOpenGLShaderProgram>> _prog_lib;
+		std::unordered_map<std::string, std::shared_ptr<QOpenGLShaderProgram>> _prog_lib;
         std::shared_ptr<QOpenGLShaderProgram> _current_prog;
 
 		std::unordered_set<id_t> _lights;
 		std::unordered_map<id_t, std::shared_ptr<LogicObject>> _all_objects;
+
+        QSize _depth_buffer_size;
 
 		std::unordered_map<id_t, std::shared_ptr<LogicObject>> _renderable_objects;
 
@@ -75,15 +79,14 @@ namespace DesEngine
 
         float aspect_ratio;
 
-        std::unique_ptr<QOpenGLFramebufferObject> _depth_buffer;
-
-        QSize _depth_buffer_size;
 
     public slots:
 
         void update();
 
 	public:
+
+        QSize get_shadow_buffer_size();
 
 		explicit Scene(GLMainWindow* parent);
 
@@ -128,8 +131,14 @@ namespace DesEngine
 		std::shared_ptr<Material> get_material(const std::string& name, const std::filesystem::path& path);
 
 
-        std::shared_ptr<QOpenGLShaderProgram> load_program(std::string vsh_path, std::string fsh_path);
-        std::shared_ptr<QOpenGLShaderProgram> get_program(std::string vsh_path, std::string fsh_path);
+        /**
+         *
+         * @param path - path without extension (vertex shader - path.vsh, fragment shader - path.fsh, geometry shader - path.gsh)
+         * @param load_geometry - true if need to load geometry shader
+         * @return
+         */
+        std::shared_ptr<QOpenGLShaderProgram> load_program(const std::string& path, bool load_geometry = false);
+        std::shared_ptr<QOpenGLShaderProgram> get_program(std::string path);
 
 		void register_light(id_t);
 		void remove_light(id_t);
@@ -144,12 +153,16 @@ namespace DesEngine
 
 		std::shared_ptr<LogicObject> load_object(std::string class_name, const nlohmann::json& json);
 
+        bool is_in_edit();
+        bool is_in_pause();
+
         /**
          * Can return nullptr
          * @param id
          * @return
          */
         std::shared_ptr<LogicObject> get_object(id_t id);
+        std::shared_ptr<LightObject> get_light(id_t id);
 
 		/**
 		 * @param class_name

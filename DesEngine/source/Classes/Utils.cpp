@@ -29,4 +29,16 @@ namespace DesEngine
 
         return res;
     }
+
+    QMatrix4x4 get_rotation(float x, float y, float z)
+    {
+        QMatrix4x4 model;
+        model.setToIdentity();
+
+        model.rotate(QQuaternion::fromAxisAndAngle(QVector3D(0, 0, 1), z));
+        model.rotate(QQuaternion::fromAxisAndAngle(QVector3D(0, 1, 0), y));
+        model.rotate(QQuaternion::fromAxisAndAngle(QVector3D(1, 0, 0), x));
+
+        return model;
+    }
 }

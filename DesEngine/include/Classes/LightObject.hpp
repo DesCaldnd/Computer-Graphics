@@ -5,15 +5,16 @@
 #ifndef DESENGINE_DESENGINE_INCLUDE_CLASSES_LIGHTOBJECT_HPP_
 #define DESENGINE_DESENGINE_INCLUDE_CLASSES_LIGHTOBJECT_HPP_
 
-#include "Interfaces/LogicObject.hpp"
+#include "Classes/MeshObject.hpp"
 #include <QVector3D>
 #include <QVector4D>
+#include <QOpenGLFramebufferObject>
 
 namespace DesEngine
 {
     class Scene;
 
-	class LightObject : public LogicObject
+	class LightObject final : public MeshObject
 	{
     public:
 
@@ -24,27 +25,62 @@ namespace DesEngine
             Spot = 3
         };
 
+    public:
+
+        QVector3D get_diffuse_color() const;
+
+        void set_diffuse_color(const QVector3D &diffuseColor);
+
+        QVector3D get_specular_color() const;
+
+        void set_specular_color(const QVector3D &specularColor);
+
+        float get_cutoff() const;
+
+        void set_cutoff(float cutoff);
+
+        float get_soft_cutoff() const;
+
+        void set_soft_cutoff(float cutoff);
+
+        float get_power() const;
+
+        void set_power(float power);
+
+        LightType get_type() const;
+
+        void set_type(LightType type);
+
+        QVector3D get_translate() const override;
+
     private:
 
-        QVector3D _ambience_color;
-        QVector3D _diffuse_color;
-        QVector3D _specular_color;
+        friend class Scene;
 
-        QVector3D _position;
-        QQuaternion _rotation;
-        QVector3D _scale;
+        std::unique_ptr<QOpenGLFramebufferObject> _depth_buffer;
 
-        QMatrix4x4 _global_transform;
+        QVector3D _diffuse_color = QVector3D(1, 1, 1);
+        QVector3D _specular_color = QVector3D(1, 1, 1);
 
-        float _cutoff;
-        float _power;
+        float _cutoff = 45;
+        float _soft = 30;
+        float _power = 1;
 
-        LightType type;
+
+        // TODO: QT
+        GLuint m_fbo;
+        GLuint m_shadowMap;
+
+        LightType _type = LightType::Directional;
 
     public:
 
+        LightObject(Scene* scene, id_t id);
 
-        LightObject();
+        QMatrix4x4 get_light_projection_matrix();
+        QMatrix4x4 get_light_matrix(unsigned int ind = 0);
+
+
 	};
 
 } // DesEngine

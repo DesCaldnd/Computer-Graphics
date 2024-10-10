@@ -23,6 +23,8 @@ namespace DesEngine
         std::vector<property_t> get_properties() override;
 
         std::string get_class_name() const override;
+
+        bool cast_shadow() override;
     };
 
 } // DesEngine

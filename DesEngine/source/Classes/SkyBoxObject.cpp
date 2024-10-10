@@ -4,6 +4,7 @@
 
 #include "Classes/SkyBoxObject.hpp"
 #include "Classes/Scene.hpp"
+#include "Classes/Utils.hpp"
 
 namespace DesEngine
 {
@@ -17,8 +18,7 @@ namespace DesEngine
         model.setToIdentity();
         model.translate(_scene->get_current_camera()->get_translate());
         model.translate(_translate);
-        model.rotate(_rotation);
-        model.rotate(_rotation);
+        model *= get_rotation(_rot_x, _rot_y, _rot_z);
         model.scale(_scale);
         model = _global_transform * model;
 
@@ -61,7 +61,7 @@ namespace DesEngine
 
     SkyBoxObject::SkyBoxObject(Scene *scene, id_t id) : MeshObject(scene, id, "Primitives/inner_cube.obj")
     {
-        _prog = _scene->load_program("Shaders/skybox.vsh", "Shaders/skybox.fsh");
+        _prog = _scene->load_program("Shaders/skybox", false);
         MeshObject::scale(QVector3D(500, 500, 500));
     }
 
@@ -73,5 +73,10 @@ namespace DesEngine
     std::string SkyBoxObject::get_class_name() const
     {
         return "SkyBox";
+    }
+
+    bool SkyBoxObject::cast_shadow()
+    {
+        return false;
     }
 } // DesEngine

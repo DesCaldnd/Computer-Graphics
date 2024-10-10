@@ -51,9 +51,10 @@ namespace DesEngine
 
         std::vector<MeshSubObject> _subs;
 
-        QQuaternion _rotation;
+        float _rot_x = 0, _rot_y = 0, _rot_z = 0;
         QVector3D _translate;
         QVector3D _scale;
+        bool _cast_shadow = true;
 
         QMatrix4x4 _global_transform;
 
@@ -69,11 +70,29 @@ namespace DesEngine
 
         void draw(QOpenGLFunctions& funcs) override;
         void help_draw(std::function<void(LogicObject*)> uniform_values_loader, QOpenGLFunctions& funcs) override;
+
+        bool cast_shadow() override;
+        void set_cast_shadow(bool s);
+
         std::vector<property_t> get_properties() override;
 
-        void rotate(const QQuaternion& quat) override;
-        void set_rotation(const QQuaternion& quat) override;
-        QQuaternion get_rotation() const override;
+        void rotate_x(float quat) override;
+
+        void set_rotation_x(float quat) override;
+
+        float get_rotation_x() const override;
+
+        void rotate_y(float quat) override;
+
+        void set_rotation_y(float quat) override;
+
+        float get_rotation_y() const override;
+
+        void rotate_z(float quat) override;
+
+        void set_rotation_z(float quat) override;
+
+        float get_rotation_z() const override;
 
         void scale(const QVector3D& vec) override;
         void set_scale(const QVector3D& vec) override;

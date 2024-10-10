@@ -17,9 +17,17 @@ namespace DesEngine
 	{
 	public:
 
-		virtual void rotate(const QQuaternion& quat) =0;
-		virtual void set_rotation(const QQuaternion& quat) =0;
-		virtual QQuaternion get_rotation() const =0;
+		virtual void rotate_x(float quat) =0;
+		virtual void set_rotation_x(float quat) =0;
+		virtual float get_rotation_x() const =0;
+
+        virtual void rotate_y(float quat) =0;
+        virtual void set_rotation_y(float quat) =0;
+        virtual float get_rotation_y() const =0;
+
+        virtual void rotate_z(float quat) =0;
+        virtual void set_rotation_z(float quat) =0;
+        virtual float get_rotation_z() const =0;
 
 		virtual void scale(const QVector3D& vec) =0;
 		virtual void set_scale(const QVector3D& vec) =0;

@@ -6,12 +6,12 @@
 #include <fstream>
 #include <Classes/Scene.hpp>
 #include "Classes/Utils.hpp"
+#include <cmath>
 
 namespace DesEngine
 {
     MeshObject::MeshObject(Scene * scene, id_t id, const std::string &path) : LogicObject(scene, id), _filepath(path), _translate(0, 0, 0), _scale(1, 1, 1)
     {
-        _rotation.normalize();
         _global_transform.setToIdentity();
 
         if (_filepath.empty())
@@ -96,9 +96,8 @@ namespace DesEngine
         QMatrix4x4 model;
 
         model.setToIdentity();
-        model.translate(_translate);
-//        model.rotate(_rotation);
-        model.rotate(_rotation);
+        model.translate(get_translate());
+        model *= get_rotation(_rot_x, _rot_y, _rot_z);
         model.scale(_scale);
         model = _global_transform * model;
 
@@ -191,23 +190,6 @@ namespace DesEngine
         return std::vector<property_t>();
     }
 
-    void MeshObject::rotate(const QQuaternion &quat)
-    {
-        _rotation = quat.normalized() * _rotation;
-        _rotation.normalize();
-    }
-
-    void MeshObject::set_rotation(const QQuaternion &quat)
-    {
-        _rotation = quat;
-        _rotation;
-    }
-
-    QQuaternion MeshObject::get_rotation() const
-    {
-        return _rotation;
-    }
-
     void MeshObject::scale(const QVector3D &vec)
     {
         _scale.setX(_scale.x() * vec.x());
@@ -267,10 +249,9 @@ namespace DesEngine
         res["scaleY"] = _translate.y();
         res["scaleZ"] = _translate.z();
 
-        res["rotationX"] = _rotation.x();
-        res["rotationY"] = _rotation.y();
-        res["rotationZ"] = _rotation.z();
-        res["rotationScalar"] = _rotation.scalar();
+        res["rotationX"] = _rot_x;
+        res["rotationY"] = _rot_y;
+        res["rotationZ"] = _rot_z;
 
         res["file"] = _filepath;
 
@@ -311,6 +292,61 @@ namespace DesEngine
 //        rotate(QQuaternion::fromAxisAndAngle(QVector3D(0, 0, 1), angle * seconds));
 
 //        translate(QVector3D(0, 0, 0.01 * seconds));
+    }
+
+    void MeshObject::rotate_x(float quat)
+    {
+        _rot_x += fmodf(quat, 360);
+    }
+
+    void MeshObject::set_rotation_x(float quat)
+    {
+        _rot_x = fmodf(quat, 360);
+    }
+
+    float MeshObject::get_rotation_x() const
+    {
+        return _rot_x;
+    }
+
+    void MeshObject::rotate_y(float quat)
+    {
+        _rot_y += fmodf(quat, 360);
+    }
+
+    void MeshObject::set_rotation_y(float quat)
+    {
+        _rot_y = fmodf(quat, 360);
+    }
+
+    float MeshObject::get_rotation_y() const
+    {
+        return _rot_y;
+    }
+
+    void MeshObject::rotate_z(float quat)
+    {
+        _rot_z += fmodf(quat, 360);
+    }
+
+    void MeshObject::set_rotation_z(float quat)
+    {
+        _rot_z = fmodf(quat, 360);
+    }
+
+    float MeshObject::get_rotation_z() const
+    {
+        return _rot_z;
+    }
+
+    bool MeshObject::cast_shadow()
+    {
+        return _cast_shadow;
+    }
+
+    void MeshObject::set_cast_shadow(bool s)
+    {
+        _cast_shadow = s;
     }
 
     MeshSubObject::MeshSubObject(Scene *scene, const std::filesystem::path &mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it,

@@ -51,21 +51,6 @@ namespace DesEngine
 
         std::vector<property_t> get_properties() override;
 
-        void rotate(const QQuaternion& quat) override;
-        void set_rotation(const QQuaternion& quat) override;
-        QQuaternion get_rotation() const override;
-
-        void scale(const QVector3D& vec) override;
-        void set_scale(const QVector3D& vec) override;
-        QVector3D get_scale() const override;
-
-        void translate(const QVector3D& vec) override;
-        void set_translate(const QVector3D& vec) override;
-        QVector3D get_translate() const override;
-
-        void set_global_transform(const QMatrix4x4& mat) override;
-        QMatrix4x4 get_global_transform() const override;
-
         std::string get_class_name() const override;
         nlohmann::json serialize() const override;
 
@@ -98,19 +83,12 @@ namespace DesEngine
 
         void event_loop(double seconds) override;
 
-        void rotate_x(float angle);
-        void rotate_y(float angle);
-
     protected:
 
         QVector3D _direction = QVector3D(0, 0, 0);
         float _speed = 1;
 
         QVector2D _mouse_position;
-
-        QQuaternion _rotate_x, _rotate_y;
-
-
     };
 }
 

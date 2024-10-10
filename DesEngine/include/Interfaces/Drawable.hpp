@@ -25,6 +25,8 @@ namespace DesEngine
 		 */
 		virtual void help_draw(std::function<void(LogicObject*)> uniform_values_loader, QOpenGLFunctions& funcs) =0;
 
+        virtual bool cast_shadow() =0;
+
 		virtual ~Drawable() =default;
 	};
 

@@ -1,0 +1,10 @@
+# Blender MTL File: 'light'
+# Material Count: 1
+
+newmtl light
+Ns 500
+Ka 1 1 1
+Kd 1 1 1
+Ks 0 0 0
+d 1
+illum 2

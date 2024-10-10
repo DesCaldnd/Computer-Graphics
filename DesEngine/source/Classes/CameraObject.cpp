@@ -8,8 +8,7 @@
 #include "Widgets/glmainwindow.hpp"
 #include <QKeyEvent>
 #include <QShortcut>
-#include <QCoreApplication>
-#include <QApplication>
+#include "Classes/Utils.hpp"
 
 DesEngine::CameraObject::CameraObject(DesEngine::Scene *scene, DesEngine::id_t id) : MeshObject(scene, id, "")
 {
@@ -78,11 +77,13 @@ QMatrix4x4 DesEngine::CameraObject::get_look_matrix() const
 
     model.setToIdentity();
     model.translate( _translate);
-    model.rotate(_rotation);
+
+    model *= get_rotation(_rot_x, _rot_y, _rot_z);
+
     model.scale(_scale);
     model = _global_transform * model;
 
-//    model = model.inverted();
+//    return model.inverted();
 
     QVector4D eye(0, 0, 0, 1);
     QVector4D lookat(0, 1, 0, 0);
@@ -119,61 +120,6 @@ std::vector<DesEngine::property_t> DesEngine::CameraObject::get_properties()
     return MeshObject::get_properties();
 }
 
-void DesEngine::CameraObject::rotate(const QQuaternion &quat)
-{
-    MeshObject::rotate(quat);
-}
-
-void DesEngine::CameraObject::set_rotation(const QQuaternion &quat)
-{
-    MeshObject::set_rotation(quat);
-}
-
-QQuaternion DesEngine::CameraObject::get_rotation() const
-{
-    return MeshObject::get_rotation();
-}
-
-void DesEngine::CameraObject::scale(const QVector3D &vec)
-{
-    MeshObject::scale(vec);
-}
-
-void DesEngine::CameraObject::set_scale(const QVector3D &vec)
-{
-    MeshObject::set_scale(vec);
-}
-
-QVector3D DesEngine::CameraObject::get_scale() const
-{
-    return MeshObject::get_scale();
-}
-
-void DesEngine::CameraObject::translate(const QVector3D &vec)
-{
-    MeshObject::translate(vec);
-}
-
-void DesEngine::CameraObject::set_translate(const QVector3D &vec)
-{
-    MeshObject::set_translate(vec);
-}
-
-QVector3D DesEngine::CameraObject::get_translate() const
-{
-    return MeshObject::get_translate();
-}
-
-void DesEngine::CameraObject::set_global_transform(const QMatrix4x4 &mat)
-{
-    MeshObject::set_global_transform(mat);
-}
-
-QMatrix4x4 DesEngine::CameraObject::get_global_transform() const
-{
-    return MeshObject::get_global_transform();
-}
-
 std::string DesEngine::CameraObject::get_class_name() const
 {
     return "Camera";
@@ -201,18 +147,18 @@ void DesEngine::FlyingCamera::event_loop(double seconds)
     QMatrix4x4 model;
 
     model.setToIdentity();
-    model.rotate(_rotation);
+
+    model *= get_rotation(_rot_x, _rot_y, _rot_z);
     model = _global_transform * model;
 
     QVector3D forward = _direction;
-//    auto z = forward.z();
-//    auto y = forward.y();
-//    forward.setY(-z);
-//    forward.setZ(y);
+    forward.setZ(0);
+
+    forward = (model * QVector4D(forward, 0)).toVector3D();
+    forward.setZ(forward.z() + _direction.z());
     forward.normalize();
     forward *= _speed;
     forward *= seconds;
-    forward = (model * QVector4D(forward, 0)).toVector3D();
 
     translate(forward);
 }
@@ -327,8 +273,8 @@ void DesEngine::FlyingCamera::mouseMoveEvent(::QMouseEvent *event)
 
     float angle = diff.length() / 2.0;
 
-    rotate_x(diff.x() / 2);
-    rotate_y(diff.y() / 2);
+    rotate_z(-diff.x() / 2);
+    rotate_x(-diff.y() / 2);
 }
 
 void DesEngine::FlyingCamera::mousePressEvent(::QMouseEvent *event)
@@ -340,20 +286,6 @@ void DesEngine::FlyingCamera::mousePressEvent(::QMouseEvent *event)
     }
 }
 
-void DesEngine::FlyingCamera::rotate_x(float angle)
-{
-    QQuaternion quat = QQuaternion::fromAxisAndAngle(QVector3D(0, 0, 1), -angle);
-    _rotate_x = quat * _rotate_x;
-    _rotation = _rotate_x * _rotate_y;
-}
-
-void DesEngine::FlyingCamera::rotate_y(float angle)
-{
-    QQuaternion quat = QQuaternion::fromAxisAndAngle(QVector3D(1, 0, 0), -angle);
-    _rotate_y = quat * _rotate_y;
-    _rotation = _rotate_x * _rotate_y;
-}
-
 void DesEngine::FlyingCamera::mouseReleaseEvent(::QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton)
@@ -361,3 +293,5 @@ void DesEngine::FlyingCamera::mouseReleaseEvent(::QMouseEvent *event)
         _scene->get_parent()->glwidget->setCursor(Qt::CursorShape::ArrowCursor);
     }
 }
+
+
