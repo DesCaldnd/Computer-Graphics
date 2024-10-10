@@ -58,6 +58,11 @@ namespace DesEngine
 
         QMatrix4x4 _global_transform;
 
+        /**
+         * Sets all except file
+         */
+        void set_from_json(const nlohmann::json& js);
+
 
 	public:
 
@@ -65,7 +70,7 @@ namespace DesEngine
 
         MeshObject(Scene*, id_t, const std::string& path);
 
-        static std::shared_ptr<LogicObject> default_mesh_object_json_loader(Scene*, id_t, nlohmann::json);
+        static std::shared_ptr<LogicObject> default_mesh_object_json_loader(Scene*, id_t, const nlohmann::json&);
         static std::shared_ptr<LogicObject> default_mesh_object_dialog_loader(Scene*, id_t);
 
         void draw(QOpenGLFunctions& funcs) override;

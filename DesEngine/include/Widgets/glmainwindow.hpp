@@ -32,6 +32,8 @@ namespace DesEngine
 
     public slots:
         void slot_shortcut_windowstate();
+        void slot_save_scene_dialog();
+        void slot_open_scene_dialog();
 
 	private:
 		Ui::GLMainWindow *ui;

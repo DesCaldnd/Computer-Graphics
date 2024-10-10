@@ -17,7 +17,7 @@ namespace DesEngine
 
 	class CameraObject : public MeshObject
 	{
-	private:
+    protected:
 
 		float _angle = 85, _near_plane = 0.1, _far_plane = 1000;
 		float _aspect_ratio;
@@ -55,7 +55,7 @@ namespace DesEngine
         nlohmann::json serialize() const override;
 
 
-        static std::shared_ptr<LogicObject> default_camera_object_json_loader(Scene*, id_t, nlohmann::json);
+        static std::shared_ptr<LogicObject> default_camera_object_json_loader(Scene*, id_t, const nlohmann::json&);
         static std::shared_ptr<LogicObject> default_camera_object_dialog_loader(Scene*, id_t);
 	};
 
@@ -72,10 +72,20 @@ namespace DesEngine
         void keyPressEvent(::QKeyEvent* event);
         void keyReleaseEvent(::QKeyEvent* event);
 
+    public:
+        std::string get_class_name() const override;
+
+        static std::shared_ptr<LogicObject> default_flying_camera_object_json_loader(Scene*, id_t, const nlohmann::json&);
+        static std::shared_ptr<LogicObject> default_flying_camera_object_dialog_loader(Scene*, id_t);
+
+    private:
         void wheelEvent(::QWheelEvent* event);
         void mouseMoveEvent(::QMouseEvent *event);
         void mousePressEvent(::QMouseEvent *event);
         void mouseReleaseEvent(::QMouseEvent *event);
+
+    public:
+        nlohmann::json serialize() const override;
 
     public:
 

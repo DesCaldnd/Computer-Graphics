@@ -21,19 +21,22 @@ nlohmann::json EditGameMode::serialize() const
     return nlohmann::json();
 }
 
-std::shared_ptr<GameMode> EditGameMode::default_gamemode_json_loader(Scene *, id_t, nlohmann::json)
+std::shared_ptr<GameMode> EditGameMode::default_gamemode_json_loader(Scene *scene, id_t id, const nlohmann::json& js)
 {
-    return std::shared_ptr<GameMode>();
+        //TODO:
+    return std::make_shared<EditGameMode>(scene, id);
 }
 
 std::shared_ptr<GameMode> EditGameMode::default_gamemode_dialog_loader(Scene *, id_t)
 {
+        //TODO:
     return std::shared_ptr<GameMode>();
 }
 
 
-    GameMode::GameMode(Scene *scene, id_t id) : Serializable(id), _scene(scene)
-    {
+GameMode::GameMode(Scene *scene, id_t id) : Serializable(id), _scene(scene)
+{
 
-    }
+}
+
 } // DesEngine

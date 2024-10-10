@@ -51,6 +51,8 @@ namespace DesEngine
 
 	private:
 
+        bool _shortcuts_ready = false;
+
 		bool _is_in_edit = true, _is_in_pause = true;
 		id_t _max_id = 1;
 
@@ -68,8 +70,8 @@ namespace DesEngine
 
 		std::unordered_map<id_t, std::shared_ptr<LogicObject>> _renderable_objects;
 
-		std::unordered_map<std::string, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>>> _obj_loaders;
-		std::unordered_map<std::string, std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>>> _game_mode_loaders;
+		std::unordered_map<std::string, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, const nlohmann::json&)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>>> _obj_loaders;
+		std::unordered_map<std::string, std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, const nlohmann::json&)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>>> _game_mode_loaders;
 
 		GLMainWindow* _parent;
 
@@ -79,6 +81,8 @@ namespace DesEngine
 
         float aspect_ratio;
 
+
+        void setup_edit_shortcuts();
 
     public slots:
 
@@ -96,8 +100,19 @@ namespace DesEngine
 
 		void init_in_edit_mode();
 
-		void load_from_file(std::string path, bool in_edit);
-		void save_to_file(std::string path);
+        /**
+         * If scene already exists you MUST call clear() and then init()
+         * @param path
+         * @param in_edit
+         */
+		void load_from_file(const std::string& path, bool in_edit);
+
+        /**
+         * saves and loads only renderables. If you want to save/load nested objects, you can do it manually
+         * If you have FUNDAMENTAL objects (f.e. play camera) nested, you MUST save it, otherwise you will have runtime error on load
+         * @param path
+         */
+		void save_to_file(const std::string& path);
 
 		[[nodiscard("At every call scene`s max id increments")]] id_t get_new_id();
 
@@ -146,10 +161,9 @@ namespace DesEngine
         void clear_lights();
 
 		void register_object(std::shared_ptr<LogicObject>);
-		void remove_object(id_t);
+        void remove_object(id_t);
 
 		void register_renderable(std::shared_ptr<LogicObject>);
-		void remove_renderable(id_t);
 
 		std::shared_ptr<LogicObject> load_object(std::string class_name, const nlohmann::json& json);
 
@@ -168,10 +182,17 @@ namespace DesEngine
 		 * @param class_name
 		 * @param functions - first function to call at load from file, other - in editor, with dialog
 		 */
-		void add_object_loader(std::string class_name, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>> functions);
-		void add_gamemode_loader(std::string class_name, std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>> func);
+		void add_object_loader(std::string class_name, std::pair<std::function<std::shared_ptr<LogicObject>(Scene*, id_t, const nlohmann::json&)>, std::function<std::shared_ptr<LogicObject>(Scene*, id_t)>> functions);
+		void add_gamemode_loader(std::string class_name, std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, const nlohmann::json&)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>> func);
+
+        void clear();
 
         void timerEvent(QTimerEvent*) override;
+
+    public slots:
+
+        void remove_renderable(id_t);
+
 	};
 
 } // DesEngine

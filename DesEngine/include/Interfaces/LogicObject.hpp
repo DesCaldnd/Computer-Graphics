@@ -25,6 +25,10 @@ namespace DesEngine
 	protected:
 		Scene* _scene;
 
+    signals:
+
+        void remove(id_t id);
+
 	public:
 
 		LogicObject(Scene* scene, id_t id);

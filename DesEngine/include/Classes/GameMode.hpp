@@ -31,7 +31,7 @@ namespace DesEngine
         std::string get_class_name() const override;
         nlohmann::json serialize() const override;
 
-        static std::shared_ptr<GameMode> default_gamemode_json_loader(Scene*, id_t, nlohmann::json);
+        static std::shared_ptr<GameMode> default_gamemode_json_loader(Scene*, id_t, const nlohmann::json&);
         static std::shared_ptr<GameMode> default_gamemode_dialog_loader(Scene*, id_t);
     };
 

@@ -79,13 +79,19 @@ namespace DesEngine
         }
     }
 
-    std::shared_ptr<LogicObject> MeshObject::default_mesh_object_json_loader(Scene *, id_t, nlohmann::json)
+    std::shared_ptr<LogicObject> MeshObject::default_mesh_object_json_loader(Scene *scene, id_t id, const nlohmann::json& js)
     {
-        return std::shared_ptr<LogicObject>();
+        std::string path = js["file"].get<std::string>();
+
+        auto res = std::make_shared<MeshObject>(scene, id, path);
+        res->set_from_json(js);
+
+        return res;
     }
 
     std::shared_ptr<LogicObject> MeshObject::default_mesh_object_dialog_loader(Scene *, id_t)
     {
+        // TODO:
         return std::shared_ptr<LogicObject>();
     }
 
@@ -248,9 +254,9 @@ namespace DesEngine
         res["translateY"] = _translate.y();
         res["translateZ"] = _translate.z();
 
-        res["scaleX"] = _translate.x();
-        res["scaleY"] = _translate.y();
-        res["scaleZ"] = _translate.z();
+        res["scaleX"] = _scale.x();
+        res["scaleY"] = _scale.y();
+        res["scaleZ"] = _scale.z();
 
         res["rotationX"] = _rot_x;
         res["rotationY"] = _rot_y;
@@ -258,14 +264,42 @@ namespace DesEngine
 
         res["file"] = _filepath;
 
+        res["cast_shadow"] = _cast_shadow;
+        res["draw_in_game"] = _draw_in_game;
+
         std::string m("mat");
 
         for(int i = 0; i < 16; ++i)
         {
-            res[m + std::to_string(i / 4) + "x" + std::to_string(i % 4)] = _global_transform.data()[0];
+            res[m + std::to_string(i / 4) + "x" + std::to_string(i % 4)] = _global_transform.data()[i];
         }
 
         return res;
+    }
+
+    void MeshObject::set_from_json(const nlohmann::json &js)
+    {
+        _translate.setX(js["translateX"].get<float>());
+        _translate.setY(js["translateY"].get<float>());
+        _translate.setZ(js["translateZ"].get<float>());
+
+        _scale.setX(js["scaleX"].get<float>());
+        _scale.setY(js["scaleY"].get<float>());
+        _scale.setZ(js["scaleZ"].get<float>());
+
+        _rot_x = js["rotationX"].get<float>();
+        _rot_y = js["rotationY"].get<float>();
+        _rot_z = js["rotationZ"].get<float>();
+
+        _cast_shadow = js["cast_shadow"].get<bool>();
+        _draw_in_game = js["draw_in_game"].get<bool>();
+
+        std::string m("mat");
+
+        for(int i = 0; i < 16; ++i)
+        {
+            _global_transform.data()[i] = js[m + std::to_string(i / 4) + "x" + std::to_string(i % 4)].get<float>();
+        }
     }
 
     MeshObject::file_param_type MeshObject::get_param_type(const std::string &val)

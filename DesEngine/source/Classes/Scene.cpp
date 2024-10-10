@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QImageReader>
 #include <ranges>
+#include <QShortcut>
+#include <fstream>
 #include "Classes/Utils.hpp"
 #include "Classes/Scene.hpp"
 #include "Widgets/glmainwindow.hpp"
@@ -16,7 +18,12 @@ namespace DesEngine
     Scene::Scene(GLMainWindow *parent) : _parent(parent)
     {
         _obj_loaders.insert(std::make_pair("Mesh", std::make_pair(&MeshObject::default_mesh_object_json_loader, &MeshObject::default_mesh_object_dialog_loader)));
+        _obj_loaders.insert(std::make_pair("SkyBox", std::make_pair(&SkyBoxObject::default_skybox_object_json_loader, &SkyBoxObject::default_skybox_object_dialog_loader)));
         _obj_loaders.insert(std::make_pair("Camera", std::make_pair(&CameraObject::default_camera_object_json_loader, &CameraObject::default_camera_object_dialog_loader)));
+        _obj_loaders.insert(std::make_pair("LightObject", std::make_pair(&LightObject::default_light_object_json_loader, &LightObject::default_light_object_dialog_loader)));
+        _obj_loaders.insert(std::make_pair("FlyingCamera", std::make_pair(&FlyingCamera::default_flying_camera_object_json_loader, &FlyingCamera::default_flying_camera_object_dialog_loader)));
+
+
 
         _game_mode_loaders.insert(std::make_pair("EditGamemode", std::make_pair(&EditGameMode::default_gamemode_json_loader,
                                                                             &EditGameMode::default_gamemode_dialog_loader)));
@@ -26,6 +33,8 @@ namespace DesEngine
 
     void Scene::init_in_edit_mode()
     {
+        setup_edit_shortcuts();
+
         _is_in_edit = true;
 
         _edit_mode = std::make_shared<EditGameMode>(this, get_new_id());
@@ -34,7 +43,7 @@ namespace DesEngine
         edit_camera = std::make_shared<FlyingCamera>(this, get_new_id());
         play_camera = std::make_shared<CameraObject>(this, get_new_id());
 
-        register_object(play_camera);
+        register_renderable(play_camera);
         register_object(edit_camera);
         edit_camera->translate(QVector3D(0, -2, 0));
 
@@ -74,18 +83,135 @@ namespace DesEngine
         std::shared_ptr<SkyBoxObject> sbox = std::make_shared<SkyBoxObject>(this, get_new_id());
         register_renderable(sbox);
 
+        _previous_frame_time = std::chrono::steady_clock::now();
+
         _is_in_pause = false;
-        _timer.start(1, this);
+        _timer.start(0, this);
     }
 
-    void Scene::load_from_file(std::string path, bool in_edit)
+    void Scene::load_from_file(const std::string& path, bool in_edit)
     {
-        // TODO:
+        std::ifstream in(path);
+
+        if (!in.is_open())
+            throw std::runtime_error("Trying to load scene, but path is incorrect");
+
+        _is_in_edit = in_edit;
+
+        if (in_edit)
+        {
+            setup_edit_shortcuts();
+        }
+
+        nlohmann::json sc = nlohmann::json::parse(in);
+
+        _max_id = sc["max_id"].get<id_t>();
+
+        for(auto&& js : sc["objects"])
+        {
+            std::string class_name = js["class"].get<std::string>();
+            id_t id = js["id"].get<id_t>();
+
+            auto loader = _obj_loaders.find(class_name);
+
+            if (loader == _obj_loaders.end())
+                throw std::runtime_error("Error while parsing desd file. Attempt of loading object of unknown type: " + class_name);
+
+            auto obj = loader->second.first(this, id, js["data"]);
+
+            if (obj == nullptr)
+                throw std::runtime_error("Error while parsing desd file. Object loader returned nullptr");
+
+            register_renderable(obj);
+        }
+
+        for(auto&& js : sc["lights"])
+        {
+            id_t id = js["id"].get<id_t>();
+
+            register_light(id);
+        }
+
+        id_t gm_id = sc["game_mode"]["id"].get<id_t>();
+        std::string gm_class = sc["game_mode"]["class"].get<std::string>();
+
+        auto gm_loader = _game_mode_loaders.find(gm_class);
+
+        if (gm_loader == _game_mode_loaders.end())
+            throw std::runtime_error("Error while parsing desd file. Attempt of loading gamemode of unknown type: " + gm_class);
+
+        _game_mode = gm_loader->second.first(this, gm_id, sc["game_mode"]["data"]);
+
+        if (_game_mode == nullptr)
+            throw std::runtime_error("Error while parsing desd file. Gamemode loader returned nullptr");
+
+
+        id_t cam_id = sc["play_camera"].get<id_t>();
+        auto cam_it = _all_objects.find(cam_id);
+
+        if (cam_it == _all_objects.end())
+            throw std::runtime_error("Error while parsing desd file. Play camera id doesn`t point to an object");
+
+        play_camera = std::dynamic_pointer_cast<CameraObject>(cam_it->second);
+
+        if (play_camera == nullptr)
+            throw std::runtime_error("Error while parsing desd file. Play camera id doesn`t point to an camera object");
+
+        _previous_frame_time = std::chrono::steady_clock::now();
+
+        if (_is_in_edit)
+        {
+            _edit_mode = std::make_shared<EditGameMode>(this, get_new_id());
+            edit_camera = std::make_shared<FlyingCamera>(this, get_new_id());
+            register_object(edit_camera);
+            edit_camera->translate(QVector3D(0, -2, 0));
+
+            set_aspect_ratio(_parent->glwidget->width() / (float) _parent->glwidget->height());
+        }
+
+        _is_in_pause = false;
+        _timer.start(0, this);
     }
 
-    void Scene::save_to_file(std::string path)
+    void Scene::save_to_file(const std::string& path)
     {
-        // TODO:
+        std::ofstream out(path);
+
+        if (!out.is_open())
+            throw std::runtime_error("File for saving scene could not be opened");
+
+        nlohmann::json res;
+        nlohmann::json renderables, lights, game_mode;
+
+        for(auto &&obj : _renderable_objects)
+        {
+            nlohmann::json object;
+
+            object["id"] = obj.first;
+            object["class"] = obj.second->get_class_name();
+            object["data"] = obj.second->serialize();
+
+            renderables.push_back(std::move(object));
+        }
+
+        for(auto&& light : _lights)
+        {
+            nlohmann::json l;
+            l["id"] = light;
+            lights.push_back(l);
+        }
+
+        game_mode["id"] = _game_mode->get_id();
+        game_mode["class"] = _game_mode->get_class_name();
+        game_mode["data"] = _game_mode->serialize();
+
+        res["objects"] = std::move(renderables);
+        res["lights"] = std::move(lights);
+        res["max_id"] = _max_id;
+        res["play_camera"] = play_camera->get_id();
+        res["game_mode"] = std::move(game_mode);
+
+        out << res;
     }
 
     id_t Scene::get_new_id()
@@ -306,14 +432,13 @@ namespace DesEngine
 
         _previous_frame_time = std::chrono::steady_clock::now();
 
-        _timer.start(1, this);
+        _timer.start(0, this);
     }
 
     GLMainWindow *Scene::get_window()
     {
         return _parent;
     }
-
 
     std::shared_ptr<Material> Scene::get_material(const std::string& name, const std::filesystem::path& path)
     {
@@ -360,12 +485,25 @@ namespace DesEngine
 
     void Scene::register_object(std::shared_ptr<LogicObject> obj)
     {
-        _all_objects.insert(std::make_pair(obj->get_id(), obj));
+        auto r = _all_objects.insert(std::make_pair(obj->get_id(), obj));
+        if (r.second)
+        {
+            connect(obj.get(), &LogicObject::remove, this, &Scene::remove_renderable);
+            if (!is_in_edit())
+                obj->begin_play();
+        }
     }
 
     void Scene::remove_object(id_t id)
     {
-        _all_objects.erase(id);
+        auto it = _all_objects.find(id);
+
+        if (it != _all_objects.end() && !is_in_edit())
+        {
+            it->second->end_play();
+        }
+
+        _all_objects.erase(it);
 
         if (_lights.contains(id))
         {
@@ -379,7 +517,7 @@ namespace DesEngine
 
         if (!_all_objects.contains(obj->get_id()))
         {
-            _all_objects.insert(std::make_pair(obj->get_id(), obj));
+            register_object(obj);
         }
     }
 
@@ -404,14 +542,14 @@ namespace DesEngine
 
     void Scene::add_object_loader(std::string class_name,
                                   std::pair<std::function<std::shared_ptr<LogicObject>(Scene *, id_t,
-                                                                                       nlohmann::json)>, std::function<std::shared_ptr<LogicObject>(
+                                                                                       const nlohmann::json&)>, std::function<std::shared_ptr<LogicObject>(
                                           Scene *, id_t)>> functions)
     {
         _obj_loaders.insert(std::make_pair(class_name, functions));
     }
 
     void Scene::add_gamemode_loader(std::string class_name,
-                                    std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, nlohmann::json)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>> func)
+                                    std::pair<std::function<std::shared_ptr<GameMode>(Scene*, id_t, const nlohmann::json&)>, std::function<std::shared_ptr<GameMode>(Scene*, id_t)>> func)
     {
         _game_mode_loaders.insert(std::make_pair(class_name, func));
     }
@@ -504,11 +642,49 @@ namespace DesEngine
 
     bool Scene::is_in_pause()
     {
-        return _is_in_edit;
+        return _is_in_pause;
     }
 
     bool Scene::is_in_edit()
     {
-        return _is_in_pause;
+        return _is_in_edit;
+    }
+
+    void Scene::clear()
+    {
+        _max_id = 1;
+        edit_camera = nullptr;
+        play_camera = nullptr;
+        _game_mode = nullptr;
+        _edit_mode = nullptr;
+
+        _mat_lib.clear();
+        _prog_lib.clear();
+        _current_prog = nullptr;
+
+        _lights.clear();
+        _all_objects.clear();
+        _renderable_objects.clear();
+
+        if (_timer.isActive())
+            _timer.stop();
+    }
+
+    void Scene::setup_edit_shortcuts()
+    {
+        if (_shortcuts_ready)
+            return;
+
+        QShortcut* shortcut = new QShortcut(QKeySequence(tr("Ctrl+S")), _parent);
+        shortcut->setAutoRepeat(false);
+
+        connect(shortcut, &QShortcut::activated, _parent, &GLMainWindow::slot_save_scene_dialog);
+
+        QShortcut* shortcut2 = new QShortcut(QKeySequence(tr("Ctrl+O")), _parent);
+        shortcut2->setAutoRepeat(false);
+
+        connect(shortcut2, &QShortcut::activated, _parent, &GLMainWindow::slot_open_scene_dialog);
+
+        _shortcuts_ready = true;
     }
 } // DesEngine

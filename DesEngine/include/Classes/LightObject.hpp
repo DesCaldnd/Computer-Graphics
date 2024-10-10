@@ -27,6 +27,9 @@ namespace DesEngine
 
     public:
 
+        static std::shared_ptr<LogicObject> default_light_object_json_loader(Scene*, id_t, const nlohmann::json&);
+        static std::shared_ptr<LogicObject> default_light_object_dialog_loader(Scene*, id_t);
+
         QVector3D get_diffuse_color() const;
 
         void set_diffuse_color(const QVector3D &diffuseColor);
@@ -41,6 +44,8 @@ namespace DesEngine
 
         float get_soft_cutoff() const;
 
+        nlohmann::json serialize() const override;
+
         void set_soft_cutoff(float cutoff);
 
         float get_power() const;
@@ -48,6 +53,8 @@ namespace DesEngine
         void set_power(float power);
 
         LightType get_type() const;
+
+        std::string get_class_name() const override;
 
         void set_type(LightType type);
 

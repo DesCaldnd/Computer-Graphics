@@ -162,4 +162,60 @@ namespace DesEngine
         }
     }
 
+    nlohmann::json LightObject::serialize() const
+    {
+        nlohmann::json res;
+        res["mesh"] = MeshObject::serialize();
+
+        res["diff_x"] = _diffuse_color.x();
+        res["diff_y"] = _diffuse_color.y();
+        res["diff_z"] = _diffuse_color.z();
+
+        res["spec_x"] = _specular_color.x();
+        res["spec_y"] = _specular_color.y();
+        res["spec_z"] = _specular_color.z();
+
+        res["cutoff"] = _cutoff;
+        res["soft"] = _soft;
+        res["power"] = _power;
+
+        res["type"] = int(_type);
+
+        return res;
+    }
+
+    std::string LightObject::get_class_name() const
+    {
+        return "LightObject";
+    }
+
+    std::shared_ptr<LogicObject> LightObject::default_light_object_json_loader(Scene *scene, id_t id, const nlohmann::json &js)
+    {
+        auto res = std::make_shared<LightObject>(scene, id);
+
+        res->set_from_json(js["mesh"]);
+
+        res->_diffuse_color.setX(js["diff_x"].get<float>());
+        res->_diffuse_color.setY(js["diff_y"].get<float>());
+        res->_diffuse_color.setZ(js["diff_z"].get<float>());
+
+        res->_specular_color.setX(js["spec_x"].get<float>());
+        res->_specular_color.setY(js["spec_y"].get<float>());
+        res->_specular_color.setZ(js["spec_z"].get<float>());
+
+        res->_cutoff = js["cutoff"].get<float>();
+        res->_soft = js["soft"].get<float>();
+        res->_power = js["power"].get<float>();
+
+        res->_type = (LightType)js["type"].get<int>();
+
+        return res;
+    }
+
+    std::shared_ptr<LogicObject> LightObject::default_light_object_dialog_loader(Scene *, id_t)
+    {
+        //TODO:
+        return std::shared_ptr<LogicObject>();
+    }
+
 } // DesEngine

@@ -79,4 +79,19 @@ namespace DesEngine
     {
         return false;
     }
+
+    std::shared_ptr<LogicObject> SkyBoxObject::default_skybox_object_dialog_loader(Scene *, id_t)
+    {
+        //TODO:
+        return std::shared_ptr<LogicObject>();
+    }
+
+    std::shared_ptr<LogicObject> SkyBoxObject::default_skybox_object_json_loader(Scene *scene, id_t id, const nlohmann::json &js)
+    {
+        auto res = std::make_shared<SkyBoxObject>(scene, id);
+
+        res->set_from_json(js);
+
+        return res;
+    }
 } // DesEngine

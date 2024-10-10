@@ -16,6 +16,10 @@ namespace DesEngine
 
     public:
 
+
+        static std::shared_ptr<LogicObject> default_skybox_object_json_loader(Scene*, id_t, const nlohmann::json&);
+        static std::shared_ptr<LogicObject> default_skybox_object_dialog_loader(Scene*, id_t);
+
         SkyBoxObject(Scene* scene, id_t id);
 
         void draw(QOpenGLFunctions &funcs) override;

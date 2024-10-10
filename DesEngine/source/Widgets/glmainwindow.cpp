@@ -7,7 +7,8 @@
 #include "Widgets/glmainwindow.hpp"
 #include "ui_GLMainWindow.h"
 #include "Widgets/glwidget.hpp"
-#include "QShortcut"
+#include <QShortcut>
+#include <QFileDialog>
 
 namespace DesEngine
 {
@@ -41,6 +42,30 @@ namespace DesEngine
         {
             showFullScreen();
         }
+    }
+
+    void GLMainWindow::slot_save_scene_dialog()
+    {
+        QString filepath = QFileDialog::getSaveFileName(this, tr("Save scene"), "./untitled.desd", tr("DesEngine Scene Description file (*.desd)"));
+
+        if (!filepath.isEmpty())
+        {
+            scene.save_to_file(filepath.toStdString());
+        }
+    }
+
+    void GLMainWindow::slot_open_scene_dialog()
+    {
+        QString filepath = QFileDialog::getOpenFileName(this, tr("Open scene"), "./", tr("DesEngine Scene Description file (*.desd)"));
+
+        if (filepath.isEmpty())
+            return;
+
+        bool e = scene.is_in_edit();
+
+        scene.clear();
+        scene.init();
+        scene.load_from_file(filepath.toStdString(), e);
     }
 
 } // DesEngine

@@ -114,7 +114,6 @@ QMatrix4x4 DesEngine::CameraObject::get_projection_matrix() const
     return proj;
 }
 
-
 std::vector<DesEngine::property_t> DesEngine::CameraObject::get_properties()
 {
     return MeshObject::get_properties();
@@ -127,13 +126,32 @@ std::string DesEngine::CameraObject::get_class_name() const
 
 nlohmann::json DesEngine::CameraObject::serialize() const
 {
-    return MeshObject::serialize();
+    nlohmann::json res;
+    res["mesh"] = MeshObject::serialize();
+
+    res["angle"] = _angle;
+    res["near_plane"] = _near_plane;
+    res["far_plane"] = _far_plane;
+    res["is_orthogonal"] = is_orthogonal;
+
+    return res;
 }
 
 std::shared_ptr<DesEngine::LogicObject>
-DesEngine::CameraObject::default_camera_object_json_loader(DesEngine::Scene *, DesEngine::id_t, nlohmann::json)
+DesEngine::CameraObject::default_camera_object_json_loader(DesEngine::Scene *scene, DesEngine::id_t id, const nlohmann::json& js)
 {
-    return std::shared_ptr<LogicObject>();
+    auto res = std::make_shared<CameraObject>(scene, id);
+
+    res->set_from_json(js["mesh"]);
+
+    res->_aspect_ratio = scene->get_aspect_ratio();
+
+    res->_angle = js["angle"].get<float>();
+    res->_near_plane = js["near_plane"].get<float>();
+    res->_far_plane = js["far_plane"].get<float>();
+    res->is_orthogonal = js["is_orthogonal"].get<bool>();
+
+    return res;
 }
 
 std::shared_ptr<DesEngine::LogicObject>
@@ -200,7 +218,6 @@ void DesEngine::FlyingCamera::control_button_press(bool activated, int axis, boo
             break;
     }
 }
-
 
 void DesEngine::FlyingCamera::keyReleaseEvent(::QKeyEvent *event)
 {
@@ -292,6 +309,47 @@ void DesEngine::FlyingCamera::mouseReleaseEvent(::QMouseEvent *event)
     {
         _scene->get_parent()->glwidget->setCursor(Qt::CursorShape::ArrowCursor);
     }
+}
+
+std::string DesEngine::FlyingCamera::get_class_name() const
+{
+    return "FlyingCamera";
+}
+
+nlohmann::json DesEngine::FlyingCamera::serialize() const
+{
+    nlohmann::json res;
+    res["camera"] = CameraObject::serialize();
+
+    res["speed"] = _speed;
+
+    return res;
+}
+
+std::shared_ptr<DesEngine::LogicObject>
+DesEngine::FlyingCamera::default_flying_camera_object_dialog_loader(DesEngine::Scene *, DesEngine::id_t)
+{
+    // TODO:
+    return std::shared_ptr<LogicObject>();
+}
+
+std::shared_ptr<DesEngine::LogicObject>
+DesEngine::FlyingCamera::default_flying_camera_object_json_loader(DesEngine::Scene * scene, DesEngine::id_t id,
+                                                                  const nlohmann::json &js)
+{
+    auto res = std::make_shared<FlyingCamera>(scene, id);
+
+    res->set_from_json(js["camera"]["mesh"]);
+
+    res->_aspect_ratio = scene->get_aspect_ratio();
+
+    res->_angle = js["camera"]["angle"].get<float>();
+    res->_near_plane = js["camera"]["near_plane"].get<float>();
+    res->_far_plane = js["camera"]["far_plane"].get<float>();
+    res->is_orthogonal = js["camera"]["is_orthogonal"].get<bool>();
+    res->_speed = js["speed"].get<float>();
+
+    return res;
 }
 
 
