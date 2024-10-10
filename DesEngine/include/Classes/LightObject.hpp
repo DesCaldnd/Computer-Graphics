@@ -66,11 +66,6 @@ namespace DesEngine
         float _soft = 30;
         float _power = 1;
 
-
-        // TODO: QT
-        GLuint m_fbo;
-        GLuint m_shadowMap;
-
         LightType _type = LightType::Directional;
 
     public:

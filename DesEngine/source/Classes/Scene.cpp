@@ -119,8 +119,21 @@ namespace DesEngine
         auto proj = get_current_camera()->get_projection_matrix();
 
         auto dpth_prog = get_program("Shaders/depth");
-        auto dpth_point_prog = get_program("Shaders/depthp");
         auto pbr_prog = get_program("Shaders/pbr");
+
+        auto depth_loader = [dpth_prog](LogicObject* p){
+            QMatrix4x4 model;
+
+            model.setToIdentity();
+            model.translate(p->get_translate());
+
+            model *= get_rotation(p->get_rotation_x(), p->get_rotation_y(), p->get_rotation_z());
+
+            model.scale(p->get_scale());
+            model = p->get_global_transform() * model;
+
+            dpth_prog->setUniformValue("model", model);
+        };
 
         size_t i = 0;
         for (auto&& light_id : _lights)
@@ -130,78 +143,36 @@ namespace DesEngine
 
             if (light->get_type() != LightObject::LightType::Point)
             {
+
                 dpth_prog->bind();
                 _current_prog = dpth_prog;
-            }
-            else
-            {
-                dpth_point_prog->bind();
-                _current_prog = dpth_point_prog;
-                functions.glBindFramebuffer(GL_FRAMEBUFFER, light->m_fbo);
-            }
 
+                light->_depth_buffer->bind();
 
-            auto depth_loader = [this](LogicObject* p){
-                QMatrix4x4 model;
+                QMatrix4x4 proj_light = light->get_light_projection_matrix();
 
-                model.setToIdentity();
-                model.translate(p->get_translate());
+                _current_prog->setUniformValue("proj_light", proj_light);
 
-                model *= get_rotation(p->get_rotation_x(), p->get_rotation_y(), p->get_rotation_z());
-
-                model.scale(p->get_scale());
-                model = p->get_global_transform() * model;
-
-                _current_prog->setUniformValue("model", model);
-            };
-
-            light->_depth_buffer->bind();
-
-            QMatrix4x4 proj_light = light->get_light_projection_matrix();
-
-            _current_prog->setUniformValue("proj_light", proj_light);
-
-            if (light->get_type() != LightObject::LightType::Point)
                 _current_prog->setUniformValue("shadow_light", light->get_light_matrix().inverted());
-            else
-            {
-                for (unsigned short j = 0; j < 6; ++j)
+
+                functions.glViewport(0, 0, _depth_buffer_size.width(), _depth_buffer_size.height());
+                functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+                for (auto &&renderable: _renderable_objects)
                 {
-                    _current_prog->setUniformValue((std::string("shadow_light[") + std::to_string(j) + "]").c_str(), light->get_light_matrix(j).inverted());
+                    if (renderable.second->cast_shadow())
+                        renderable.second->help_draw(depth_loader, functions);
                 }
-            }
 
-            functions.glViewport(0, 0, _depth_buffer_size.width(), _depth_buffer_size.height());
-            functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-
-            for (auto&& renderable : _renderable_objects)
-            {
-                if (renderable.second->cast_shadow())
-                    renderable.second->help_draw(depth_loader, functions);
-            }
-
-            if (light->get_type() != LightObject::LightType::Point)
-            {
                 light->_depth_buffer->release();
-            } else
-            {
-                functions.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                _current_prog->release();
             }
-            _current_prog->release();
 
             GLuint texture = light->_depth_buffer->texture();
 
-            if (light->get_type() != LightObject::LightType::Point)
-            {
-                functions.glActiveTexture(GL_TEXTURE0 + i * 2);
-                functions.glBindTexture(GL_TEXTURE_2D, texture);
-            }
-            else
-            {
-                functions.glActiveTexture(GL_TEXTURE0 + i * 2 + 1);
-                functions.glBindTexture(GL_TEXTURE_CUBE_MAP, light->m_shadowMap);
-            }
+            functions.glActiveTexture(GL_TEXTURE0 + i);
+            functions.glBindTexture(GL_TEXTURE_2D, texture);
 
             ++i;
         }
@@ -504,7 +475,7 @@ namespace DesEngine
     {
         load_program("Shaders/pbr", false);
         load_program("Shaders/depth", false);
-        load_program("Shaders/depthp", true);
+//        load_program("Shaders/depthp", true);
 //        load_program("Shaders/color_index.vsh", "Shaders/color_index.fsh");
 
         _depth_buffer_size = depth_buffer_size;

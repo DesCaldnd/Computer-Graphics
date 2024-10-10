@@ -18,7 +18,6 @@ struct light
     float cutoff;
     float soft;
     sampler2D shadow_map;
-    samplerCube shadow_map_cube;
     int type;
     vec3 diffuse_color;
     vec3 specular_color;
@@ -52,12 +51,10 @@ uniform float u_d;
 in vec2 v_texcoord;
 in vec3 v_normal;
 in vec3 v_position;
-in vec3 v_position_no_view;
 
 in vec4 v_light_direction[5];
 in vec4 v_position_light[5];
 in vec4 v_light_position[5];
-in vec4 v_light_position_no_view[5];
 
 in mat3 v_tbn_mat;
 
@@ -66,33 +63,26 @@ vec4 dumb_multiply(vec4 a, vec4 b)
     return vec4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w);
 }
 
-float sample_shadow_map(sampler2D map, samplerCube map_c, int type, vec2 coords, vec3 coords_3, float compare)
+float sample_shadow_map(sampler2D map, vec2 coords, float compare)
 {
     vec4 v;
 
-    if (type != Point)
-    {
-        v = texture2D(map, coords);
-    } else
-    {
-        v = texture(map_c, coords_3);
-    }
+    v = texture2D(map, coords);
 
     float value = v.x * 255.0 + (v.y * 255.0 + (v.z * 255.0 + v.w) / 255.0) / 255.0;
     return step(compare, value);
-//    return length(coords_3);
 }
 
-float sample_shadow_map_linear(sampler2D map, samplerCube map_c, int type, vec2 coords, vec3 coords_3, float compare, vec2 texel_size)
+float sample_shadow_map_linear(sampler2D map, vec2 coords, float compare, vec2 texel_size)
 {
     vec2 pixel_pos = coords / texel_size + 0.5;
     vec2 fract_part = fract(pixel_pos);
     vec2 start_texel = (pixel_pos - fract_part) * texel_size;
 
-    float bl_texel = sample_shadow_map(map, map_c, type, start_texel, coords_3, compare);
-    float br_texel = sample_shadow_map(map, map_c, type, start_texel + vec2(texel_size.x, 0), coords_3, compare);
-    float tl_texel = sample_shadow_map(map, map_c, type, start_texel + vec2(0, texel_size.y), coords_3, compare);
-    float tr_texel = sample_shadow_map(map, map_c, type, start_texel + texel_size, coords_3, compare);
+    float bl_texel = sample_shadow_map(map, start_texel, compare);
+    float br_texel = sample_shadow_map(map, start_texel + vec2(texel_size.x, 0), compare);
+    float tl_texel = sample_shadow_map(map, start_texel + vec2(0, texel_size.y), compare);
+    float tr_texel = sample_shadow_map(map, start_texel + texel_size, compare);
 
     float mix_a = mix(bl_texel, tl_texel, fract_part.y);
     float mix_b = mix(br_texel, tr_texel, fract_part.y);
@@ -100,7 +90,7 @@ float sample_shadow_map_linear(sampler2D map, samplerCube map_c, int type, vec2 
     return mix(mix_a, mix_b, fract_part.x);
 }
 
-float sample_shadow_map_pcf(sampler2D map, samplerCube map_c, int type, vec2 coords, vec3 coords_3, float compare, vec2 texel_size)
+float sample_shadow_map_pcf(sampler2D map, vec2 coords, float compare, vec2 texel_size)
 {
     float result = 0;
 
@@ -109,14 +99,14 @@ float sample_shadow_map_pcf(sampler2D map, samplerCube map_c, int type, vec2 coo
         for (float x = -1; x <= 1; x += 1)
         {
             vec2 offset = vec2(x, y) * texel_size;
-            result += sample_shadow_map_linear(map, map_c, type, coords + offset, coords_3 + vec3(offset, 0), compare, texel_size);
+            result += sample_shadow_map_linear(map, coords + offset, compare, texel_size);
         }
     }
 
     return result / 9;
 }
 
-float calc_shadow_amount(sampler2D map, samplerCube map_c, int type, vec4 initial_shadow_coords, vec3 coords_3, vec3 light_vec)
+float calc_shadow_amount(sampler2D map, vec4 initial_shadow_coords, vec3 light_vec)
 {
     vec3 tmp = initial_shadow_coords.xyz / initial_shadow_coords.w;
     tmp = tmp * vec3(0.5) + vec3(0.5);
@@ -124,7 +114,7 @@ float calc_shadow_amount(sampler2D map, samplerCube map_c, int type, vec4 initia
     float offset = dot(v_normal, light_vec);
 
     if (offset <= 0)
-        return sample_shadow_map_pcf(map, map_c, type, tmp.xy, coords_3, tmp.z * 255.0 - 0.6, vec2(1.0 / u_shadow_map_size));
+        return sample_shadow_map_pcf(map, tmp.xy, tmp.z * 255.0 - 0.6, vec2(1.0 / u_shadow_map_size));
     else
         return 0;
 }
@@ -176,14 +166,8 @@ void main()
 
     vec4 result_color = vec4(0, 0, 0, 0);
 
-
-//    float v;
-
     for (int i = 0; i < u_light_count; ++i)
     {
-        if (u_lights[i].type == Point)
-            continue;
-
         vec3 light_vec = normalize(v_light_direction[i].xyz);
 
         float shadow_mult = 1;
@@ -204,7 +188,7 @@ void main()
             }
         }
 
-        float shadow_coeff = calc_shadow_amount(u_lights[i].shadow_map, u_lights[i].shadow_map_cube, u_lights[i].type, v_position_light[i], v_position_no_view - v_light_position_no_view[i].xyz, light_vec) * shadow_mult;
+        float shadow_coeff = u_lights[i].type == Point ? 1 : calc_shadow_amount(u_lights[i].shadow_map, v_position_light[i], light_vec) * shadow_mult;
 
         if (u_use_normal_map)
         {
@@ -236,8 +220,6 @@ void main()
         result_color += _specular_color * shadow_coeff;
 
         result_color = max(vec4(0, 0, 0, 0), result_color);
-
-//        v = length(v_position_no_view - v_light_position_no_view[i].xyz) / 20;
     }
 
 
@@ -245,7 +227,6 @@ void main()
     result_color += ambient_color;
 
     gl_FragColor = result_color;
-//    gl_FragColor = vec4(v, v, v, 1);
 
     gl_FragDepth = gl_FragCoord.z;
 

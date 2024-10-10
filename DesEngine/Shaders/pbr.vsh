@@ -25,13 +25,11 @@ uniform vec3 u_light_direction = vec3(0, 0, -1);
 out vec2 v_texcoord;
 out vec3 v_normal;
 out vec3 v_position;
-out vec3 v_position_no_view;
 
 out mat3 v_tbn_mat;
 out vec4 v_light_direction[5];
 out vec4 v_position_light[5];
 out vec4 v_light_position[5];
-out vec4 v_light_position_no_view[5];
 
 mat3 transpose(in mat3 mat)
 {
@@ -57,7 +55,6 @@ void main()
 
     v_normal = normalize(vec3(mv_mat * vec4(a_normal, 0)));
 
-    v_position_no_view = vec3(model * vec4(a_position, 1));
     v_position = vec3(mv_mat * vec4(a_position, 1));
 
     vec3 tangent = normalize(vec3(mv_mat * vec4(a_tangent, 0)));
@@ -71,8 +68,7 @@ void main()
     {
         v_light_direction[i] = normalize(view * light[i] * vec4(u_light_direction, 0));
         v_position_light[i] = proj_light[i] * shadow_light[i] * model * vec4(a_position, 1);
-        v_light_position_no_view[i] = light[i] * vec4(0, 0, 0, 1);
-        v_light_position[i] = view * v_light_position_no_view[i];
+        v_light_position[i] = view * light[i] * vec4(0, 0, 0, 1);
     }
 
  }

@@ -14,6 +14,7 @@ namespace DesEngine
     LightObject::LightObject(Scene *scene, id_t id) : MeshObject(scene, id, scene->is_in_edit() ? "Primitives/sphere.obj" : "")
     {
         _cast_shadow = false;
+        _draw_in_game = false;
         _depth_buffer = std::make_unique<QOpenGLFramebufferObject>(_scene->get_shadow_buffer_size(), QOpenGLFramebufferObject::Depth, GL_TEXTURE_2D);
     }
 
@@ -130,43 +131,6 @@ namespace DesEngine
 
     void LightObject::set_type(LightObject::LightType type)
     {
-        if (_type == LightType::Point && type != LightType::Point)
-        {
-            _depth_buffer = std::make_unique<QOpenGLFramebufferObject>(_scene->get_shadow_buffer_size(), QOpenGLFramebufferObject::Depth, GL_TEXTURE_2D);
-        } else if (_type != LightType::Point && type == LightType::Point)
-        {
-//            _depth_buffer = std::make_unique<QOpenGLFramebufferObject>(_scene->get_shadow_buffer_size(), QOpenGLFramebufferObject::Depth, GL_TEXTURE_CUBE_MAP);
-            _depth_buffer.reset(nullptr);
-
-            auto size = _scene->get_shadow_buffer_size();
-            QOpenGLExtraFunctions funcs;
-            funcs.initializeOpenGLFunctions();
-
-            funcs.glGenTextures(1, &m_shadowMapTex);
-            funcs.glBindTexture(GL_TEXTURE_2D, m_shadowMapTex);
-            funcs.glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT,
-                         SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-            funcs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            funcs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            funcs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-            funcs.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-            GLfloat borderColor[] = { 1.0, 1.0, 1.0, 1.0 };
-            funcs.glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
-
-            // Create a frame-buffer and associate the texture with it.
-            funcs.glGenFramebuffers(1, &m_shadowMapFBO);
-            funcs.glBindFramebuffer(GL_FRAMEBUFFER, m_shadowMapFBO);
-            funcs.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_shadowMapTex, 0);
-
-            // Let OpenGL know that we are not interested in colors for this buffer
-            funcs.glDrawBuffer(GL_NONE);
-            funcs.glReadBuffer(GL_NONE);
-
-            // Cleanup for now.
-            funcs.glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            funcs.glBindTexture(GL_TEXTURE_2D, 0);
-        }
-
         _type = type;
     }
 

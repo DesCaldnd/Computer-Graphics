@@ -12,7 +12,7 @@
 
 DesEngine::CameraObject::CameraObject(DesEngine::Scene *scene, DesEngine::id_t id) : MeshObject(scene, id, "")
 {
-
+    _draw_in_game = false;
 }
 
 void DesEngine::CameraObject::set_look_at(const QVector3D &look_at)

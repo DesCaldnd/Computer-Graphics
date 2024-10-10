@@ -91,6 +91,9 @@ namespace DesEngine
 
     void MeshObject::draw(QOpenGLFunctions &funcs)
     {
+        if (!draw_in_game() && !_scene->is_in_edit())
+            return;
+
         auto prog = _scene->get_current_prog();
 
         QMatrix4x4 model;
@@ -347,6 +350,16 @@ namespace DesEngine
     void MeshObject::set_cast_shadow(bool s)
     {
         _cast_shadow = s;
+    }
+
+    bool MeshObject::draw_in_game()
+    {
+        return _draw_in_game;
+    }
+
+    void MeshObject::set_draw_in_game(bool d)
+    {
+        _draw_in_game = d;
     }
 
     MeshSubObject::MeshSubObject(Scene *scene, const std::filesystem::path &mat_file, std::ifstream& stream, std::vector<QVector3D>::iterator coord_it,

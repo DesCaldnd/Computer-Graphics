@@ -54,7 +54,7 @@ namespace DesEngine
         float _rot_x = 0, _rot_y = 0, _rot_z = 0;
         QVector3D _translate;
         QVector3D _scale;
-        bool _cast_shadow = true;
+        bool _cast_shadow = true, _draw_in_game = true;
 
         QMatrix4x4 _global_transform;
 
@@ -73,6 +73,10 @@ namespace DesEngine
 
         bool cast_shadow() override;
         void set_cast_shadow(bool s);
+
+        bool draw_in_game() override;
+
+        void set_draw_in_game(bool d) override;
 
         std::vector<property_t> get_properties() override;
 
