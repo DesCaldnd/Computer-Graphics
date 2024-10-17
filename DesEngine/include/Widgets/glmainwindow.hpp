@@ -6,11 +6,14 @@
 #define DESENGINE_DESENGINE_INCLUDE_WIDGETS_GLMAINWINDOW_HPP_
 
 #include <QMainWindow>
+#include <QTabWidget>
+
 #include "../Classes/Scene.hpp"
 
 namespace DesEngine
 {
     class GLWidget;
+    class PropertyWidget;
 
 	QT_BEGIN_NAMESPACE
 	namespace Ui { class GLMainWindow; }
@@ -28,6 +31,7 @@ namespace DesEngine
         Scene scene;
         GLWidget* glwidget;
 
+        friend class Scene;
 
 
     public slots:
@@ -35,7 +39,13 @@ namespace DesEngine
         void slot_save_scene_dialog();
         void slot_open_scene_dialog();
 
+    private slots:
+
+
 	private:
+
+        PropertyWidget* _tab;
+
 		Ui::GLMainWindow *ui;
 	};
 } // DesEngine

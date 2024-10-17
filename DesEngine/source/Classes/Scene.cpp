@@ -7,6 +7,8 @@
 #include <ranges>
 #include <QShortcut>
 #include <fstream>
+#include <QMouseEvent>
+#include "Widgets/propertywidget.hpp"
 #include "Classes/Utils.hpp"
 #include "Classes/Scene.hpp"
 #include "Widgets/glmainwindow.hpp"
@@ -614,9 +616,11 @@ namespace DesEngine
         load_program("Shaders/pbr", false);
         load_program("Shaders/depth", false);
 //        load_program("Shaders/depthp", true);
-//        load_program("Shaders/color_index.vsh", "Shaders/color_index.fsh");
+        load_program("Shaders/color_index", false);
 
         _depth_buffer_size = depth_buffer_size;
+
+        disconnect();
 
     }
 
@@ -666,15 +670,18 @@ namespace DesEngine
         _all_objects.clear();
         _renderable_objects.clear();
 
+        if (_parent->_tab)
+        {
+            _parent->_tab->deleteLater();
+            _parent->_tab = nullptr;
+        }
+
         if (_timer.isActive())
             _timer.stop();
     }
 
     void Scene::setup_edit_shortcuts()
     {
-        if (_shortcuts_ready)
-            return;
-
         QShortcut* shortcut = new QShortcut(QKeySequence(tr("Ctrl+S")), _parent);
         shortcut->setAutoRepeat(false);
 
@@ -685,6 +692,121 @@ namespace DesEngine
 
         connect(shortcut2, &QShortcut::activated, _parent, &GLMainWindow::slot_open_scene_dialog);
 
-        _shortcuts_ready = true;
+        connect(_parent->glwidget, &GLWidget::mousePressSignal, this, &Scene::mousePressEvent);
+    }
+
+    id_t Scene::select_object_by_screen_coords(QPoint coords)
+    {
+
+//        auto&& functions = *QOpenGLContext::currentContext()->functions();
+        auto&& functions = *_parent->glwidget->context()->functions();
+
+        _color_buf->bind();
+
+//        functions.glEnable(GL_DEPTH_TEST);
+        functions.glViewport(0, 0, _parent->glwidget->width(), _parent->glwidget->height());
+        functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        auto col_prog = get_program("Shaders/color_index");
+        _current_prog = col_prog;
+        col_prog->bind();
+
+        auto binder = [col_prog](LogicObject* p)
+        {
+            QMatrix4x4 model;
+
+            model.setToIdentity();
+            model.translate(p->get_translate());
+
+            model *= get_rotation(p->get_rotation_x(), p->get_rotation_y(), p->get_rotation_z());
+
+            model.scale(p->get_scale());
+            model = p->get_global_transform() * model;
+
+            col_prog->setUniformValue("model", model);
+
+            auto id = p->get_id();
+            QVector4D res;
+
+            long double divider =  256.0 * 256.0;
+
+            res.setX(((id & 0b00000000'00000000'00000000'00000000'01111111'11111111) >> 00) / divider);
+            res.setY(((id & 0b00000000'00000000'00111111'11111111'10000000'00000000) >> 15) / divider);
+            res.setZ(((id & 0b00011111'11111111'11000000'00000000'00000000'00000000) >> 30) / divider);
+            res.setW(1);
+
+            col_prog->setUniformValue("u_code", res);
+        };
+
+        auto view = get_current_camera()->get_look_matrix();
+        auto proj = get_current_camera()->get_projection_matrix();
+
+        col_prog->setUniformValue("proj", proj);
+        col_prog->setUniformValue("view", view);
+
+
+        for (auto&& obj : _renderable_objects)
+        {
+            obj.second->help_draw(binder, functions);
+        }
+
+        col_prog->release();
+
+        GLint viewport[4];
+        functions.glGetIntegerv(GL_VIEWPORT, viewport);
+
+        unsigned short res[4];
+        functions.glReadPixels(coords.x(), viewport[3] - coords.y(), 1, 1, GL_RGBA, GL_UNSIGNED_SHORT, &res);
+
+        size_t multiplier = 256 * 128;
+
+        id_t out = res[0] + res[1] * multiplier + res[2] * multiplier * multiplier;
+
+//        functions.glDisable(GL_DEPTH_TEST);
+
+        _color_buf->release();
+//        functions.glDisable(GL_DEPTH_TEST);
+
+        qDebug() << out;
+        return out;
+    }
+
+    id_t Scene::select_object_by_mouse()
+    {
+        QPoint globalCursorPos = QCursor::pos();
+        QPoint local_cursor_pos = get_parent()->glwidget->mapFromGlobal(globalCursorPos);
+        return select_object_by_screen_coords(local_cursor_pos);
+    }
+
+    void Scene::mousePressEvent(::QMouseEvent *event)
+    {
+        if (event->buttons() != Qt::RightButton)
+            return;
+
+        auto id = select_object_by_mouse();
+        auto obj = get_object(id);
+
+        if (obj == nullptr)
+        {
+            qDebug() << "Object does not exist or wasn`t registered";
+            return;
+        }
+
+        auto props = obj->get_properties();
+
+
+    }
+
+    void Scene::resize(QSize new_size)
+    {
+        QOpenGLFramebufferObjectFormat fmt;
+        fmt.setInternalTextureFormat(GL_RGBA16);
+        fmt.setAttachment(QOpenGLFramebufferObject::NoAttachment);
+        _color_buf = std::make_unique<QOpenGLFramebufferObject>(new_size, fmt);
+    }
+
+    void Scene::setup_tab_widget()
+    {
+
     }
 } // DesEngine

@@ -60,7 +60,8 @@ in mat3 v_tbn_mat;
 
 vec4 dumb_multiply(vec4 a, vec4 b)
 {
-    return vec4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w);
+    return a * b;
+//    return vec4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w);
 }
 
 float sample_shadow_map(sampler2D map, vec2 coords, float compare)

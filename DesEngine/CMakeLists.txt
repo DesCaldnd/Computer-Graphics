@@ -20,6 +20,12 @@ add_library(DesEngine
         source/Classes/LogicObject.cpp
         include/Classes/Utils.hpp
         source/Classes/Utils.cpp
+        source/Widgets/propertywidget.cpp
+        include/Widgets/propertywidget.hpp
+        source/Widgets/propertywidget.ui
+        source/Widgets/testwid.cpp
+        include/Widgets/testwid.hpp
+        source/Widgets/testwid.ui
 )
 
 qt_add_resources(DesEngine "additional_files"

@@ -13,7 +13,7 @@
 
 namespace DesEngine
 {
-	GLWidget::GLWidget(GLMainWindow* parent) : ui(new Ui::GLWidget)
+	GLWidget::GLWidget(GLMainWindow* parent) : QOpenGLWidget(parent), ui(new Ui::GLWidget)
 	{
         _parent = dynamic_cast<GLMainWindow*>(parent);
 
@@ -47,6 +47,7 @@ namespace DesEngine
     {
         auto funcs = *context()->functions();
 
+//        funcs.glEnable(GL_DEPTH_TEST);
 
         _parent->scene.draw(funcs);
     }
@@ -59,6 +60,7 @@ namespace DesEngine
         _parent->scene.set_aspect_ratio(aspect);
 
         funcs.glViewport(0, 0, w, h);
+        _parent->scene.resize(QSize(w, h));
         _parent->scene.update();
     }
 

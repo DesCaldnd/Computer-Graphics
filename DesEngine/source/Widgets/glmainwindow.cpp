@@ -7,8 +7,10 @@
 #include "Widgets/glmainwindow.hpp"
 #include "ui_GLMainWindow.h"
 #include "Widgets/glwidget.hpp"
+#include "Widgets/propertywidget.hpp"
 #include <QShortcut>
 #include <QFileDialog>
+#include "Widgets/testwid.hpp"
 
 namespace DesEngine
 {
@@ -18,7 +20,12 @@ namespace DesEngine
 		ui->setupUi(this);
 
         glwidget = new GLWidget(this);
-        ui->hlayout->addWidget(glwidget);
+        ui->hlayout->addWidget(glwidget, 2);
+
+        _tab = new PropertyWidget();
+        ui->hlayout->addWidget(_tab);
+
+//        ui->hlayout->addStretch();
 
 
         QShortcut* shortcut2 = new QShortcut(QKeySequence(Qt::Key_F11), this);
@@ -26,6 +33,12 @@ namespace DesEngine
 
         connect(shortcut2,    &QShortcut::activated,
                          this,        &GLMainWindow::slot_shortcut_windowstate);
+
+//        QShortcut* shortcut3 = new QShortcut(QKeySequence(Qt::Key_I), this);
+//        shortcut3->setAutoRepeat(false);
+//
+//        connect(shortcut3,    &QShortcut::activated,
+//                this,        &GLMainWindow::tst_slot);
 	}
 
 	GLMainWindow::~GLMainWindow()

@@ -25,6 +25,8 @@
 
 #define MAX_LIGHTS 5
 
+class QMouseEvent;
+
 namespace std
 {
     template<>
@@ -50,8 +52,6 @@ namespace DesEngine
 		Q_OBJECT
 
 	private:
-
-        bool _shortcuts_ready = false;
 
 		bool _is_in_edit = true, _is_in_pause = true;
 		id_t _max_id = 1;
@@ -81,8 +81,11 @@ namespace DesEngine
 
         float aspect_ratio;
 
+        std::unique_ptr<QOpenGLFramebufferObject> _color_buf;
+
 
         void setup_edit_shortcuts();
+        void setup_tab_widget();
 
     public slots:
 
@@ -97,6 +100,12 @@ namespace DesEngine
         GLMainWindow* get_parent();
 
         void init(QSize depth_buffer_size = QSize(4096, 4096));
+
+        /**
+         * Can be called on uninitialized scene
+         * @param new_size
+         */
+        void resize(QSize new_size);
 
 		void init_in_edit_mode();
 
@@ -189,8 +198,12 @@ namespace DesEngine
 
         void timerEvent(QTimerEvent*) override;
 
+        id_t select_object_by_mouse();
+        id_t select_object_by_screen_coords(QPoint coords);
+
     public slots:
 
+        void mousePressEvent(::QMouseEvent *event);
         void remove_renderable(id_t);
 
 	};
