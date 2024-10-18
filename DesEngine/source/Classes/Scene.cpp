@@ -24,7 +24,7 @@ namespace DesEngine
         _obj_loaders.insert(std::make_pair("Mesh", std::make_pair(&MeshObject::default_mesh_object_json_loader, &MeshObject::default_mesh_object_dialog_loader)));
         _obj_loaders.insert(std::make_pair("SkyBox", std::make_pair(&SkyBoxObject::default_skybox_object_json_loader, &SkyBoxObject::default_skybox_object_dialog_loader)));
         _obj_loaders.insert(std::make_pair("Camera", std::make_pair(&CameraObject::default_camera_object_json_loader, &CameraObject::default_camera_object_dialog_loader)));
-        _obj_loaders.insert(std::make_pair("LightObject", std::make_pair(&LightObject::default_light_object_json_loader, &LightObject::default_light_object_dialog_loader)));
+        _obj_loaders.insert(std::make_pair("Light", std::make_pair(&LightObject::default_light_object_json_loader, &LightObject::default_light_object_dialog_loader)));
         _obj_loaders.insert(std::make_pair("FlyingCamera", std::make_pair(&FlyingCamera::default_flying_camera_object_json_loader, &FlyingCamera::default_flying_camera_object_dialog_loader)));
 
 
@@ -482,7 +482,7 @@ namespace DesEngine
             _lights.insert(id);
         }
         else
-            qDebug() << "Trying to insert light by id which is not pointing to LightObject or doesn`t exist in scene";
+            throw std::runtime_error("Trying to insert light by id which is not pointing to LightObject or doesn`t exist in scene");
     }
 
     void Scene::remove_light(id_t id)
@@ -701,6 +701,11 @@ namespace DesEngine
         QShortcut* shortcut2 = new QShortcut(QKeySequence(tr("Ctrl+O")), _parent);
         shortcut2->setAutoRepeat(false);
 
+        QShortcut* shortcut3 = new QShortcut(QKeySequence(Qt::Key_Escape), _parent);
+        shortcut3->setAutoRepeat(false);
+
+        _connections.emplace_back(connect(shortcut3, &QShortcut::activated, [this](){ _parent->_tab->unselect_object(); }));
+
         _connections.emplace_back(connect(shortcut2, &QShortcut::activated, _parent, &GLMainWindow::slot_open_scene_dialog));
 
         _connections.emplace_back(connect(_parent->glwidget, &GLWidget::mousePressSignal, this, &Scene::mousePressEvent));
@@ -825,6 +830,9 @@ namespace DesEngine
 
         std::string name = QInputDialog::getText(_parent, "Enter name of class", "Class name", QLineEdit::Normal, "Mesh", &ok).toStdString();
 
+        if (!ok)
+            return;
+
         auto it = _obj_loaders.find(name);
 
         if (it == _obj_loaders.end())
@@ -847,21 +855,98 @@ namespace DesEngine
 
     void Scene::register_light_dialog()
     {
+        bool ok;
 
+        std::string number = QInputDialog::getText(_parent, "Enter light id", "Id", QLineEdit::Normal, "", &ok).toStdString();
+
+        if (!ok)
+            return;
+
+        id_t id;
+
+        try
+        {
+            id = std::stoull(number);
+        } catch (std::invalid_argument& e)
+        {
+            QMessageBox::information(_parent, "Scene error", e.what());
+            return;
+        }
+
+        try
+        {
+            register_light(id);
+        } catch (std::runtime_error& e)
+        {
+            QMessageBox::information(_parent, "Scene error", e.what());
+            return;
+        }
     }
 
     void Scene::unregister_light_dialog()
     {
+        bool ok;
 
+        std::string number = QInputDialog::getText(_parent, "Enter light id", "Id", QLineEdit::Normal, "", &ok).toStdString();
+
+        if (!ok)
+            return;
+
+        id_t id;
+
+        try
+        {
+            id = std::stoull(number);
+        } catch (std::invalid_argument& e)
+        {
+            QMessageBox::information(_parent, "Scene error", e.what());
+            return;
+        }
+
+        remove_light(id);
     }
 
     void Scene::load_gamemode_dialog()
     {
-
+        // TODO:
     }
 
     void Scene::set_camera_dialog()
     {
+        bool ok;
 
+        std::string number = QInputDialog::getText(_parent, "Enter camera id", "Id", QLineEdit::Normal, "", &ok).toStdString();
+
+        if (!ok)
+            return;
+
+        id_t id;
+
+        try
+        {
+            id = std::stoull(number);
+        } catch (std::invalid_argument& e)
+        {
+            QMessageBox::information(_parent, "Scene error", e.what());
+            return;
+        }
+
+        auto obj = get_object(id);
+
+        if (obj == nullptr)
+        {
+            QMessageBox::information(_parent, "Scene error", "Object does not exist");
+            return;
+        }
+
+        auto camera = std::dynamic_pointer_cast<CameraObject>(obj);
+
+        if (camera == nullptr)
+        {
+            QMessageBox::information(_parent, "Scene error", "This id belongs to object, which is not a camera");
+            return;
+        }
+
+        set_game_camera(camera);
     }
 } // DesEngine

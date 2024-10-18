@@ -209,7 +209,7 @@ namespace DesEngine
 
     std::vector<property_t> MeshObject::get_properties()
     {
-        return std::vector<property_t>();
+        return mesh_props;
     }
 
     void MeshObject::scale(const QVector3D &vec)
@@ -484,4 +484,128 @@ namespace DesEngine
 
         count = indices.size();
     }
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_translate_x = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_translate().x();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_translate_x = [](Editable* e, property_data_t data) -> bool {
+        QVector3D translate = static_cast<MeshObject*>(e)->get_translate();
+        static_cast<MeshObject*>(e)->set_translate(QVector3D(std::get<float>(data), translate.y(), translate.z()));
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_translate_y = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_translate().y();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_translate_y = [](Editable* e, property_data_t data) -> bool {
+        QVector3D translate = static_cast<MeshObject*>(e)->get_translate();
+        static_cast<MeshObject*>(e)->set_translate(QVector3D(translate.x(), std::get<float>(data), translate.z()));
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_translate_z = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_translate().z();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_translate_z = [](Editable* e, property_data_t data) -> bool {
+        QVector3D translate = static_cast<MeshObject*>(e)->get_translate();
+        static_cast<MeshObject*>(e)->set_translate(QVector3D(translate.x(), translate.y(), std::get<float>(data)));
+        return true;
+    };
+
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_rotate_x = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_rotation_x();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_rotate_x = [](Editable* e, property_data_t data) -> bool {
+        static_cast<MeshObject*>(e)->set_rotation_x(std::get<float>(data));
+        return true;
+    };
+
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_rotate_y = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_rotation_y();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_rotate_y = [](Editable* e, property_data_t data) -> bool {
+        static_cast<MeshObject*>(e)->set_rotation_y(std::get<float>(data));
+        return true;
+    };
+
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_rotate_z = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_rotation_z();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_rotate_z = [](Editable* e, property_data_t data) -> bool {
+        static_cast<MeshObject*>(e)->set_rotation_z(std::get<float>(data));
+        return true;
+    };
+
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_scale_x = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_scale().x();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_scale_x = [](Editable* e, property_data_t data) -> bool {
+        QVector3D scale = static_cast<MeshObject*>(e)->get_scale();
+        static_cast<MeshObject*>(e)->set_scale(QVector3D(std::get<float>(data), scale.y(), scale.z()));
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_scale_y = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_scale().y();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_scale_y = [](Editable* e, property_data_t data) -> bool {
+        QVector3D scale = static_cast<MeshObject*>(e)->get_scale();
+        static_cast<MeshObject*>(e)->set_scale(QVector3D(scale.x(), std::get<float>(data), scale.z()));
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_scale_z = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->get_scale().z();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_scale_z = [](Editable* e, property_data_t data) -> bool {
+        QVector3D scale = static_cast<MeshObject*>(e)->get_scale();
+        static_cast<MeshObject*>(e)->set_scale(QVector3D(scale.x(), scale.y(), std::get<float>(data)));
+        return true;
+    };
+
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_cast_shadow = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->cast_shadow();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_cast_shadow = [](Editable* e, property_data_t data) -> bool {
+        static_cast<MeshObject*>(e)->set_cast_shadow(std::get<bool>(data));
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> MeshObject::getter_draw_in_game = [](Editable* e) -> property_data_t {
+        return static_cast<MeshObject*>(e)->draw_in_game();
+    };
+
+    const std::function<bool(Editable*, property_data_t)> MeshObject::setter_draw_in_game = [](Editable* e, property_data_t data) -> bool {
+        static_cast<MeshObject*>(e)->set_draw_in_game(std::get<bool>(data));
+        return true;
+    };
+
+    const std::vector<property_t> MeshObject::mesh_props = {
+            {property_data_type_t::FLOAT, "Translate x", getter_translate_x, setter_translate_x},
+            {property_data_type_t::FLOAT, "Translate y", getter_translate_y, setter_translate_y},
+            {property_data_type_t::FLOAT, "Translate z", getter_translate_z, setter_translate_z},
+            {property_data_type_t::FLOAT, "Rotate x", getter_rotate_x, setter_rotate_x},
+            {property_data_type_t::FLOAT, "Rotate y", getter_rotate_y, setter_rotate_y},
+            {property_data_type_t::FLOAT, "Rotate z", getter_rotate_z, setter_rotate_z},
+            {property_data_type_t::FLOAT, "Scale x", getter_scale_x, setter_scale_x},
+            {property_data_type_t::FLOAT, "Scale y", getter_scale_y, setter_scale_y},
+            {property_data_type_t::FLOAT, "Scale z", getter_scale_z, setter_scale_z},
+            {property_data_type_t::BOOLEAN, "Cast shadow", getter_cast_shadow, setter_cast_shadow},
+            {property_data_type_t::BOOLEAN, "Draw in game", getter_draw_in_game, setter_draw_in_game},
+    };
 } // DesEngine

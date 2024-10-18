@@ -63,6 +63,36 @@ namespace DesEngine
          */
         void set_from_json(const nlohmann::json& js);
 
+        static const std::function<property_data_t(Editable*)> getter_translate_x;
+        static const std::function<bool(Editable*, property_data_t)> setter_translate_x;
+        static const std::function<property_data_t(Editable*)> getter_translate_y;
+        static const std::function<bool(Editable*, property_data_t)> setter_translate_y;
+        static const std::function<property_data_t(Editable*)> getter_translate_z;
+        static const std::function<bool(Editable*, property_data_t)> setter_translate_z;
+
+
+        static const std::function<property_data_t(Editable*)> getter_rotate_x;
+        static const std::function<bool(Editable*, property_data_t)> setter_rotate_x;
+        static const std::function<property_data_t(Editable*)> getter_rotate_y;
+        static const std::function<bool(Editable*, property_data_t)> setter_rotate_y;
+        static const std::function<property_data_t(Editable*)> getter_rotate_z;
+        static const std::function<bool(Editable*, property_data_t)> setter_rotate_z;
+
+        static const std::function<property_data_t(Editable*)> getter_scale_x;
+        static const std::function<bool(Editable*, property_data_t)> setter_scale_x;
+        static const std::function<property_data_t(Editable*)> getter_scale_y;
+        static const std::function<bool(Editable*, property_data_t)> setter_scale_y;
+        static const std::function<property_data_t(Editable*)> getter_scale_z;
+        static const std::function<bool(Editable*, property_data_t)> setter_scale_z;
+
+        static const std::function<property_data_t(Editable*)> getter_cast_shadow;
+        static const std::function<bool(Editable*, property_data_t)> setter_cast_shadow;
+
+        static const std::function<property_data_t(Editable*)> getter_draw_in_game;
+        static const std::function<bool(Editable*, property_data_t)> setter_draw_in_game;
+
+        static const std::vector<property_t> mesh_props;
+
 
 	public:
 

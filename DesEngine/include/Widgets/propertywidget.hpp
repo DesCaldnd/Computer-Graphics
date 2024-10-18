@@ -6,6 +6,7 @@
 #define DESENGINE_PROPERTYWIDGET_HPP
 
 #include <QWidget>
+#include "Interfaces//Serializable.hpp"
 
 namespace DesEngine
 {
@@ -30,6 +31,8 @@ namespace DesEngine
 
         void select_object(std::shared_ptr<LogicObject> obj);
         void unselect_object();
+
+        void change_camera(id_t id);
 
     private:
         Ui::PropertyWidget *ui;

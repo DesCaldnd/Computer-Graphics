@@ -23,6 +23,9 @@ add_library(DesEngine
         source/Widgets/propertywidget.cpp
         include/Widgets/propertywidget.hpp
         source/Widgets/propertywidget.ui
+        source/Widgets/property_ui.cpp
+        include/Widgets/property_ui.hpp
+        source/Widgets/property_ui.ui
 )
 
 qt_add_resources(DesEngine "additional_files"

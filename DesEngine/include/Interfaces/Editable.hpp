@@ -19,7 +19,7 @@ namespace DesEngine
 
 	enum class property_data_type_t
 	{
-		CALL, INT, UINT, FLOAT, STRING, BOOL
+		CALL, INT, UINT, FLOAT, STRING, BOOLEAN
 	};
 
 	class Editable;
@@ -29,6 +29,9 @@ namespace DesEngine
 		property_data_type_t type;
 		std::string name;
 
+        /**
+         * If type is call, calls setter
+         */
 		std::function<property_data_t(Editable*)> getter;
 
 		// return true if set is success

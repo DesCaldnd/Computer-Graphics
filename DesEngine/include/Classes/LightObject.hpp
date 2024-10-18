@@ -54,6 +54,8 @@ namespace DesEngine
 
         LightType get_type() const;
 
+        std::vector<property_t> get_properties() override;
+
         std::string get_class_name() const override;
 
         void set_type(LightType type);
@@ -74,6 +76,36 @@ namespace DesEngine
         float _power = 1;
 
         LightType _type = LightType::Directional;
+
+        static const std::function<property_data_t(Editable*)> getter_type;
+        static const std::function<bool(Editable*, property_data_t)> setter_type;
+
+        static const std::function<property_data_t(Editable*)> getter_diffuse_color_r;
+        static const std::function<bool(Editable*, property_data_t)> setter_diffuse_color_r;
+        static const std::function<property_data_t(Editable*)> getter_diffuse_color_g;
+        static const std::function<bool(Editable*, property_data_t)> setter_diffuse_color_g;
+        static const std::function<property_data_t(Editable*)> getter_diffuse_color_b;
+        static const std::function<bool(Editable*, property_data_t)> setter_diffuse_color_b;
+
+
+        static const std::function<property_data_t(Editable*)> getter_specular_color_r;
+        static const std::function<bool(Editable*, property_data_t)> setter_specular_color_r;
+        static const std::function<property_data_t(Editable*)> getter_specular_color_g;
+        static const std::function<bool(Editable*, property_data_t)> setter_specular_color_g;
+        static const std::function<property_data_t(Editable*)> getter_specular_color_b;
+        static const std::function<bool(Editable*, property_data_t)> setter_specular_color_b;
+
+        static const std::function<property_data_t(Editable*)> getter_power;
+        static const std::function<bool(Editable*, property_data_t)> setter_power;
+
+        static const std::function<property_data_t(Editable*)> getter_cutoff_angle;
+        static const std::function<bool(Editable*, property_data_t)> setter_cutoff_angle;
+
+        static const std::function<property_data_t(Editable*)> getter_soft_angle;
+        static const std::function<bool(Editable*, property_data_t)> setter_soft_angle;
+
+
+        static const std::vector<property_t> light_props;
 
     public:
 

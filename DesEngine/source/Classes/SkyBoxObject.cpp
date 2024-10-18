@@ -67,7 +67,7 @@ namespace DesEngine
 
     std::vector<property_t> SkyBoxObject::get_properties()
     {
-        return MeshObject::get_properties();
+        return {};
     }
 
     std::string SkyBoxObject::get_class_name() const

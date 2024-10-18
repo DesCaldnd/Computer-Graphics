@@ -105,13 +105,15 @@ namespace DesEngine
 
     void LightObject::set_cutoff(float cutoff)
     {
-        if (cutoff < 179)
+        if (cutoff < 0)
+            _cutoff = 0;
+        else if (cutoff < 179)
             _cutoff = cutoff;
         else if (cutoff > 0)
             _cutoff = 179;
 
         if (_cutoff < _soft)
-            _soft = _cutoff;
+            _cutoff = _soft;
     }
 
     float LightObject::get_power() const
@@ -136,13 +138,16 @@ namespace DesEngine
 
     void LightObject::set_soft_cutoff(float cutoff)
     {
-        if (cutoff < 179)
+        if (cutoff < 0)
+            _soft = 0;
+        else if (cutoff < 179)
             _soft = cutoff;
         else if (cutoff > 0)
             _soft = 179;
 
+
         if (_soft > _cutoff)
-            _cutoff = _soft;
+            _soft = _cutoff;
     }
 
     float LightObject::get_soft_cutoff() const
@@ -186,7 +191,7 @@ namespace DesEngine
 
     std::string LightObject::get_class_name() const
     {
-        return "LightObject";
+        return "Light";
     }
 
     std::shared_ptr<LogicObject> LightObject::default_light_object_json_loader(Scene *scene, id_t id, const nlohmann::json &js)
@@ -212,10 +217,149 @@ namespace DesEngine
         return res;
     }
 
-    std::shared_ptr<LogicObject> LightObject::default_light_object_dialog_loader(Scene *, id_t)
+    std::shared_ptr<LogicObject> LightObject::default_light_object_dialog_loader(Scene *scene, id_t id)
     {
-        //TODO:
-        return std::shared_ptr<LogicObject>();
+        auto obj = std::make_shared<LightObject>(scene, id);
+
+        return obj;
     }
+
+    std::vector<property_t> LightObject::get_properties()
+    {
+        auto res = light_props;
+        auto mesh = MeshObject::get_properties();
+        
+        res.reserve(res.size() + mesh.size());
+        
+        for (auto&& p : mesh)
+        {
+            res.push_back(std::move(p));
+        }
+        
+        return res;
+    }
+
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_type = [](Editable* e) -> property_data_t {
+        return (int)static_cast<LightObject*>(e)->get_type();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_type = [](Editable* e, property_data_t data) -> bool {
+        auto ind = std::get<int>(data);
+
+        if (ind < 1 || ind > 3)
+            return false;
+
+        static_cast<LightObject*>(e)->set_type((LightType)ind);
+
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_diffuse_color_r = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_diffuse_color().x();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_diffuse_color_r = [](Editable* e, property_data_t data) -> bool {
+        QVector3D color = static_cast<LightObject*>(e)->get_diffuse_color();
+        
+        static_cast<LightObject*>(e)->set_diffuse_color(QVector3D(std::get<float>(data), color.y(), color.z()));
+        
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_diffuse_color_g = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_diffuse_color().y();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_diffuse_color_g = [](Editable* e, property_data_t data) -> bool {
+        QVector3D color = static_cast<LightObject*>(e)->get_diffuse_color();
+
+        static_cast<LightObject*>(e)->set_diffuse_color(QVector3D(color.x(), std::get<float>(data), color.z()));
+
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_diffuse_color_b = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_diffuse_color().z();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_diffuse_color_b = [](Editable* e, property_data_t data) -> bool {
+        QVector3D color = static_cast<LightObject*>(e)->get_diffuse_color();
+
+        static_cast<LightObject*>(e)->set_diffuse_color(QVector3D(color.x(), color.y(), std::get<float>(data)));
+
+        return true;
+    };
+    
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_specular_color_r = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_specular_color().x();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_specular_color_r = [](Editable* e, property_data_t data) -> bool {
+        QVector3D color = static_cast<LightObject*>(e)->get_specular_color();
+
+        static_cast<LightObject*>(e)->set_specular_color(QVector3D(std::get<float>(data), color.y(), color.z()));
+
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_specular_color_g = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_specular_color().y();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_specular_color_g = [](Editable* e, property_data_t data) -> bool {
+        QVector3D color = static_cast<LightObject*>(e)->get_specular_color();
+
+        static_cast<LightObject*>(e)->set_specular_color(QVector3D(color.x(), std::get<float>(data), color.z()));
+
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_specular_color_b = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_specular_color().z();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_specular_color_b = [](Editable* e, property_data_t data) -> bool {
+        QVector3D color = static_cast<LightObject*>(e)->get_specular_color();
+
+        static_cast<LightObject*>(e)->set_specular_color(QVector3D(color.x(), color.y(), std::get<float>(data)));
+
+        return true;
+    };
+
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_power = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_power();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_power = [](Editable* e, property_data_t data) -> bool {
+        static_cast<LightObject*>(e)->set_power(std::get<float>(data));
+
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_cutoff_angle = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_cutoff();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_cutoff_angle = [](Editable* e, property_data_t data) -> bool {
+        static_cast<LightObject*>(e)->set_cutoff(std::get<float>(data));
+
+        return true;
+    };
+
+    const std::function<property_data_t(Editable*)> LightObject::getter_soft_angle = [](Editable* e) -> property_data_t {
+        return static_cast<LightObject*>(e)->get_soft_cutoff();
+    };
+    const std::function<bool(Editable*, property_data_t)> LightObject::setter_soft_angle = [](Editable* e, property_data_t data) -> bool {
+        static_cast<LightObject*>(e)->set_soft_cutoff(std::get<float>(data));
+
+        return true;
+    };
+    
+    const std::vector<property_t> LightObject::light_props = {
+            {property_data_type_t::INT, "Light type", getter_type, setter_type},
+            {property_data_type_t::FLOAT, "Diffuse color r", getter_diffuse_color_r, setter_diffuse_color_r},
+            {property_data_type_t::FLOAT, "Diffuse color g", getter_diffuse_color_g, setter_diffuse_color_g},
+            {property_data_type_t::FLOAT, "Diffuse color b", getter_diffuse_color_b, setter_diffuse_color_b},
+            {property_data_type_t::FLOAT, "Specular color r", getter_specular_color_r, setter_specular_color_r},
+            {property_data_type_t::FLOAT, "Specular color g", getter_specular_color_g, setter_specular_color_g},
+            {property_data_type_t::FLOAT, "Specular color b", getter_specular_color_b, setter_specular_color_b},
+            {property_data_type_t::FLOAT, "Power", getter_power, setter_power},
+            {property_data_type_t::FLOAT, "Cutoff angle", getter_cutoff_angle, setter_cutoff_angle},
+            {property_data_type_t::FLOAT, "Soft cutoff angle", getter_soft_angle, setter_soft_angle}
+    };
 
 } // DesEngine
