@@ -83,6 +83,8 @@ namespace DesEngine
 
         std::unique_ptr<QOpenGLFramebufferObject> _color_buf;
 
+        std::vector<QMetaObject::Connection> _connections;
+
 
         void setup_edit_shortcuts();
         void setup_tab_widget();
@@ -205,6 +207,12 @@ namespace DesEngine
 
         void mousePressEvent(::QMouseEvent *event);
         void remove_renderable(id_t);
+
+        void add_object_dialog();
+        void register_light_dialog();
+        void unregister_light_dialog();
+        void load_gamemode_dialog();
+        void set_camera_dialog();
 
 	};
 

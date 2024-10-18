@@ -10,7 +10,6 @@
 #include "Widgets/propertywidget.hpp"
 #include <QShortcut>
 #include <QFileDialog>
-#include "Widgets/testwid.hpp"
 
 namespace DesEngine
 {
@@ -21,9 +20,6 @@ namespace DesEngine
 
         glwidget = new GLWidget(this);
         ui->hlayout->addWidget(glwidget, 2);
-
-        _tab = new PropertyWidget();
-        ui->hlayout->addWidget(_tab);
 
 //        ui->hlayout->addStretch();
 
@@ -79,6 +75,12 @@ namespace DesEngine
         scene.clear();
         scene.init();
         scene.load_from_file(filepath.toStdString(), e);
+    }
+
+    void GLMainWindow::init_tab()
+    {
+        _tab = new PropertyWidget(&scene, this);
+        ui->hlayout->addWidget(_tab);
     }
 
 } // DesEngine

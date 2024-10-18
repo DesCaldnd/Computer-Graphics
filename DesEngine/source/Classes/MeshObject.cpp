@@ -5,6 +5,9 @@
 #include "Classes/MeshObject.hpp"
 #include <fstream>
 #include <Classes/Scene.hpp>
+#include "Widgets/glmainwindow.hpp"
+#include <QFileDialog>
+#include <QMessageBox>
 #include "Classes/Utils.hpp"
 #include <cmath>
 
@@ -89,10 +92,20 @@ namespace DesEngine
         return res;
     }
 
-    std::shared_ptr<LogicObject> MeshObject::default_mesh_object_dialog_loader(Scene *, id_t)
+    std::shared_ptr<LogicObject> MeshObject::default_mesh_object_dialog_loader(Scene *scene, id_t id)
     {
-        // TODO:
-        return std::shared_ptr<LogicObject>();
+        std::string file = QFileDialog::getOpenFileName(scene->get_parent(), "Open mesh object", "./", "Obj wavefront (*.obj)").toStdString();
+
+        try
+        {
+            auto ptr = std::make_shared<MeshObject>(scene, id, file);
+
+            return ptr;
+        } catch (std::runtime_error& e)
+        {
+            QMessageBox::information(scene->get_parent(), "Object loading error", e.what());
+            return {};
+        }
     }
 
     void MeshObject::draw(QOpenGLFunctions &funcs)

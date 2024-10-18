@@ -9,6 +9,9 @@
 
 namespace DesEngine
 {
+    class Scene;
+    class LogicObject;
+
     QT_BEGIN_NAMESPACE
     namespace Ui
     {
@@ -21,12 +24,17 @@ namespace DesEngine
     Q_OBJECT
 
     public:
-        explicit PropertyWidget(QWidget *parent = nullptr);
+        explicit PropertyWidget(Scene* scene, QWidget *parent = nullptr);
 
         ~PropertyWidget() override;
 
+        void select_object(std::shared_ptr<LogicObject> obj);
+        void unselect_object();
+
     private:
         Ui::PropertyWidget *ui;
+
+        LogicObject* _obj = nullptr;
     };
 } // DesEngine
 

@@ -25,9 +25,16 @@ namespace DesEngine
 	protected:
 		Scene* _scene;
 
+    public slots:
+
+        /**
+         *  Dont call at destructor. It id needed only for removing from scene while working
+         */
+        virtual void remove();
+
     signals:
 
-        void remove(id_t id);
+        void remove_sig(id_t);
 
 	public:
 

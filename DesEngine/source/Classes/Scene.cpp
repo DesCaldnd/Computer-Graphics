@@ -8,6 +8,8 @@
 #include <QShortcut>
 #include <fstream>
 #include <QMouseEvent>
+#include <QInputDialog>
+#include <QMessageBox>
 #include "Widgets/propertywidget.hpp"
 #include "Classes/Utils.hpp"
 #include "Classes/Scene.hpp"
@@ -51,8 +53,8 @@ namespace DesEngine
 
         set_aspect_ratio(_parent->glwidget->width() / (float) _parent->glwidget->height());
 
-        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
-        register_renderable(testMesh);
+//        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
+//        register_renderable(testMesh);
 
         std::shared_ptr<MeshObject> testPlane = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/plane.obj");
         register_renderable(testPlane);
@@ -86,6 +88,8 @@ namespace DesEngine
         register_renderable(sbox);
 
         _previous_frame_time = std::chrono::steady_clock::now();
+
+        _parent->init_tab();
 
         _is_in_pause = false;
         _timer.start(0, this);
@@ -167,6 +171,7 @@ namespace DesEngine
             edit_camera = std::make_shared<FlyingCamera>(this, get_new_id());
             register_object(edit_camera);
             edit_camera->translate(QVector3D(0, -2, 0));
+            _parent->init_tab();
 
             set_aspect_ratio(_parent->glwidget->width() / (float) _parent->glwidget->height());
         }
@@ -490,7 +495,7 @@ namespace DesEngine
         auto r = _all_objects.insert(std::make_pair(obj->get_id(), obj));
         if (r.second)
         {
-            connect(obj.get(), &LogicObject::remove, this, &Scene::remove_renderable);
+            connect(obj.get(), &LogicObject::remove_sig, this, &Scene::remove_renderable);
             if (!is_in_edit())
                 obj->begin_play();
         }
@@ -620,8 +625,6 @@ namespace DesEngine
 
         _depth_buffer_size = depth_buffer_size;
 
-        disconnect();
-
     }
 
     void Scene::timerEvent(QTimerEvent *)
@@ -656,6 +659,14 @@ namespace DesEngine
 
     void Scene::clear()
     {
+
+        for (auto&& con : _connections)
+        {
+            disconnect(con);
+        }
+
+        _connections.clear();
+
         _max_id = 1;
         edit_camera = nullptr;
         play_camera = nullptr;
@@ -685,14 +696,14 @@ namespace DesEngine
         QShortcut* shortcut = new QShortcut(QKeySequence(tr("Ctrl+S")), _parent);
         shortcut->setAutoRepeat(false);
 
-        connect(shortcut, &QShortcut::activated, _parent, &GLMainWindow::slot_save_scene_dialog);
+        _connections.emplace_back(connect(shortcut, &QShortcut::activated, _parent, &GLMainWindow::slot_save_scene_dialog));
 
         QShortcut* shortcut2 = new QShortcut(QKeySequence(tr("Ctrl+O")), _parent);
         shortcut2->setAutoRepeat(false);
 
-        connect(shortcut2, &QShortcut::activated, _parent, &GLMainWindow::slot_open_scene_dialog);
+        _connections.emplace_back(connect(shortcut2, &QShortcut::activated, _parent, &GLMainWindow::slot_open_scene_dialog));
 
-        connect(_parent->glwidget, &GLWidget::mousePressSignal, this, &Scene::mousePressEvent);
+        _connections.emplace_back(connect(_parent->glwidget, &GLWidget::mousePressSignal, this, &Scene::mousePressEvent));
     }
 
     id_t Scene::select_object_by_screen_coords(QPoint coords)
@@ -792,9 +803,7 @@ namespace DesEngine
             return;
         }
 
-        auto props = obj->get_properties();
-
-
+        _parent->_tab->select_object(obj);
     }
 
     void Scene::resize(QSize new_size)
@@ -806,6 +815,52 @@ namespace DesEngine
     }
 
     void Scene::setup_tab_widget()
+    {
+
+    }
+
+    void Scene::add_object_dialog()
+    {
+        bool ok;
+
+        std::string name = QInputDialog::getText(_parent, "Enter name of class", "Class name", QLineEdit::Normal, "Mesh", &ok).toStdString();
+
+        auto it = _obj_loaders.find(name);
+
+        if (it == _obj_loaders.end())
+        {
+            QMessageBox::information(_parent, "Scene error", "No loader for class with such name");
+            return;
+        }
+
+        auto obj = it->second.second(this, get_new_id());
+
+        if (obj == nullptr)
+        {
+            QMessageBox::information(_parent, "Scene error", "Object was not loaded");
+            return;
+        }
+
+        register_renderable(obj);
+        _parent->_tab->select_object(obj);
+    }
+
+    void Scene::register_light_dialog()
+    {
+
+    }
+
+    void Scene::unregister_light_dialog()
+    {
+
+    }
+
+    void Scene::load_gamemode_dialog()
+    {
+
+    }
+
+    void Scene::set_camera_dialog()
     {
 
     }

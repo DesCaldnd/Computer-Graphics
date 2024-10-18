@@ -47,7 +47,7 @@
       <enum>QTabWidget::Triangular</enum>
      </property>
      <property name="currentIndex">
-      <number>0</number>
+      <number>1</number>
      </property>
      <widget class="QWidget" name="scene_tab">
       <attribute name="title">
@@ -137,8 +137,8 @@
            <rect>
             <x>0</x>
             <y>0</y>
-            <width>98</width>
-            <height>74</height>
+            <width>170</width>
+            <height>456</height>
            </rect>
           </property>
           <layout class="QVBoxLayout" name="verticalLayout_3" stretch="0,0,0">
@@ -182,7 +182,7 @@
                 </sizepolicy>
                </property>
                <property name="text">
-                <string>number</string>
+                <string>0</string>
                </property>
               </widget>
              </item>

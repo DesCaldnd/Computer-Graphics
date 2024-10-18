@@ -33,6 +33,8 @@ namespace DesEngine
 
         friend class Scene;
 
+        void init_tab();
+
 
     public slots:
         void slot_shortcut_windowstate();
