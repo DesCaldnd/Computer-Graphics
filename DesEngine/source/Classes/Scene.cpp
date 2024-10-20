@@ -17,6 +17,8 @@
 #include "Classes/SkyBoxObject.hpp"
 #include "Widgets/glwidget.hpp"
 
+#include <QOpenGLExtraFunctions>
+
 namespace DesEngine
 {
     Scene::Scene(GLMainWindow *parent) : _parent(parent)
@@ -53,8 +55,8 @@ namespace DesEngine
 
         set_aspect_ratio(_parent->glwidget->width() / (float) _parent->glwidget->height());
 
-//        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
-//        register_renderable(testMesh);
+        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
+        register_renderable(testMesh);
 
         std::shared_ptr<MeshObject> testPlane = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/plane.obj");
         register_renderable(testPlane);
@@ -233,7 +235,6 @@ namespace DesEngine
 
     void Scene::draw(QOpenGLFunctions &functions)
     {
-
         auto new_frame_time = std::chrono::steady_clock::now();
 
         double seconds = std::chrono::duration<double, std::ratio<1, 1>>(new_frame_time - _previous_frame_time).count();
@@ -714,14 +715,16 @@ namespace DesEngine
     id_t Scene::select_object_by_screen_coords(QPoint coords)
     {
 
-//        auto&& functions = *QOpenGLContext::currentContext()->functions();
         auto&& functions = *_parent->glwidget->context()->functions();
 
         _color_buf->bind();
 
-//        functions.glEnable(GL_DEPTH_TEST);
+        functions.glEnable(GL_DEPTH_TEST);
+        functions.glDepthMask(GL_TRUE);
+
         functions.glViewport(0, 0, _parent->glwidget->width(), _parent->glwidget->height());
         functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
 
         auto col_prog = get_program("Shaders/color_index");
         _current_prog = col_prog;
@@ -778,10 +781,9 @@ namespace DesEngine
 
         id_t out = res[0] + res[1] * multiplier + res[2] * multiplier * multiplier;
 
-//        functions.glDisable(GL_DEPTH_TEST);
+        functions.glDisable(GL_DEPTH_TEST);
 
         _color_buf->release();
-//        functions.glDisable(GL_DEPTH_TEST);
 
         qDebug() << out;
         return out;
@@ -791,7 +793,11 @@ namespace DesEngine
     {
         QPoint globalCursorPos = QCursor::pos();
         QPoint local_cursor_pos = get_parent()->glwidget->mapFromGlobal(globalCursorPos);
-        return select_object_by_screen_coords(local_cursor_pos);
+
+        if (local_cursor_pos.x() < 0 || local_cursor_pos.y() < 0 || local_cursor_pos.x() > _parent->glwidget->width() || local_cursor_pos.y() > _parent->glwidget->height())
+            return 0;
+        else
+            return select_object_by_screen_coords(local_cursor_pos);
     }
 
     void Scene::mousePressEvent(::QMouseEvent *event)
@@ -815,7 +821,7 @@ namespace DesEngine
     {
         QOpenGLFramebufferObjectFormat fmt;
         fmt.setInternalTextureFormat(GL_RGBA16);
-        fmt.setAttachment(QOpenGLFramebufferObject::NoAttachment);
+        fmt.setAttachment(QOpenGLFramebufferObject::Attachment::Depth);
         _color_buf = std::make_unique<QOpenGLFramebufferObject>(new_size, fmt);
     }
 
