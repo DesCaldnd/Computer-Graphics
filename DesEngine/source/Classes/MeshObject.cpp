@@ -119,9 +119,9 @@ namespace DesEngine
 
         model.setToIdentity();
         model.translate(get_translate());
-        model *= get_rotation(_rot_x, _rot_y, _rot_z);
-        model.scale(_scale);
-        model = _global_transform * model;
+        model *= get_rotation(get_rotation_x(), get_rotation_y(), get_rotation_z());
+        model.scale(get_scale());
+        model = get_global_transform() * model;
 
         prog->setUniformValue("model", model);
 
@@ -346,7 +346,7 @@ namespace DesEngine
 
     void MeshObject::rotate_x(float quat)
     {
-        _rot_x += fmodf(quat, 360);
+        _rot_x = fmodf(_rot_x + quat, 360);
     }
 
     void MeshObject::set_rotation_x(float quat)
@@ -361,7 +361,7 @@ namespace DesEngine
 
     void MeshObject::rotate_y(float quat)
     {
-        _rot_y += fmodf(quat, 360);
+        _rot_y = fmodf(_rot_y + quat, 360);
     }
 
     void MeshObject::set_rotation_y(float quat)
@@ -376,7 +376,7 @@ namespace DesEngine
 
     void MeshObject::rotate_z(float quat)
     {
-        _rot_z += fmodf(quat, 360);
+        _rot_z = fmodf(_rot_z + quat, 360);
     }
 
     void MeshObject::set_rotation_z(float quat)

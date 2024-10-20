@@ -80,10 +80,11 @@ namespace DesEngine
         return false;
     }
 
-    std::shared_ptr<LogicObject> SkyBoxObject::default_skybox_object_dialog_loader(Scene *, id_t)
+    std::shared_ptr<LogicObject> SkyBoxObject::default_skybox_object_dialog_loader(Scene *scene, id_t id)
     {
-        //TODO:
-        return std::shared_ptr<LogicObject>();
+        auto ptr = std::make_shared<SkyBoxObject>(scene, id);
+
+        return ptr;
     }
 
     std::shared_ptr<LogicObject> SkyBoxObject::default_skybox_object_json_loader(Scene *scene, id_t id, const nlohmann::json &js)

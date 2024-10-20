@@ -327,10 +327,9 @@ nlohmann::json DesEngine::FlyingCamera::serialize() const
 }
 
 std::shared_ptr<DesEngine::LogicObject>
-DesEngine::FlyingCamera::default_flying_camera_object_dialog_loader(DesEngine::Scene *, DesEngine::id_t)
+DesEngine::FlyingCamera::default_flying_camera_object_dialog_loader(DesEngine::Scene *scene, DesEngine::id_t id)
 {
-    // TODO:
-    return std::shared_ptr<LogicObject>();
+    return std::make_shared<FlyingCamera>(scene, id);
 }
 
 std::shared_ptr<DesEngine::LogicObject>
