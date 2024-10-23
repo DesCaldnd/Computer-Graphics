@@ -98,6 +98,8 @@ namespace DesEngine
 
         friend MeshSubObject;
 
+        void init_rb() override;
+
         MeshObject(Scene*, id_t, const std::string& path);
 
         static std::shared_ptr<LogicObject> default_mesh_object_json_loader(Scene*, id_t, const nlohmann::json&);

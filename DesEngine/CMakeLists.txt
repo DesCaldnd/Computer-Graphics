@@ -14,7 +14,19 @@ add_library(DesEngine
         source/Widgets/glmainwindow.cpp
         include/Widgets/glmainwindow.hpp
         source/Classes/LightObject.cpp
-        include/Classes/LightObject.hpp source/Classes/GroupObject.cpp include/Classes/GroupObject.hpp source/Classes/CameraObject.cpp include/Classes/CameraObject.hpp source/Classes/GameMode.cpp include/Classes/GameMode.hpp source/Classes/Material.cpp include/Classes/Material.hpp source/Classes/Scene.cpp include/Classes/Scene.hpp source/Classes/Serializable.cpp include/Classes/BasicTypes.hpp
+        include/Classes/LightObject.hpp
+        source/Classes/GroupObject.cpp
+        include/Classes/GroupObject.hpp
+        source/Classes/CameraObject.cpp
+        include/Classes/CameraObject.hpp
+        source/Classes/GameMode.cpp
+        include/Classes/GameMode.hpp
+        source/Classes/Material.cpp
+        include/Classes/Material.hpp
+        source/Classes/Scene.cpp
+        include/Classes/Scene.hpp
+        source/Classes/Serializable.cpp
+        include/Classes/BasicTypes.hpp
         source/Classes/SkyBoxObject.cpp
         include/Classes/SkyBoxObject.hpp
         source/Classes/LogicObject.cpp
@@ -26,6 +38,7 @@ add_library(DesEngine
         source/Widgets/property_ui.cpp
         include/Widgets/property_ui.hpp
         source/Widgets/property_ui.ui
+        source/Classes/Physicable.cpp
 )
 
 qt_add_resources(DesEngine "additional_files"
@@ -38,6 +51,11 @@ qt_add_resources(DesEngine "additional_files"
         Shaders/depth.vsh
         Shaders/color_index.fsh
         Shaders/color_index.vsh
+        Shaders/skybox.vsh
+        Shaders/skybox.fsh
+        Shaders/depthp.fsh
+        Shaders/depthp.gsh
+        Shaders/depthp.vsh
 
         Primitives/albedo.png
         Primitives/cube.mtl
@@ -63,6 +81,9 @@ target_link_libraries(DesEngine PUBLIC ${BULLET_LIBRARIES})
 target_link_libraries(
         DesEngine PUBLIC
         nlohmann_json::nlohmann_json)
+target_link_libraries(
+        DesEngine PUBLIC
+        ${BULLET_LIBRARIES})
 
 set(DESENGINE_LIB_DIR "${CMAKE_SOURCE_DIR}/DesEngine/" CACHE PATH "DESENGINE_LIB_DIR")
 

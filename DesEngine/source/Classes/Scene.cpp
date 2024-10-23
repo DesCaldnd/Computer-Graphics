@@ -16,6 +16,7 @@
 #include "Widgets/glmainwindow.hpp"
 #include "Classes/SkyBoxObject.hpp"
 #include "Widgets/glwidget.hpp"
+#include <btBulletDynamicsCommon.h>
 
 #include <QOpenGLExtraFunctions>
 
@@ -57,6 +58,7 @@ namespace DesEngine
 
         std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
         register_renderable(testMesh);
+        testMesh->init_rb();
 
         std::shared_ptr<MeshObject> testPlane = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/plane.obj");
         register_renderable(testPlane);
@@ -243,6 +245,13 @@ namespace DesEngine
 
         if (_is_in_pause)
             return;
+
+        _dyn_world->stepSimulation(seconds, 10);
+
+        for (auto&& object : _all_objects)
+        {
+            object.second->update();
+        }
 
         for (auto &&object: _all_objects)
         {
@@ -626,6 +635,13 @@ namespace DesEngine
 
         _depth_buffer_size = depth_buffer_size;
 
+
+        _collision_conf = std::make_unique<btDefaultCollisionConfiguration>();
+        _collision_dispatcher = std::make_unique<btCollisionDispatcher>(_collision_conf.get());
+        _over_pair_cache = std::make_unique<btDbvtBroadphase>();
+        _solver = std::make_unique<solver_t>();
+        _dyn_world = std::make_unique<btDiscreteDynamicsWorld>(_collision_dispatcher.get(), _over_pair_cache.get(), _solver.get(), _collision_conf.get());
+        _dyn_world->setGravity(btVector3(0, 0, -9.8));
     }
 
     void Scene::timerEvent(QTimerEvent *)
@@ -681,6 +697,12 @@ namespace DesEngine
         _lights.clear();
         _all_objects.clear();
         _renderable_objects.clear();
+
+        _collision_conf.reset();
+        _collision_dispatcher.reset();
+        _over_pair_cache.reset();
+        _solver.reset();
+        _dyn_world.reset();
 
         if (_parent->_tab)
         {
@@ -954,5 +976,10 @@ namespace DesEngine
         }
 
         set_game_camera(camera);
+    }
+
+    void Scene::add_to_simulation(btRigidBody *rb)
+    {
+        _dyn_world->addRigidBody(rb);
     }
 } // DesEngine

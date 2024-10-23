@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include "Classes/Utils.hpp"
 #include <cmath>
+#include <btBulletDynamicsCommon.h>
 
 namespace DesEngine
 {
@@ -608,4 +609,32 @@ namespace DesEngine
             {property_data_type_t::BOOLEAN, "Cast shadow", getter_cast_shadow, setter_cast_shadow},
             {property_data_type_t::BOOLEAN, "Draw in game", getter_draw_in_game, setter_draw_in_game},
     };
+
+    void MeshObject::init_rb()
+    {
+        _shape = std::make_unique<btSphereShape>(btScalar(1.));
+
+        /// Create Dynamic Objects
+        btTransform startTransform;
+        startTransform.setIdentity();
+
+        btScalar mass(1.f);
+
+        //rigidbody is dynamic if and only if mass is non zero, otherwise static
+        bool isDynamic = (mass != 0.f);
+
+        btVector3 localInertia(0, 0, 0);
+        if (isDynamic)
+            _shape->calculateLocalInertia(mass, localInertia);
+
+        auto pos = get_translate();
+        startTransform.setOrigin(btVector3(pos.x(), pos.y(), pos.z()));
+
+        //using motionstate is recommended, it provides interpolation capabilities, and only synchronizes 'active' objects
+        btDefaultMotionState* myMotionState = new btDefaultMotionState(startTransform);
+        btRigidBody::btRigidBodyConstructionInfo rbInfo(mass, myMotionState, _shape.get(), localInertia);
+        _rb = std::make_unique<btRigidBody>(rbInfo);
+
+        _scene->add_to_simulation(_rb.get());
+    }
 } // DesEngine
