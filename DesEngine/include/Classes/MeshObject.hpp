@@ -98,7 +98,7 @@ namespace DesEngine
 
         friend MeshSubObject;
 
-        void init_rb() override;
+        void init_rb(std::unique_ptr<btCollisionShape> shape, float mass = 0) override;
 
         MeshObject(Scene*, id_t, const std::string& path);
 

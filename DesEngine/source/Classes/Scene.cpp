@@ -58,13 +58,14 @@ namespace DesEngine
 
         std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
         register_renderable(testMesh);
-        testMesh->init_rb();
+        testMesh->init_rb(std::make_unique<btSphereShape>(btScalar(1.0)), 1);
 
         std::shared_ptr<MeshObject> testPlane = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/plane.obj");
         register_renderable(testPlane);
         testPlane->scale(QVector3D(13, 7, 10));
         testPlane->translate(QVector3D(0, 0, -5));
         testPlane->rotate_x(90);
+        testPlane->init_rb(std::make_unique<btStaticPlaneShape>(btVector3(0, 0, 1), 0));
 
         std::shared_ptr<LightObject> light = std::make_shared<LightObject>(this, get_new_id());
         register_renderable(light);
@@ -251,6 +252,11 @@ namespace DesEngine
         for (auto&& object : _all_objects)
         {
             object.second->update();
+            if (object.first == 5)
+            {
+                auto r = object.second->get_rb()->getLocalInertia();
+                qDebug() << r.x() << " " << r.y() << " " << r.z();
+            }
         }
 
         for (auto &&object: _all_objects)
@@ -515,10 +521,15 @@ namespace DesEngine
     {
         auto it = _all_objects.find(id);
 
-        if (it != _all_objects.end() && !is_in_edit())
+        if (it != _all_objects.end())
         {
-            it->second->end_play();
+            if (!is_in_edit())
+                it->second->end_play();
+
+            remove_from_simulation(it->second->get_rb());
         }
+
+
 
         _all_objects.erase(it);
 
@@ -981,5 +992,23 @@ namespace DesEngine
     void Scene::add_to_simulation(btRigidBody *rb)
     {
         _dyn_world->addRigidBody(rb);
+    }
+
+    void Scene::remove_from_simulation(btRigidBody *rb)
+    {
+        auto&& arr = _dyn_world->getCollisionObjectArray();
+        bool found = false;
+
+        for(size_t i = 0; i < arr.size(); ++i)
+        {
+            if (arr[i] == static_cast<btCollisionObject*>(rb))
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (found)
+            _dyn_world->removeRigidBody(rb);
     }
 } // DesEngine

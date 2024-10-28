@@ -233,11 +233,25 @@ namespace DesEngine
     void MeshObject::translate(const QVector3D &vec)
     {
         _translate += vec;
+
+        if (_rb == nullptr)
+            return;
+        auto pos = _rb->getWorldTransform();
+        auto t = get_translate();
+        pos.setOrigin(btVector3(t.x(), t.y(), t.z()));
+        _rb->setWorldTransform(pos);
     }
 
     void MeshObject::set_translate(const QVector3D &vec)
     {
         _translate = vec;
+
+        if (_rb == nullptr)
+            return;
+        auto pos = _rb->getWorldTransform();
+        auto t = get_translate();
+        pos.setOrigin(btVector3(t.x(), t.y(), t.z()));
+        _rb->setWorldTransform(pos);
     }
 
     QVector3D MeshObject::get_translate() const
@@ -610,15 +624,15 @@ namespace DesEngine
             {property_data_type_t::BOOLEAN, "Draw in game", getter_draw_in_game, setter_draw_in_game},
     };
 
-    void MeshObject::init_rb()
+    void MeshObject::init_rb(std::unique_ptr<btCollisionShape> shape, float mass)
     {
-        _shape = std::make_unique<btSphereShape>(btScalar(1.));
+//        Physicable::init_rb({});
+
+        _shape = std::move(shape);
 
         /// Create Dynamic Objects
         btTransform startTransform;
         startTransform.setIdentity();
-
-        btScalar mass(1.f);
 
         //rigidbody is dynamic if and only if mass is non zero, otherwise static
         bool isDynamic = (mass != 0.f);
@@ -629,11 +643,13 @@ namespace DesEngine
 
         auto pos = get_translate();
         startTransform.setOrigin(btVector3(pos.x(), pos.y(), pos.z()));
+        startTransform.setRotation(btQuaternion(get_rotation_z(), get_rotation_y(), get_rotation_x()));
 
         //using motionstate is recommended, it provides interpolation capabilities, and only synchronizes 'active' objects
         btDefaultMotionState* myMotionState = new btDefaultMotionState(startTransform);
+//        btDefaultMotionState* myMotionState = nullptr;
         btRigidBody::btRigidBodyConstructionInfo rbInfo(mass, myMotionState, _shape.get(), localInertia);
-        _rb = std::make_unique<btRigidBody>(rbInfo);
+        _rb.reset(new btRigidBody(rbInfo));
 
         _scene->add_to_simulation(_rb.get());
     }

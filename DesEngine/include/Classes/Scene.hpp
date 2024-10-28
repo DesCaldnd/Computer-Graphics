@@ -95,6 +95,7 @@ namespace DesEngine
 	public:
 
         void add_to_simulation(btRigidBody* rb);
+        void remove_from_simulation(btRigidBody* rb);
 
         QSize get_shadow_buffer_size();
 

@@ -46,8 +46,16 @@ namespace DesEngine
 //
 //		void update(double seconds);
 
+
     protected:
-    using uptr_rb = std::unique_ptr<btRigidBody>;
+
+    class rb_deleter
+    {
+    public:
+        void operator()(btRigidBody* rb) const;
+    };
+
+    using uptr_rb = std::unique_ptr<btRigidBody, rb_deleter>;
 
     std::unique_ptr<btCollisionShape> _shape;
     uptr_rb _rb;
@@ -55,7 +63,9 @@ namespace DesEngine
 
     public:
 
-        virtual void init_rb();
+        btRigidBody* get_rb();
+
+        virtual void init_rb(std::unique_ptr<btCollisionShape> shape, float mass = 0);
 
         void update();
 
