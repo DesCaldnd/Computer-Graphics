@@ -44,6 +44,7 @@ namespace DesEngine
 
         _is_in_edit = true;
 
+
         _edit_mode = std::make_shared<EditGameMode>(this, get_new_id());
         _game_mode = std::make_shared<EditGameMode>(this, get_new_id());
 
@@ -56,9 +57,10 @@ namespace DesEngine
 
         set_aspect_ratio(_parent->glwidget->width() / (float) _parent->glwidget->height());
 
-        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/monkeys.obj");
+        std::shared_ptr<MeshObject> testMesh = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/Soldier/soldier.obj");
         register_renderable(testMesh);
-        testMesh->init_rb(std::make_unique<btSphereShape>(btScalar(1.0)), 1);
+//        testMesh->init_rb(std::make_unique<btSphereShape>(btScalar(1.0)), 1);
+        testMesh->set_scale(QVector3D(3, 3, 3));
 
         std::shared_ptr<MeshObject> testPlane = std::make_shared<MeshObject>(this, get_new_id(), "Primitives/plane.obj");
         register_renderable(testPlane);
@@ -247,17 +249,12 @@ namespace DesEngine
         if (_is_in_pause)
             return;
 
-        _dyn_world->stepSimulation(seconds, 10);
-
-        for (auto&& object : _all_objects)
-        {
-            object.second->update();
-            if (object.first == 5)
-            {
-                auto r = object.second->get_rb()->getLocalInertia();
-                qDebug() << r.x() << " " << r.y() << " " << r.z();
-            }
-        }
+//        _dyn_world->stepSimulation(seconds, 10);
+//
+//        for (auto&& object : _all_objects)
+//        {
+//            object.second->update();
+//        }
 
         for (auto &&object: _all_objects)
         {

@@ -240,6 +240,7 @@ namespace DesEngine
         auto t = get_translate();
         pos.setOrigin(btVector3(t.x(), t.y(), t.z()));
         _rb->setWorldTransform(pos);
+        _rb->getMotionState()->setWorldTransform(pos);
     }
 
     void MeshObject::set_translate(const QVector3D &vec)
@@ -252,6 +253,8 @@ namespace DesEngine
         auto t = get_translate();
         pos.setOrigin(btVector3(t.x(), t.y(), t.z()));
         _rb->setWorldTransform(pos);
+        _rb->getMotionState()->setWorldTransform(pos);
+
     }
 
     QVector3D MeshObject::get_translate() const
