@@ -644,12 +644,12 @@ namespace DesEngine
         _depth_buffer_size = depth_buffer_size;
 
 
-        _collision_conf = std::make_unique<btDefaultCollisionConfiguration>();
-        _collision_dispatcher = std::make_unique<btCollisionDispatcher>(_collision_conf.get());
-        _over_pair_cache = std::make_unique<btDbvtBroadphase>();
-        _solver = std::make_unique<solver_t>();
-        _dyn_world = std::make_unique<btDiscreteDynamicsWorld>(_collision_dispatcher.get(), _over_pair_cache.get(), _solver.get(), _collision_conf.get());
-        _dyn_world->setGravity(btVector3(0, 0, -9.8));
+//        _collision_conf = std::make_unique<btDefaultCollisionConfiguration>();
+//        _collision_dispatcher = std::make_unique<btCollisionDispatcher>(_collision_conf.get());
+//        _over_pair_cache = std::make_unique<btDbvtBroadphase>();
+//        _solver = std::make_unique<solver_t>();
+//        _dyn_world = std::make_unique<btDiscreteDynamicsWorld>(_collision_dispatcher.get(), _over_pair_cache.get(), _solver.get(), _collision_conf.get());
+//        _dyn_world->setGravity(btVector3(0, 0, -9.8));
     }
 
     void Scene::timerEvent(QTimerEvent *)
@@ -706,11 +706,11 @@ namespace DesEngine
         _all_objects.clear();
         _renderable_objects.clear();
 
-        _collision_conf.reset();
-        _collision_dispatcher.reset();
-        _over_pair_cache.reset();
-        _solver.reset();
-        _dyn_world.reset();
+//        _collision_conf.reset();
+//        _collision_dispatcher.reset();
+//        _over_pair_cache.reset();
+//        _solver.reset();
+//        _dyn_world.reset();
 
         if (_parent->_tab)
         {
@@ -988,24 +988,24 @@ namespace DesEngine
 
     void Scene::add_to_simulation(btRigidBody *rb)
     {
-        _dyn_world->addRigidBody(rb);
+//        _dyn_world->addRigidBody(rb);
     }
 
     void Scene::remove_from_simulation(btRigidBody *rb)
     {
-        auto&& arr = _dyn_world->getCollisionObjectArray();
-        bool found = false;
-
-        for(size_t i = 0; i < arr.size(); ++i)
-        {
-            if (arr[i] == static_cast<btCollisionObject*>(rb))
-            {
-                found = true;
-                break;
-            }
-        }
-
-        if (found)
-            _dyn_world->removeRigidBody(rb);
+//        auto&& arr = _dyn_world->getCollisionObjectArray();
+//        bool found = false;
+//
+//        for(size_t i = 0; i < arr.size(); ++i)
+//        {
+//            if (arr[i] == static_cast<btCollisionObject*>(rb))
+//            {
+//                found = true;
+//                break;
+//            }
+//        }
+//
+//        if (found)
+//            _dyn_world->removeRigidBody(rb);
     }
 } // DesEngine

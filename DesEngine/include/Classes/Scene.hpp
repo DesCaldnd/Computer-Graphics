@@ -78,12 +78,12 @@ namespace DesEngine
 
         std::vector<QMetaObject::Connection> _connections;
 
-        using solver_t = btSequentialImpulseConstraintSolver;
-        std::unique_ptr<btDefaultCollisionConfiguration> _collision_conf;
-        std::unique_ptr<btCollisionDispatcher> _collision_dispatcher;
-        std::unique_ptr<btBroadphaseInterface> _over_pair_cache;
-        std::unique_ptr<solver_t> _solver;
-        std::unique_ptr<btDiscreteDynamicsWorld> _dyn_world;
+//        using solver_t = btSequentialImpulseConstraintSolver;
+//        std::unique_ptr<btDefaultCollisionConfiguration> _collision_conf;
+//        std::unique_ptr<btCollisionDispatcher> _collision_dispatcher;
+//        std::unique_ptr<btBroadphaseInterface> _over_pair_cache;
+//        std::unique_ptr<solver_t> _solver;
+//        std::unique_ptr<btDiscreteDynamicsWorld> _dyn_world;
 
         void setup_edit_shortcuts();
         void setup_tab_widget();
