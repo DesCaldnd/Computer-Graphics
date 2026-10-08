@@ -11,12 +11,14 @@ set(VCPKG_POLICY_ALLOW_RESTRICTED_HEADERS enabled)
 set(DLSS_HAS_RUNTIME OFF)
 if(VCPKG_TARGET_IS_WINDOWS OR VCPKG_TARGET_IS_LINUX)
     set(DLSS_HAS_RUNTIME ON)
-    # Binaries are stored in Git LFS, so a git checkout with LFS is required.
+    # Binaries are stored in Git LFS, so a git checkout with LFS is required. REF is the commit of tag v${VERSION};
+    # no FETCH_REF: `git lfs fetch <url> <tag>` fails because the fetched tag is not a local ref, a SHA resolves.
     vcpkg_from_git(OUT_SOURCE_PATH SOURCE_PATH
         URL https://github.com/NVIDIA/DLSS.git
         REF 374959484e79a640feaba44c93ac8cfb0a03f5b5
-        FETCH_REF "v${VERSION}"
-        LFS)
+        # Explicit LFS remote: a value-less `LFS` keyword only works with CMake >= 3.31 (CMP0174); older CMake drops
+        # it and the checkout would silently contain LFS pointer files instead of the libraries.
+        LFS https://github.com/NVIDIA/DLSS.git)
 else()
     vcpkg_from_github(OUT_SOURCE_PATH SOURCE_PATH
         REPO NVIDIA/DLSS

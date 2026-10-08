@@ -8,12 +8,19 @@ if(NOT TARGET NVIDIA::DLSSHeaders)
 endif()
 if(NVIDIA_DLSS_HAS_RUNTIME AND NOT TARGET NVIDIA::DLSS)
     add_library(NVIDIA::DLSS INTERFACE IMPORTED)
+    # NVIDIA_DLSS_RUNTIME_FILES        production feature libraries (Release / RelWithDebInfo / MinSizeRel)
+    # NVIDIA_DLSS_RUNTIME_FILES_DEBUG  development feature libraries, same file names (Debug)
+    # NGX loads them from the executable's directory: the consumer copies one of the two sets there.
     if(WIN32)
+        # nvsdk_ngx_d = dynamic CRT (/MD), nvsdk_ngx_d_dbg = debug dynamic CRT (/MDd): only the Debug configuration
+        # may link the latter.
         set(_ngx_lib "$<IF:$<CONFIG:Debug>,${_DLSS_PREFIX}/debug/lib/nvsdk_ngx_d_dbg.lib,${_DLSS_PREFIX}/lib/nvsdk_ngx_d.lib>")
-        file(GLOB NVIDIA_DLSS_RUNTIME_FILES "${_DLSS_PREFIX}/bin/*.dll")
+        file(GLOB NVIDIA_DLSS_RUNTIME_FILES "${_DLSS_PREFIX}/bin/nvngx_*.dll")
+        file(GLOB NVIDIA_DLSS_RUNTIME_FILES_DEBUG "${_DLSS_PREFIX}/debug/bin/nvngx_*.dll")
     else()
         set(_ngx_lib "${_DLSS_PREFIX}/lib/libnvsdk_ngx.a")
         file(GLOB NVIDIA_DLSS_RUNTIME_FILES "${_DLSS_PREFIX}/lib/libnvidia-ngx-*.so.*")
+        file(GLOB NVIDIA_DLSS_RUNTIME_FILES_DEBUG "${_DLSS_PREFIX}/debug/lib/libnvidia-ngx-*.so.*")
     endif()
     set_target_properties(NVIDIA::DLSS PROPERTIES
         INTERFACE_LINK_LIBRARIES "NVIDIA::DLSSHeaders;${_ngx_lib};${CMAKE_DL_LIBS}")

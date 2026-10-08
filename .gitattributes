@@ -1,0 +1,78 @@
+# Line endings are part of the content here: the showcase generator (`oxshowcase_generate --check`) compares what it
+# writes byte for byte with the committed JSON/Lua/material files, asset metas store content hashes, and golden / text
+# test data is compared verbatim. Text is therefore LF in the repository AND in every working tree, whatever
+# core.autocrlf says (Git for Windows enables it system-wide).
+* text=auto eol=lf
+
+# --- Source, build system, scripts
+*.c             text eol=lf
+*.h             text eol=lf
+*.cpp           text eol=lf
+*.hpp           text eol=lf
+*.mm            text eol=lf
+*.cmake         text eol=lf
+*.cmake.in      text eol=lf
+CMakeLists.txt  text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+*.txt           text eol=lf
+*.sh            text eol=lf
+*.lua           text eol=lf
+*.qss           text eol=lf
+*.supp          text eol=lf
+
+# Windows command scripts need CRLF.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# --- Shaders
+*.glsl          text eol=lf
+*.vert          text eol=lf
+*.frag          text eol=lf
+*.comp          text eol=lf
+*.tesc          text eol=lf
+*.tese          text eol=lf
+*.mesh          text eol=lf
+*.task          text eol=lf
+*.rgen          text eol=lf
+*.rchit         text eol=lf
+*.rahit         text eol=lf
+*.rmiss         text eol=lf
+
+# --- Text assets (JSON-based engine formats, UI documents, text model formats)
+*.meta          text eol=lf
+*.oxmat         text eol=lf
+*.oxcube        text eol=lf
+*.oxbt          text eol=lf
+*.oxproj        text eol=lf
+*.rml           text eol=lf
+*.rcss          text eol=lf
+*.svg           text eol=lf
+*.obj           text eol=lf
+*.mtl           text eol=lf
+*.gltf          text eol=lf
+
+# --- Binary assets (never converted, never diffed as text)
+*.oxscene       binary
+*.oxprefab      binary
+*.oxpak         binary
+*.bin           binary
+*.glb           binary
+*.fbx           binary
+*.spv           binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.tga           binary
+*.bmp           binary
+*.hdr           binary
+*.exr           binary
+*.dds           binary
+*.ktx           binary
+*.ktx2          binary
+*.wav           binary
+*.ogg           binary
+*.mp3           binary
+*.flac          binary
+*.ttf           binary
+*.otf           binary
