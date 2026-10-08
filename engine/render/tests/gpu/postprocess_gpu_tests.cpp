@@ -129,6 +129,38 @@ protected:
         return img;
     }
 
+    // GPU time of a render graph pass in the last retired frame; < 0 when it did not run.
+    f64 passMs(std::string_view pass) const {
+        for (const PassTiming& p : renderer->stats().passes) {
+            if (p.name.ends_with(std::string("/") + std::string(pass))) return p.gpuMs;
+        }
+        return -1.0;
+    }
+    bool ranPass(std::string_view pass) const { return passMs(pass) >= 0.0; }
+
+    // Image for inspection only (no golden: e.g. DLSS output depends on the driver's model version).
+    static void writeOut(const std::string& name, const Image& img) {
+        writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / (name + ".png"), img);
+    }
+
+    // Replaces the fixture's device + renderer; `upscalerExtensions` = with the NGX (DLSS) extensions, as SetUp does.
+    void recreateDevice(bool upscalerExtensions) {
+        device->waitIdle();
+        renderer.reset();
+        if (target) device->destroy(target);
+        device.reset();
+        target = {};
+        view = 0;
+        rhi::DeviceDesc desc;
+        desc.appName = "ox_render_gpu_tests";
+        desc.validation = true;
+        desc.shaderOptions.cacheDirectory = std::filesystem::temp_directory_path() / "oxwald_render_test_shader_cache";
+        if (upscalerExtensions) appendUpscalerVulkanExtensions(desc);
+        device = rhi::Device::create(desc);
+        ASSERT_TRUE(device);
+        renderer = Renderer::create(*device);
+    }
+
     Entity volume(const PostProcessSettings& s) {
         Entity e = world->create("PostProcessVolume");
         auto& v = e.add<PostProcessVolumeComponent>();
@@ -303,8 +335,15 @@ TEST_F(PostProcessTest, TaauHalfResolutionConverges) {
 }
 
 TEST_F(PostProcessTest, DlssSelectionFallsBackToTaauWhereUnavailable) {
-    const UpscalerAvailability a = upscalerAvailability(UpscalerType::DLSS, device.get());
-    if (a.available) GTEST_SKIP() << "DLSS is available here: fallback path not exercised";
+    UpscalerAvailability a = upscalerAvailability(UpscalerType::DLSS, device.get());
+    if (a.available) {
+        // RTX machine: the same GPU through a device created without the NGX extensions must report DLSS unavailable
+        // up front (NGX is not called: no validation errors) and fall back like any other GPU.
+        recreateDevice(false);
+        a = upscalerAvailability(UpscalerType::DLSS, device.get());
+        EXPECT_NE(a.reason.find("appendUpscalerVulkanExtensions"), std::string::npos) << a.reason;
+    }
+    EXPECT_FALSE(a.available);
     EXPECT_FALSE(a.reason.empty());
     std::printf("DLSS unavailable: %s\n", a.reason.c_str());
     colorfulScene();
@@ -312,9 +351,8 @@ TEST_F(PostProcessTest, DlssSelectionFallsBackToTaauWhereUnavailable) {
     CVarScope q("r.Upscaler.Quality", "Performance");
     const Image img = renderFrames(colorfulCamera(), {.frames = 4});
     EXPECT_GT(meanLuminance(img), 0.1);
-    bool taau = false;
-    for (const PassTiming& p : renderer->stats().passes) taau |= p.name.ends_with("/TAAU");
-    EXPECT_TRUE(taau) << "r.Upscaler=DLSS without DLSS must run TAAU";
+    EXPECT_TRUE(ranPass("TAAU")) << "r.Upscaler=DLSS without DLSS must run TAAU";
+    EXPECT_FALSE(ranPass("DLSS"));
 }
 
 TEST_F(PostProcessTest, DlssRendersOnRtx) {
@@ -322,11 +360,216 @@ TEST_F(PostProcessTest, DlssRendersOnRtx) {
     if (!a.available) GTEST_SKIP() << "DLSS unavailable: " << a.reason;
     colorfulScene();
     const CameraParams cam = colorfulCamera();
-    const Image native = renderFrames(cam, {.frames = 2});
+    const Options o{.width = 512, .height = 512, .frames = 32};
+    const Image native = renderFrames(cam, {.width = 512, .height = 512, .frames = 2});
+    Image taau;
+    {
+        CVarScope up("r.Upscaler", "TAAU");
+        CVarScope q("r.Upscaler.Quality", "Quality");
+        taau = renderFrames(cam, o);
+    }
     CVarScope up("r.Upscaler", "DLSS");
     CVarScope q("r.Upscaler.Quality", "Quality");
-    const Image img = renderFrames(cam, {.frames = 16});
-    EXPECT_GT(psnr(img, native), 25.0);
+    const Image img = renderFrames(cam, o);
+    EXPECT_TRUE(ranPass("DLSS"));
+    EXPECT_FALSE(ranPass("TAAU"));
+    writeOut("postprocess_dlss_quality", img);
+    writeOut("postprocess_dlss_reference_native", native);
+    writeOut("postprocess_dlss_reference_taau_quality", taau);
+    const f64 pDlss = psnr(img, native), pTaau = psnr(taau, native);
+    std::printf("DLSS Quality (67 %%) PSNR vs native: %.2f dB (TAAU 67 %%: %.2f dB), mean luminance %.4f (native %.4f), "
+                "DLSS pass %.3f ms\n", pDlss, pTaau, meanLuminance(img), meanLuminance(native), passMs("DLSS"));
+    EXPECT_GT(pDlss, 35.0) << "not the native image: flipped, shifted or badly exposed?";
+    EXPECT_NEAR(meanLuminance(img), meanLuminance(native), 0.01);
+}
+
+TEST_F(PostProcessTest, DlssQualityModesSetRenderResolutionAndMipBias) {
+    const UpscalerAvailability a = upscalerAvailability(UpscalerType::DLSS, device.get());
+    if (!a.available) GTEST_SKIP() << "DLSS unavailable: " << a.reason;
+    colorfulScene();
+    const CameraParams cam = colorfulCamera();
+    const Image native = renderFrames(cam, {.width = 960, .height = 540, .frames = 2});
+    struct Mode {
+        const char* name;
+        f32 scale;
+    };
+    const Mode modes[] = {{"UltraPerformance", 1.0f / 3.0f}, {"Performance", 0.5f}, {"Balanced", 0.58f},
+                          {"Quality", 2.0f / 3.0f},          {"Native", 1.0f}};
+    CVarScope up("r.Upscaler", "DLSS");
+    bool keep = false; // one view for all modes: the NGX feature is recreated on every mode change
+    auto check = [&](const Mode& m, u32 width, u32 height) {
+        const Image img = renderFrames(cam, {.width = width, .height = height, .frames = 16}, {}, 0.0f, keep);
+        keep = true;
+        const RenderView* v = renderer->view(view);
+        ASSERT_NE(v, nullptr);
+        const Extent2D re = v->renderExtent();
+        std::printf("DLSS %-16s %ux%u -> %ux%u (%.1f %%), mip bias %.3f, DLSS pass %.3f ms\n", m.name, re.width,
+                    re.height, width, height, 100.0f * f32(re.width) / f32(width), v->mipBias(), passMs("DLSS"));
+        EXPECT_EQ(v->outputExtent().width, width);
+        EXPECT_EQ(v->outputExtent().height, height);
+        EXPECT_NEAR(f32(re.width), f32(width) * m.scale, 1.5f) << m.name;
+        EXPECT_NEAR(f32(re.height), f32(height) * m.scale, 1.5f) << m.name;
+        EXPECT_NEAR(v->mipBias(), std::log2(f32(re.width) / f32(width)) - 1.0f, 1e-3f) << m.name;
+        EXPECT_TRUE(ranPass("DLSS")) << m.name;
+        EXPECT_FALSE(ranPass("TAAU")) << m.name;
+        if (width == native.width) {
+            EXPECT_GT(psnr(img, native), 27.0) << m.name;
+            EXPECT_NEAR(meanLuminance(img), meanLuminance(native), 0.015) << m.name;
+            writeOut(std::format("postprocess_dlss_mode_{}", m.name), img);
+        }
+    };
+    for (const Mode& m : modes) {
+        CVarScope q("r.Upscaler.Quality", m.name);
+        check(m, 960, 540);
+    }
+    // Output resize with the view (and its NGX feature) alive.
+    CVarScope q("r.Upscaler.Quality", "Quality");
+    check(modes[3], 640, 360);
+    check(modes[3], 960, 540);
+}
+
+TEST_F(PostProcessTest, DlssStaticSceneConvergesAndStaysStable) {
+    const UpscalerAvailability a = upscalerAvailability(UpscalerType::DLSS, device.get());
+    if (!a.available) GTEST_SKIP() << "DLSS unavailable: " << a.reason;
+    // Jitter convention check: with a wrong jitter sign (or scale) the accumulated image of a static scene shimmers
+    // from frame to frame and thin features blur instead of resolving towards the supersampled reference.
+    thinGeometryScene();
+    const CameraParams cam = thinCamera();
+    const Image reference = downsample(renderFrames(cam, {.width = 2048, .height = 2048, .frames = 1}), 4);
+    Image bilinear, taau;
+    {
+        CVarScope sp("r.ScreenPercentage", "50");
+        bilinear = renderFrames(cam, {.width = 512, .height = 512, .frames = 2});
+    }
+    {
+        CVarScope up("r.Upscaler", "TAAU");
+        CVarScope q("r.Upscaler.Quality", "Performance");
+        taau = renderFrames(cam, {.width = 512, .height = 512, .frames = 48});
+    }
+    CVarScope up("r.Upscaler", "DLSS");
+    CVarScope q("r.Upscaler.Quality", "Performance");
+    const Image previous = renderFrames(cam, {.width = 512, .height = 512, .frames = 47});
+    const Image dlss = renderFrames(cam, {.width = 512, .height = 512, .frames = 1}, {}, 0.0f, true); // 48th frame
+    writeOut("postprocess_dlss_static_performance", dlss);
+    writeOut("postprocess_dlss_static_reference_ssaa", reference);
+    writeOut("postprocess_dlss_static_reference_taau", taau);
+    writeOut("postprocess_dlss_static_reference_bilinear", bilinear);
+    const f64 pDlss = psnr(dlss, reference), pTaau = psnr(taau, reference), pBilinear = psnr(bilinear, reference);
+    const f64 stability = psnr(dlss, previous);
+    std::printf("DLSS 50%% static: PSNR vs 16x SSAA %.2f dB (TAAU %.2f, bilinear %.2f), edge error %.2f (TAAU %.2f, "
+                "bilinear %.2f), frame 47 vs 48: %.2f dB\n", pDlss, pTaau, pBilinear, edgeError(dlss, reference),
+                edgeError(taau, reference), edgeError(bilinear, reference), stability);
+    EXPECT_GT(stability, 40.0) << "a converged static image must not shimmer";
+    EXPECT_GT(pDlss, pBilinear + 1.0);
+    EXPECT_LT(edgeError(dlss, reference), edgeError(bilinear, reference));
+}
+
+TEST_F(PostProcessTest, DlssFollowsCameraMotion) {
+    const UpscalerAvailability a = upscalerAvailability(UpscalerType::DLSS, device.get());
+    if (!a.available) GTEST_SKIP() << "DLSS unavailable: " << a.reason;
+    // Motion vector convention check: a camera moving diagonally (right and up) past textured boxes. Wrong motion
+    // vectors (sign of either axis, scale, space) reproject the history to the wrong place: the frame smears and falls
+    // far below TAAU, which uses the same velocity buffer.
+    const Uuid checker = texturedMaterial(checkerTexture());
+    mesh(Primitive::Plane, material({0.3f, 0.3f, 0.3f, 1.0f}, 0.0f, 0.9f), {0, 0, 0}, glm::vec3(40.0f));
+    for (int i = 0; i < 5; ++i) mesh(Primitive::Cube, checker, {-4.0f + 2.0f * f32(i), 0.5f, -f32(i % 2)}, glm::vec3(1.0f));
+    sun({-0.4f, -0.7f, -0.6f}, 20000.0f, glm::vec3(1.0f), false);
+    environment(1.0f, 1.0f);
+    const u32 still = 24, moving = 16;
+    auto cameraAt = [&](u32 f) {
+        const f32 d = f < still ? 0.0f : 0.075f * f32(f - still + 1); // 0.075 m per frame ≈ 7 output pixels
+        return camera({-0.6f + d, 1.5f + 0.6f * d, 5.0f}, {-0.6f + d, 0.5f + 0.6f * d, 0.0f}, 12.5f, 50.0f);
+    };
+    const CameraParams last = cameraAt(still + moving - 1);
+    const Image reference = downsample(renderFrames(last, {.width = 2048, .height = 2048, .frames = 1}), 4);
+    auto sequence = [&] {
+        Image img;
+        for (u32 f = 0; f < still + moving; ++f) {
+            img = renderFrames(cameraAt(f), {.width = 512, .height = 512, .frames = 1}, {}, 1.0f / 60.0f, f > 0);
+        }
+        return img;
+    };
+    Image taau, dlss;
+    {
+        CVarScope up("r.Upscaler", "TAAU");
+        CVarScope q("r.Upscaler.Quality", "Quality");
+        taau = sequence();
+    }
+    {
+        CVarScope up("r.Upscaler", "DLSS");
+        CVarScope q("r.Upscaler.Quality", "Quality");
+        dlss = sequence();
+    }
+    writeOut("postprocess_dlss_moving_quality", dlss);
+    writeOut("postprocess_dlss_moving_reference_ssaa", reference);
+    writeOut("postprocess_dlss_moving_reference_taau", taau);
+    const f64 pDlss = psnr(dlss, reference), pTaau = psnr(taau, reference);
+    std::printf("moving camera, last frame vs 16x SSAA: DLSS %.2f dB, TAAU %.2f dB; checker sharpness DLSS %.4f, TAAU "
+                "%.4f, SSAA %.4f\n", pDlss, pTaau, sharpness(dlss, 64, 200, 448, 330), sharpness(taau, 64, 200, 448, 330),
+                sharpness(reference, 64, 200, 448, 330));
+    EXPECT_GT(pDlss, pTaau - 1.0) << "DLSS smears under camera motion more than TAAU";
+}
+
+TEST_F(PostProcessTest, DlssWithAutoExposureAndPreExposure) {
+    const UpscalerAvailability a = upscalerAvailability(UpscalerType::DLSS, device.get());
+    if (!a.available) GTEST_SKIP() << "DLSS unavailable: " << a.reason;
+    // r.Exposure.Auto: SceneColorHDR is pre-exposed and DLSS gets the engine's Exposure texture + InPreExposure
+    // instead of its own auto exposure. A wrong exposure scale shows as ghosting / lost detail.
+    thinGeometryScene();
+    const CameraParams cam = thinCamera();
+    CVarScope ae("r.Exposure.Auto", "true");
+    const f32 dt = 1.0f / 30.0f;
+    const Image reference = downsample(renderFrames(cam, {.width = 2048, .height = 2048, .frames = 60}, {}, dt), 4);
+    Image taau, dlss;
+    {
+        CVarScope up("r.Upscaler", "TAAU");
+        CVarScope q("r.Upscaler.Quality", "Quality");
+        taau = renderFrames(cam, {.width = 512, .height = 512, .frames = 60}, {}, dt);
+    }
+    {
+        CVarScope up("r.Upscaler", "DLSS");
+        CVarScope q("r.Upscaler.Quality", "Quality");
+        dlss = renderFrames(cam, {.width = 512, .height = 512, .frames = 60}, {}, dt);
+        EXPECT_TRUE(ranPass("DLSS"));
+    }
+    writeOut("postprocess_dlss_auto_exposure", dlss);
+    writeOut("postprocess_dlss_auto_exposure_reference_ssaa", reference);
+    writeOut("postprocess_dlss_auto_exposure_reference_taau", taau);
+    const f64 pDlss = psnr(dlss, reference), pTaau = psnr(taau, reference);
+    std::printf("auto exposure, 67%%: PSNR vs 16x SSAA DLSS %.2f dB, TAAU %.2f dB; mean luminance DLSS %.4f, "
+                "TAAU %.4f, SSAA %.4f\n", pDlss, pTaau, meanLuminance(dlss), meanLuminance(taau), meanLuminance(reference));
+    EXPECT_NEAR(meanLuminance(dlss), meanLuminance(reference), 0.02);
+    EXPECT_GT(pDlss, pTaau - 2.0);
+}
+
+TEST_F(PostProcessTest, DlssSurvivesRendererAndDeviceRecreation) {
+    if (!upscalerAvailability(UpscalerType::DLSS, device.get()).available) GTEST_SKIP() << "DLSS unavailable";
+    // NGX lives with the device (shutdown callback), features with the renderer: neither order may leak or crash.
+    CVarScope up("r.Upscaler", "DLSS");
+    CVarScope q("r.Upscaler.Quality", "Balanced");
+    auto renderOnce = [&] {
+        colorfulScene();
+        const Image img = renderFrames(colorfulCamera(), {.frames = 4});
+        EXPECT_GT(meanLuminance(img), 0.1);
+        EXPECT_TRUE(ranPass("DLSS"));
+    };
+    renderOnce();
+    // A second renderer on the same device reuses the initialised NGX.
+    device->waitIdle();
+    renderer.reset();
+    world = std::make_unique<World>();
+    renderer = Renderer::create(*device);
+    view = 0;
+    renderOnce();
+    // A new device: NGX is shut down with the old one and initialised again.
+    world = std::make_unique<World>();
+    recreateDevice(true);
+    ASSERT_TRUE(upscalerAvailability(UpscalerType::DLSS, device.get()).available);
+    renderOnce();
+    // Probing only (no renderer ever uses DLSS on this device) must not leak NGX objects either: TearDown checks.
+    world = std::make_unique<World>();
+    recreateDevice(true);
+    EXPECT_TRUE(upscalerAvailability(UpscalerType::DLSS, device.get()).available);
 }
 
 // --- post effects --------------------------------------------------------------------------------------------
@@ -616,14 +859,14 @@ TEST_F(PostProcessTest, PerfReport1080p) {
             groups[g] += p.gpuMs;
         }
         std::printf("[%s] GPU frame %.2f ms:", label, st.gpuFrameMs);
-        for (const char* k : {"AutoExposure", "TAA", "TAAU", "FSR1", "DOF", "MotionBlur", "Bloom", "Grading",
+        for (const char* k : {"AutoExposure", "TAA", "TAAU", "FSR1", "DLSS", "DOF", "MotionBlur", "Bloom", "Grading",
                               "PostComposite", "Sharpen", "LdrPost", "FXAA", "Tonemap", "Resample"}) {
             if (auto it = groups.find(k); it != groups.end()) std::printf(" %s %.3f", k, it->second);
         }
         std::printf("\n   passes:");
         for (const PassTiming& p : st.passes) {
-            for (const char* k : {"AutoExposure", "TAA", "FSR1", "DOF", "MotionBlur", "Bloom", "Grading", "PostComposite",
-                                  "Sharpen", "LdrPost", "FXAA"}) {
+            for (const char* k : {"AutoExposure", "TAA", "FSR1", "DLSS", "DOF", "MotionBlur", "Bloom", "Grading",
+                                  "PostComposite", "Sharpen", "LdrPost", "FXAA"}) {
                 if (p.name.rfind(k, 0) == 0) {
                     std::printf(" %s %.3f", p.name.c_str(), p.gpuMs);
                     break;
@@ -654,5 +897,12 @@ TEST_F(PostProcessTest, PerfReport1080p) {
         CVarScope up("r.Upscaler", "TAAU");
         CVarScope q("r.Upscaler.Quality", "Performance");
         report("TAAU 540p→1080p");
+    }
+    if (upscalerAvailability(UpscalerType::DLSS, device.get()).available) {
+        CVarScope up("r.Upscaler", "DLSS");
+        for (const char* quality : {"Performance", "Quality", "Native"}) {
+            CVarScope q("r.Upscaler.Quality", quality);
+            report(std::format("DLSS {} → 1080p", quality).c_str());
+        }
     }
 }

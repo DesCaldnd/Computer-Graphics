@@ -92,6 +92,7 @@ public:
     [[nodiscard]] u64 frameIndex() const { return m_frameIndex; } // frames rendered by this view
     [[nodiscard]] glm::vec2 jitterPixels() const { return m_jitter; }
     [[nodiscard]] glm::vec2 jitterNdc() const;
+    [[nodiscard]] f32 mipBias() const { return m_mipBias; } // material texture bias of this frame (upscalers)
     [[nodiscard]] bool cameraCut() const { return m_cameraCut; }
 
     // Matrices (Vulkan Y flip, reversed-Z). "Unjittered" is what motion vectors use.
@@ -122,6 +123,7 @@ private:
     u64 m_frameIndex = 0;
     glm::vec2 m_jitter{0.0f};
     glm::vec2 m_prevJitter{0.0f};
+    f32 m_mipBias = 0.0f;
     bool m_cameraCut = true;
     bool m_cameraCutRequested = false;
     glm::mat4 m_view{1.0f}, m_proj{1.0f}, m_unjitteredProj{1.0f}, m_viewProj{1.0f}, m_unjitteredViewProj{1.0f};

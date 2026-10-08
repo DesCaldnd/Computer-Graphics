@@ -591,6 +591,7 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
               (view.desc().flags.editor ? 2u : 0u);
     c.lodBias = st.lodBias;
     c.mipBias = setup.mipBias;
+    view.m_mipBias = setup.mipBias;
     ClusterGrid grid;
     grid.x = kClusterX;
     grid.y = kClusterY;
