@@ -2,11 +2,21 @@
 
 #include <oxwald/core/serial/format.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <format>
 #include <fstream>
 #include <limits>
+#include <thread>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace ox::serial {
 namespace {
@@ -462,21 +472,48 @@ Result<std::vector<std::byte>> readFileBytes(const std::filesystem::path& path) 
     return bytes;
 }
 
+std::filesystem::path uniqueTempPath(const std::filesystem::path& path) {
+    static std::atomic<u64> counter{0};
+#if defined(_WIN32)
+    const int pid = _getpid();
+#else
+    const int pid = int(getpid());
+#endif
+    auto tmp = path;
+    tmp += std::format(".tmp{}_{}", pid, counter.fetch_add(1, std::memory_order_relaxed));
+    return tmp;
+}
+
+Status replaceFile(const std::filesystem::path& tmp, const std::filesystem::path& path) {
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+#if defined(_WIN32)
+    // Windows refuses to replace a file somebody has open (another process reading the same cache entry, an
+    // indexer): that passes within milliseconds.
+    for (int attempt = 0; ec && attempt < 100 && std::filesystem::exists(path); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::filesystem::rename(tmp, path, ec);
+    }
+#endif
+    if (ec) return makeError("cannot replace '{}': {}", path.string(), ec.message());
+    return {};
+}
+
 Status writeFileAtomic(const std::filesystem::path& path, std::span<const std::byte> bytes) {
     std::error_code ec;
     if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ec);
-    auto tmp = path;
-    tmp += ".tmp";
+    // Not a fixed "<path>.tmp": two writers of one file (processes sharing an asset cache) would write through each
+    // other, and the one renaming first would publish a file the other is still truncating and filling.
+    const auto tmp = uniqueTempPath(path);
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) return makeError("cannot write '{}'", tmp.string());
         out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         if (!out) return makeError("write failed for '{}'", tmp.string());
     }
-    std::filesystem::rename(tmp, path, ec);
-    if (ec) {
+    if (auto st = replaceFile(tmp, path); !st) {
         std::filesystem::remove(tmp, ec);
-        return makeError("cannot replace '{}': {}", path.string(), ec.message());
+        return st;
     }
     return {};
 }

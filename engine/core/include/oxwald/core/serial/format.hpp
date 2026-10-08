@@ -63,6 +63,10 @@ Status saveDocument(const std::filesystem::path& path, const Document& doc, Form
 
 Result<std::vector<std::byte>> readFileBytes(const std::filesystem::path& path);
 Status writeFileAtomic(const std::filesystem::path& path, std::span<const std::byte> bytes);
+// Building blocks of writeFileAtomic for writers that stream: `path` plus a suffix unique to this process and call,
+// and the rename over `path` (retried on Windows while another process holds the destination open).
+[[nodiscard]] std::filesystem::path uniqueTempPath(const std::filesystem::path& path);
+Status replaceFile(const std::filesystem::path& tmp, const std::filesystem::path& path);
 
 struct BinaryInfo {
     struct Chunk {

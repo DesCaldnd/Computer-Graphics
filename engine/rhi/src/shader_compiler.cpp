@@ -1,4 +1,5 @@
 #include <oxwald/core/log.hpp>
+#include <oxwald/core/serial/format.hpp>
 #include <oxwald/rhi/environment.hpp>
 #include <oxwald/rhi/shader_compiler.hpp>
 
@@ -296,7 +297,7 @@ private:
 bool writeCache(const fs::path& file, const std::vector<fs::path>& deps, const std::vector<u32>& spirv) {
     std::error_code ec;
     fs::create_directories(file.parent_path(), ec);
-    const fs::path tmp = file.string() + ".tmp";
+    const fs::path tmp = serial::uniqueTempPath(file); // the cache directory is shared between processes
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) {
@@ -320,8 +321,11 @@ bool writeCache(const fs::path& file, const std::vector<fs::path>& deps, const s
             return false;
         }
     }
-    fs::rename(tmp, file, ec);
-    return !ec;
+    if (!serial::replaceFile(tmp, file)) {
+        fs::remove(tmp, ec);
+        return false;
+    }
+    return true;
 }
 
 bool readCache(const fs::path& file, std::vector<fs::path>& deps, std::vector<u32>& spirv) {
