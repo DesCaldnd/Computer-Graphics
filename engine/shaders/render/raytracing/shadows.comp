@@ -1,0 +1,83 @@
+#version 460
+// Ray traced shadows (ShadowsRT): per pixel, `spp` shadow rays towards the sun inside its angular radius (cone
+// sampling → soft shadows) with alpha-tested any-hit emulation and optional coloured transmission through
+// translucent casters; up to 4 explicit local lights (sphere sampling by sourceRadius), or with ReSTIR DI the
+// visibility of each pixel's resampled light (ratio estimator, channel 0).
+// Outputs (noisy, denoised afterwards): outSun rgb = coloured sun visibility; outLocal = local visibility channels.
+#include "restir_common.glsl"
+#include "rt_query.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(RtSceneBuffer rt; ReservoirBuffer reservoirs; uint depth; uint normals; uint outSun; uint outLocal;
+               uint width; uint height; uint scale; uint frame; uint spp; uint localCount; uint flags;
+               uvec4 localLights;);
+
+const uint kColored = 1u;
+const uint kSun = 2u;
+const uint kReSTIR = 4u;
+const uint kLocal = 8u;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.width, pc.height)))) return;
+    ivec2 renderSize = ivec2(VIEW.renderSize.xy);
+    ivec2 gp = clamp(p * int(pc.scale) + int(pc.scale / 2u), ivec2(0), renderSize - 1);
+    float d = OX_FETCH_2D(pc.depth, gp, 0).r;
+    if (d <= 0.0) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outSun, p, vec4(1.0));
+        if ((pc.flags & (kLocal | kReSTIR)) != 0u) OX_IMAGE_STORE_2D(rgba16f, pc.outLocal, p, vec4(1.0));
+        return;
+    }
+    vec2 uv = (vec2(gp) + 0.5) * VIEW.renderSize.zw;
+    vec3 P = oxWorldPositionFromDepth(pc.view, uv, d);
+    vec3 N = normalize(OX_FETCH_2D(pc.normals, gp, 0).xyz);
+    // Offset along the normal scaled with distance (depth reconstruction precision).
+    float viewDist = length(VIEW.cameraPosition.xyz - P);
+    vec3 origin = P + N * max(1e-3 * viewDist, 2e-3);
+    bool colored = (pc.flags & kColored) != 0u;
+    uint rng = oxRtSeed(uvec2(p), pc.frame, 0x5AD0u);
+    LightBuffer lights = SCENE.lights;
+
+    vec3 sunVis = vec3(1.0);
+    int sun = VIEW.sunLight;
+    if ((pc.flags & kSun) != 0u && sun >= 0) {
+        Light l = lights.l[sun];
+        sunVis = vec3(0.0);
+        for (uint i = 0u; i < pc.spp; ++i) {
+            vec3 L = oxRtSampleSun(pc.view, l, oxRtRandom2(rng));
+            if (dot(L, N) <= 0.0) continue; // facing away: shadowed by the surface itself
+            sunVis += oxRtShadow(pc.scene, pc.rt, origin, L, 1e4, colored);
+        }
+        sunVis /= float(pc.spp);
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.outSun, p, vec4(sunVis, 1.0));
+
+    if ((pc.flags & kReSTIR) != 0u) {
+        Reservoir r = pc.reservoirs.r[uint(p.y) * pc.width + uint(p.x)];
+        float v = 1.0;
+        if (r.light != OX_INVALID_INDEX && r.W > 0.0) {
+            Light l = lights.l[r.light];
+            float dist, solidAngle;
+            vec3 L = oxRtSampleSphereLight(P, l, oxRtRandom2(rng), dist, solidAngle);
+            vec3 T = oxRtShadow(pc.scene, pc.rt, origin, L, max(dist - 1e-3, 0.0), colored);
+            v = (T.r + T.g + T.b) / 3.0;
+        }
+        OX_IMAGE_STORE_2D(rgba16f, pc.outLocal, p, vec4(v, 1.0, 1.0, 1.0));
+    } else if ((pc.flags & kLocal) != 0u) {
+        vec4 vis = vec4(1.0);
+        for (uint c = 0u; c < min(pc.localCount, 4u); ++c) {
+            Light l = lights.l[pc.localLights[c]];
+            float acc = 0.0;
+            for (uint i = 0u; i < pc.spp; ++i) {
+                float dist, solidAngle;
+                vec3 L = oxRtSampleSphereLight(P, l, oxRtRandom2(rng), dist, solidAngle);
+                if (dot(L, N) <= 0.0) continue;
+                vec3 T = oxRtShadow(pc.scene, pc.rt, origin, L, max(dist - 1e-3, 0.0), colored);
+                acc += (T.r + T.g + T.b) / 3.0;
+            }
+            vis[c] = acc / float(pc.spp);
+        }
+        OX_IMAGE_STORE_2D(rgba16f, pc.outLocal, p, vis);
+    }
+}

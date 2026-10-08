@@ -1,0 +1,56 @@
+#version 460
+// Joint-bilateral upsample of a 1/scale resolution signal to render resolution (bilinear taps re-weighted by depth
+// and normal similarity to the full-resolution pixel). With scale 1 it is a format conversion (pass-through).
+// Output: RGBA16F (default), OX_OUT_RGBA8 or OX_OUT_R8.
+#include "denoise_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint source; uint depth; uint normals; uint outColor; uint srcWidth; uint srcHeight; uint dstWidth;
+               uint dstHeight; uint scale;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.dstWidth, pc.dstHeight)))) return;
+    ivec2 srcSize = ivec2(pc.srcWidth, pc.srcHeight);
+    ivec2 renderSize = ivec2(VIEW.renderSize.xy);
+    vec4 result;
+    if (pc.scale <= 1u) {
+        result = OX_FETCH_2D(pc.source, clamp(p, ivec2(0), srcSize - 1), 0);
+    } else {
+        float z0;
+        vec3 n0;
+        oxDnGeometry(pc.view, pc.depth, pc.normals, clamp(p, ivec2(0), renderSize - 1), z0, n0);
+        vec2 pos = (vec2(p) + 0.5) / float(pc.scale) - 0.5;
+        ivec2 base = ivec2(floor(pos));
+        vec2 f = pos - vec2(base);
+        vec4 sum = vec4(0.0);
+        float wsum = 0.0;
+        vec4 fallback = vec4(0.0);
+        float best = 1e30;
+        for (int i = 0; i < 4; ++i) {
+            ivec2 q = clamp(base + ivec2(i & 1, i >> 1), ivec2(0), srcSize - 1);
+            float z;
+            vec3 n;
+            oxDnGeometry(pc.view, pc.depth, pc.normals, oxDnGbufferPixel(q, pc.scale, renderSize), z, n);
+            vec4 c = OX_FETCH_2D(pc.source, q, 0);
+            float bil = ((i & 1) != 0 ? f.x : 1.0 - f.x) * ((i >> 1) != 0 ? f.y : 1.0 - f.y);
+            float dz = abs(z - z0) / max(z0, 1e-3);
+            float w = bil * exp(-dz * 50.0) * pow(max(dot(n, n0), 0.0), 8.0);
+            sum += c * w;
+            wsum += w;
+            if (dz < best) {
+                best = dz;
+                fallback = c;
+            }
+        }
+        result = wsum > 1e-4 ? sum / wsum : fallback;
+    }
+#if defined(OX_OUT_RGBA8)
+    OX_IMAGE_STORE_2D(rgba8, pc.outColor, p, clamp(result, 0.0, 1.0));
+#elif defined(OX_OUT_R8)
+    OX_IMAGE_STORE_2D(r8, pc.outColor, p, vec4(clamp(result.r, 0.0, 1.0)));
+#else
+    OX_IMAGE_STORE_2D(rgba16f, pc.outColor, p, result);
+#endif
+}

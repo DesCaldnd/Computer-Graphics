@@ -1,0 +1,25 @@
+#version 460
+// Depth of field 2/4: maximum near-field CoC per 8×8 half-res tile (the near field bleeds over in-focus pixels).
+#include <render/postprocess/dof_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    uint src;   // half res rgba16f (a = signed CoC)
+    uint dst;   // r16f tiles
+    vec2 halfSize;
+    vec2 tileSize;
+});
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(t, ivec2(pc.tileSize)))) return;
+    float nearMax = 0.0;
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            ivec2 q = min(t * 8 + ivec2(x, y), ivec2(pc.halfSize) - 1);
+            nearMax = max(nearMax, -OX_FETCH_2D(pc.src, q, 0).a);
+        }
+    }
+    OX_IMAGE_STORE_2D(r16f, pc.dst, t, vec4(nearMax));
+}

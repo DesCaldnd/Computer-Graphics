@@ -1,0 +1,65 @@
+#version 460
+// ReSTIR DI pass 1: initial candidates (RIS over uniformly picked shadow-casting local lights), then temporal reuse
+// with the reprojected previous reservoir (M clamped to 20 × the initial count).
+#include "restir_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(ReservoirBuffer prevRes; ReservoirBuffer curRes; LightIndexBuffer lightList; uint depth; uint normals;
+               uint velocity; uint lightCount; uint width; uint height; uint scale; uint frame; uint candidates;
+               uint flags;);
+
+const uint kTemporal = 1u;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.width, pc.height);
+    if (any(greaterThanEqual(p, size))) return;
+    ivec2 renderSize = ivec2(VIEW.renderSize.xy);
+    ivec2 gp = clamp(p * int(pc.scale) + int(pc.scale / 2u), ivec2(0), renderSize - 1);
+    uint idx = uint(p.y) * pc.width + uint(p.x);
+    OxSurface s;
+    float z;
+    Reservoir r = oxReservoirEmpty();
+    if (pc.lightCount == 0u || !oxRestirSurface(pc.view, pc.depth, pc.normals, gp, s, z)) {
+        pc.curRes.r[idx] = r;
+        return;
+    }
+    uint rng = oxRtSeed(uvec2(p), pc.frame, 0x5E57u);
+    LightBuffer lights = SCENE.lights;
+    float sourcePdf = 1.0 / float(pc.lightCount);
+    for (uint c = 0u; c < pc.candidates; ++c) {
+        uint li = pc.lightList.i[min(uint(oxRtRandom(rng) * float(pc.lightCount)), pc.lightCount - 1u)];
+        float target = oxRestirTarget(pc.scene, s, li);
+        oxReservoirUpdate(r, li, lights.l[li].entityId, target / sourcePdf, 1.0, rng);
+    }
+    float tY = oxRestirTarget(pc.scene, s, r.light);
+    r.W = tY > 0.0 ? r.wSum / (r.M * tY) : 0.0;
+
+    if ((pc.flags & kTemporal) != 0u) {
+        vec2 uv = (vec2(gp) + 0.5) * VIEW.renderSize.zw;
+        vec2 prevUv = uv - OX_FETCH_2D(pc.velocity, gp, 0).xy;
+        ivec2 q = ivec2(floor(prevUv * vec2(size)));
+        if (all(greaterThanEqual(q, ivec2(0))) && all(lessThan(q, size))) {
+            Reservoir prev = pc.prevRes.r[uint(q.y) * pc.width + uint(q.x)];
+            vec3 pn = oxOctDecode(prev.normal);
+            bool similar = prev.z > 0.0 && abs(prev.z - z) / max(z, 1e-3) < 0.1 && dot(pn, s.normal) > 0.9;
+            bool lightValid = prev.light != OX_INVALID_INDEX && prev.light < SCENE.lightCount &&
+                              lights.l[prev.light].entityId == prev.entity;
+            if (similar && lightValid) {
+                Reservoir merged = oxReservoirEmpty();
+                float m0 = r.M;
+                oxReservoirUpdate(merged, r.light, r.entity, tY * r.W * r.M, r.M, rng);
+                float prevM = min(prev.M, 20.0 * max(m0, 1.0));
+                float tPrev = oxRestirTarget(pc.scene, s, prev.light);
+                oxReservoirUpdate(merged, prev.light, prev.entity, tPrev * prev.W * prevM, prevM, rng);
+                float t = oxRestirTarget(pc.scene, s, merged.light);
+                merged.W = t > 0.0 ? merged.wSum / (merged.M * t) : 0.0;
+                r = merged;
+            }
+        }
+    }
+    r.z = z;
+    r.normal = oxOctEncode(s.normal);
+    pc.curRes.r[idx] = r;
+}

@@ -1,0 +1,36 @@
+#version 460
+// Auto exposure, step 1: centre-weighted log-luminance histogram (128 bins over EV100 -10 … +22) of SceneColorHDR,
+// one sample per 2×2 pixels. Bins accumulate into a persistent buffer that the adaptation pass reads and clears.
+#include <render/postprocess/exposure_common.glsl>
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+OX_PUSH_CONSTANTS({
+    ViewBuffer view;
+    ExposureHistogram histogram;
+    uint color;
+    uint pad;
+    vec2 size; // SceneColorHDR size
+});
+
+shared uint sBins[kExposureBins];
+
+void main() {
+    uint li = gl_LocalInvocationIndex;
+    if (li < kExposureBins) sBins[li] = 0u;
+    barrier();
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) * 2;
+    if (all(lessThan(p, ivec2(pc.size)))) {
+        vec3 c = OX_FETCH_2D(pc.color, p, 0).rgb;
+        float lum = ppLuma(ppSanitize(c)) / max(pc.view.v.preExposure, 1e-12); // scene luminance (cd/m²)
+        float ev = exposureLuminanceToEV100(lum);
+        uint bin = exposureBin(ev);
+        // Centre-weighted metering: weight 4 in the middle, 1 at the corners.
+        vec2 uv = (vec2(p) + 1.0) / pc.size;
+        float r = length((uv - 0.5) * vec2(2.0));
+        uint w = 1u + uint(3.0 * (1.0 - smoothstep(0.2, 1.2, r)) + 0.5);
+        atomicAdd(sBins[bin], w);
+    }
+    barrier();
+    if (li < kExposureBins && sBins[li] != 0u) atomicAdd(pc.histogram.bins[li], sBins[li]);
+}

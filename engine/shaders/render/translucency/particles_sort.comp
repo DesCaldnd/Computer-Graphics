@@ -1,0 +1,70 @@
+#version 460
+// Back-to-front sort of an emitter's alive list (r.Particles.Sorting, ParticleEmitterComponent::sort): one workgroup,
+// bitonic network in shared memory (ping-pong arrays: every element is written by exactly one thread per step and
+// never read in the same step). Keys = 21 high bits of the squared camera distance packed above an 11-bit slot, so
+// emitters up to 2048 particles are sortable; the sorted slots go after the three lists (lists.v[3 × max + i]).
+#include "particles_common.glsl"
+#include <render/common/view.glsl>
+
+layout(local_size_x = 1024) in;
+
+layout(push_constant, scalar) uniform OxPushConstants {
+    ViewBuffer view;
+    SceneBuffer scene;
+    EmitterBuffer emitter;
+    ParticleBuffer particles;
+    ParticleLists lists;
+    ParticleCounters counters;
+    IndexBufferRef indices;
+    uint mode;
+    uint sceneDepth;
+    uint normals;
+    uint sortCount; // power of two, <= 2048
+    uint sortK;
+    uint sortJ;
+} pc;
+
+shared uint bufA[2048];
+shared uint bufB[2048];
+
+void main() {
+    uint t = gl_LocalInvocationID.x;
+    uint n = min(pc.sortCount, 2048u);
+    uint maxP = pc.emitter.e.maxParticles;
+    uint nxt = pc.emitter.e.current ^ 1u;
+    uint nextBase = maxP * (1u + nxt);
+    uint alive = uint(max(pc.counters.c[1 + int(nxt)], 0));
+    vec3 cam = pc.view.v.cameraPosition.xyz;
+    for (uint i = t; i < n; i += 1024u) {
+        uint v = 0u; // padding: smallest key, sorts last
+        if (i < alive) {
+            uint slot = pc.lists.v[nextBase + i];
+            vec3 d = pc.particles.p[slot].position - cam;
+            uint keyBits = floatBitsToUint(max(dot(d, d), 1e-30)) >> 11;
+            v = (keyBits << 11) | (slot & 2047u);
+        }
+        bufA[i] = v;
+    }
+    barrier();
+    bool fromA = true;
+    for (uint k = 2u; k <= n; k <<= 1) {
+        for (uint j = k >> 1; j > 0u; j >>= 1) {
+            for (uint i = t; i < n; i += 1024u) {
+                uint l = i ^ j;
+                uint a = fromA ? bufA[i] : bufB[i];
+                uint b = fromA ? bufA[l] : bufB[l];
+                bool descending = (i & k) == 0u;
+                uint r = (descending == (i < l)) ? max(a, b) : min(a, b);
+                if (fromA) bufB[i] = r;
+                else bufA[i] = r;
+            }
+            barrier();
+            fromA = !fromA;
+        }
+    }
+    uint base = maxP * 3u;
+    for (uint i = t; i < n; i += 1024u) {
+        uint v = fromA ? bufA[i] : bufB[i];
+        pc.lists.v[base + i] = v & 2047u;
+    }
+}

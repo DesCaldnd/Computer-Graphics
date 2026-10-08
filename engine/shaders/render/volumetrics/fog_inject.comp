@@ -1,0 +1,59 @@
+#version 460
+// Froxel fog, pass 1: participating media. Per froxel (at this frame's jittered sample position): exponential
+// height fog (EnvironmentComponent) + FogVolumeComponent shapes with edge falloff and scrolling 3D noise.
+//   media    RGBA16F: rgb scattering coefficient (1/m), a extinction (1/m)
+//   emissive RGBA16F: rgb emission source (display-relative radiance × extinction), a phase anisotropy g
+#include <render/volumetrics/fog_common.glsl>
+#include <render/volumetrics/volumetrics_types.glsl>
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+OX_RENDER_PUSH(FogConstantsBuffer fog; uint media; uint emissive;);
+// Read the constants through the buffer reference (copying the struct would also copy its 64-bit `volumes`
+// reference, which SPIRV-Cross / MoltenVK mistranslates: the copied pointer reads zeros).
+#define F (pc.fog.c)
+
+void main() {
+    uvec3 c = gl_GlobalInvocationID;
+    if (any(greaterThanEqual(c, F.grid.xyz))) return;
+
+    float viewDepth;
+    vec3 P = oxFroxelWorldPosition(pc.view, vec3(c) + 0.5 + F.jitter.xyz, viewDepth);
+    vec3 cam = VIEW.cameraPosition.xyz;
+    float dist = length(P - cam);
+
+    // Global height fog (albedo = Environment fog colour).
+    float hf = oxHeightFogDensity(pc.view, P, dist);
+    vec3 scattering = hf * VIEW.fogColor.rgb;
+    float extinction = hf;
+    vec3 emission = hf * F.emission.rgb;
+    float gWeight = hf * oxLuminance(VIEW.fogColor.rgb);
+    float gSum = gWeight * VIEW.volumetricFogLighting.z;
+
+    for (uint i = 0u; i < F.grid.w; ++i) {
+        FogVolume v = F.volumes.v[i];
+        vec4 p4 = vec4(P, 1.0);
+        vec3 u = vec3(dot(v.unitRow0, p4), dot(v.unitRow1, p4), dot(v.unitRow2, p4));
+        float d = v.params.w < 0.5 ? max(max(abs(u.x), abs(u.y)), abs(u.z)) : length(u);
+        if (d >= 1.0) continue;
+        float falloff = v.params.x;
+        float density = v.albedoDensity.a * (falloff > 0.0 ? clamp((1.0 - d) / falloff, 0.0, 1.0) : 1.0);
+        if (v.params.y > 0.0 && F.noiseTexture != OX_INVALID_INDEX) {
+            float n = OX_SAMPLE_3D(F.noiseTexture, OX_SAMPLER_LINEAR_REPEAT, (P - v.noiseOffset.xyz) * v.params.z).r;
+            // Contrast so the volume gets holes and dense wisps.
+            n = clamp((n - 0.25) * 2.0, 0.0, 1.0);
+            density *= mix(1.0, n, v.params.y);
+        }
+        if (density <= 0.0) continue;
+        scattering += density * v.albedoDensity.rgb;
+        extinction += density;
+        emission += density * v.emissionG.rgb;
+        float w = density * oxLuminance(v.albedoDensity.rgb);
+        gWeight += w;
+        gSum += w * v.emissionG.a;
+    }
+
+    float g = gWeight > 1e-8 ? gSum / gWeight : VIEW.volumetricFogLighting.z;
+    imageStore(oxImages3D_rgba16f[nonuniformEXT(pc.media)], ivec3(c), vec4(scattering, extinction));
+    imageStore(oxImages3D_rgba16f[nonuniformEXT(pc.emissive)], ivec3(c), vec4(emission, clamp(g, -0.95, 0.95)));
+}

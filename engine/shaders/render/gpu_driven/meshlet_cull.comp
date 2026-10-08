@@ -1,0 +1,149 @@
+#version 460
+// Meshlet (cluster) culling of the instances the instance culler routed to the meshlet path. Writes, per pipeline
+// variant, a compacted index buffer (visible meshlet slot << 7 | local vertex) drawn with one indexed indirect draw.
+//   stage 0 PREPARE  one thread: dispatch args = visible meshlet instances, per-variant commands reset
+//   stage 1 CULL     one workgroup per meshlet instance: frustum, backface cone, HiZ occlusion (late phase)
+//   stage 2 FINISH   one thread: clamp the index counts to the region capacities
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#include "cull_common.glsl"
+
+layout(local_size_x = 64) in;
+
+struct MeshletJob {
+    vec4 planes[6];
+    mat4 viewProj;
+    vec4 camera;          // xyz position, w = 1 for orthographic views (cone test off)
+    UintBuffer instances; // [0] = count, then (instance, lod) pairs (written by cull.comp)
+    UintBuffer dispatch;  // VkDispatchIndirectCommand
+    DrawCommandBuffer commands; // 4 (one per variant)
+    UintBuffer indices;
+    UintBuffer visible;   // uvec2 per slot: instance, meshlet vertex list offset
+    UintBuffer counters;
+    uvec4 variantBase;
+    uvec4 variantCapacity;
+    uint visibleCapacity;
+    uint instanceCapacity;
+    uint flags;           // OX_CULL_LATE: HiZ test
+    uint hiz;
+    uint hizMips;
+    uint pad;
+    vec2 hizSize;
+};
+OX_READONLY_BUFFER(MeshletJobBuffer, { MeshletJob j; });
+OX_RENDER_PUSH(MeshletJobBuffer job; MeshLodBuffer lods; uint stage;);
+
+struct MeshletHeader {
+    vec3 center;
+    float radius;
+    vec3 coneAxis;
+    float coneCutoff;
+    vec3 coneApex;
+    uint submesh;
+    uint vertexOffset;
+    uint triangleOffset; // bytes
+    uint vertexCount;
+    uint triangleCount;
+};
+
+MeshletHeader loadMeshlet(uint word) {
+    MeshletBuffer m = SCENE.meshlets;
+    MeshletHeader h;
+    h.center = vec3(uintBitsToFloat(m.data[word]), uintBitsToFloat(m.data[word + 1u]), uintBitsToFloat(m.data[word + 2u]));
+    h.radius = uintBitsToFloat(m.data[word + 3u]);
+    h.coneAxis = vec3(uintBitsToFloat(m.data[word + 4u]), uintBitsToFloat(m.data[word + 5u]), uintBitsToFloat(m.data[word + 6u]));
+    h.coneCutoff = uintBitsToFloat(m.data[word + 7u]);
+    h.coneApex = vec3(uintBitsToFloat(m.data[word + 8u]), uintBitsToFloat(m.data[word + 9u]), uintBitsToFloat(m.data[word + 10u]));
+    h.submesh = m.data[word + 11u];
+    h.vertexOffset = m.data[word + 12u];
+    h.triangleOffset = m.data[word + 13u];
+    h.vertexCount = m.data[word + 14u];
+    h.triangleCount = m.data[word + 15u];
+    return h;
+}
+
+void count(uint slot, uint value) {
+    if (value != 0u) atomicAdd(pc.job.j.counters.v[slot], value);
+}
+
+shared uint sInstance;
+shared uint sLod;
+
+// Field accesses straight through the reference (loading the whole struct into a local miscompiles on MoltenVK).
+#define J pc.job.j
+
+void main() {
+    if (pc.stage == 0u) {
+        if (gl_GlobalInvocationID.x != 0u) return;
+        uint n = min(J.instances.v[0], J.instanceCapacity);
+        J.dispatch.v[0] = n;
+        J.dispatch.v[1] = 1u;
+        J.dispatch.v[2] = 1u;
+        J.dispatch.v[3] = 0u; // visible meshlet slot counter
+        for (uint v = 0u; v < 4u; ++v) {
+            DrawCommand c;
+            c.indexCount = 0u;
+            c.instanceCount = 1u;
+            c.firstIndex = J.variantBase[v];
+            c.vertexOffset = 0;
+            c.firstInstance = 0u;
+            J.commands.c[v] = c;
+        }
+        return;
+    }
+    if (pc.stage == 2u) {
+        if (gl_GlobalInvocationID.x >= 4u) return;
+        uint v = gl_GlobalInvocationID.x;
+        J.commands.c[v].indexCount = min(J.commands.c[v].indexCount, J.variantCapacity[v]);
+        if (J.commands.c[v].indexCount == 0u) J.commands.c[v].instanceCount = 0u;
+        return;
+    }
+    // stage 1: one workgroup per meshlet instance
+    uint wi = gl_WorkGroupID.x;
+    uint instanceId = J.instances.v[2u + wi * 2u];
+    uint lod = J.instances.v[3u + wi * 2u];
+    Instance inst = SCENE.instances.i[instanceId];
+    MeshLod L = pc.lods.l[inst.meshIndex * OX_MAX_MESH_LODS + lod];
+    Material mat = SCENE.materials.m[inst.materialIndex];
+    uint variant = ((mat.flags & 7u) == OX_BLEND_ALPHA_TEST ? 1u : 0u) | ((mat.flags & OX_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u);
+    mat4 W = inst.world;
+    if ((inst.flags & OX_INSTANCE_SKINNED) != 0u) return; // skinned meshes never take this path (bounds unknown)
+    float sx = length(W[0].xyz), sy = length(W[1].xyz), sz = length(W[2].xyz);
+    float maxScale = max(sx, max(sy, sz));
+    bool uniformScale = max(abs(sx - sy), abs(sx - sz)) <= 1e-3 * maxScale;
+    bool coneTest = (variant & 2u) == 0u && uniformScale && J.camera.w == 0.0;
+    bool late = (J.flags & OX_CULL_LATE) != 0u;
+    for (uint base = 0u; base < L.meshletCount; base += 64u) {
+        uint m = base + gl_LocalInvocationID.x;
+        if (m >= L.meshletCount) continue;
+        uint headerWord = L.meshletFirst + m * 16u;
+        MeshletHeader h = loadMeshlet(headerWord);
+        count(OX_COUNTER_MESHLETS_TESTED, 1u);
+        vec3 c = (W * vec4(h.center, 1.0)).xyz;
+        float r = h.radius * maxScale;
+        bool visible = true;
+        for (uint p = 0u; p < 6u; ++p) visible = visible && dot(J.planes[p].xyz, c) + J.planes[p].w >= -r;
+        if (visible && coneTest && h.coneCutoff < 1.0) {
+            vec3 apex = (W * vec4(h.coneApex, 1.0)).xyz;
+            vec3 axis = normalize(mat3(W) * h.coneAxis);
+            visible = dot(normalize(apex - J.camera.xyz), axis) < h.coneCutoff;
+        }
+        if (visible && late) visible = !oxOccludedByHiZ(J.viewProj, c, r, J.hiz, J.hizMips, J.hizSize);
+        if (!visible) continue;
+        uint n = h.triangleCount * 3u;
+        uint slot = atomicAdd(J.dispatch.v[3], 1u);
+        if (slot >= J.visibleCapacity) continue;
+        uint offset = atomicAdd(J.commands.c[variant].indexCount, n);
+        if (offset + n > J.variantCapacity[variant]) continue;
+        J.visible.v[slot * 2u] = instanceId;
+        J.visible.v[slot * 2u + 1u] = L.meshletVertexBase + h.vertexOffset;
+        uint dst = J.variantBase[variant] + offset;
+        uint triWord = L.meshletTriangleBase * 4u + h.triangleOffset; // byte address
+        for (uint k = 0u; k < n; ++k) {
+            uint b = triWord + k;
+            uint local = (SCENE.meshlets.data[b >> 2] >> ((b & 3u) * 8u)) & 0xFFu;
+            J.indices.v[dst + k] = (slot << 7) | local;
+        }
+        count(OX_COUNTER_MESHLETS_VISIBLE, 1u);
+        count(OX_COUNTER_MESHLET_TRIANGLES, h.triangleCount);
+    }
+}

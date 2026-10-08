@@ -1,0 +1,89 @@
+#version 460
+// SVGF edge-avoiding À-trous wavelet filter: 5×5 B3-spline kernel at `step` pixels, edge-stopping on depth (gradient
+// scaled), normals and luminance (guided by the 3×3 blurred variance). Filters the variance alongside (w²).
+// Output format: RGBA16F (default, + R16F variance), OX_OUT_RGBA8 or OX_OUT_R8 (final iteration, no variance).
+#include "denoise_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint color; uint variance; uint geo; uint outColor; uint outVariance; uint width; uint height; uint step;
+               float phiColor; float phiNormal; float phiDepth; vec4 lumaWeights;);
+
+const float kB3[3] = float[](3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0);
+
+float blurredVariance(ivec2 p, ivec2 size) {
+    float sum = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 q = clamp(p + ivec2(x, y), ivec2(0), size - 1);
+            float w = (x == 0 ? 0.5 : 0.25) * (y == 0 ? 0.5 : 0.25);
+            sum += OX_FETCH_2D(pc.variance, q, 0).r * w;
+        }
+    }
+    return sum;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.width, pc.height);
+    if (any(greaterThanEqual(p, size))) return;
+
+    vec4 c0 = OX_FETCH_2D(pc.color, p, 0);
+    float var0 = OX_FETCH_2D(pc.variance, p, 0).r;
+    float z0;
+    vec3 n0;
+    oxDnGeo(pc.geo, p, z0, n0);
+
+    vec4 outC = c0;
+    float outV = var0;
+    if (z0 > 0.0) {
+        // Depth gradient (per signal pixel) from central differences.
+        float zx = OX_FETCH_2D(pc.geo, clamp(p + ivec2(1, 0), ivec2(0), size - 1), 0).w;
+        float zy = OX_FETCH_2D(pc.geo, clamp(p + ivec2(0, 1), ivec2(0), size - 1), 0).w;
+        float grad = max(abs(zx - z0), abs(zy - z0));
+        grad = (zx > 0.0 && zy > 0.0) ? grad : z0 * 0.01;
+
+        float l0 = oxDnLuma(c0, pc.lumaWeights);
+        float sigmaL = pc.phiColor * sqrt(max(blurredVariance(p, size), 0.0)) + 1e-4;
+        vec4 sumC = vec4(0.0);
+        float sumV = 0.0;
+        float sumW = 0.0;
+        int step = int(pc.step);
+        for (int y = -2; y <= 2; ++y) {
+            for (int x = -2; x <= 2; ++x) {
+                ivec2 q = p + ivec2(x, y) * step;
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+                float k = kB3[abs(x)] * kB3[abs(y)];
+                vec4 c = OX_FETCH_2D(pc.color, q, 0);
+                float v = OX_FETCH_2D(pc.variance, q, 0).r;
+                float w = k;
+                if (x != 0 || y != 0) {
+                    float z;
+                    vec3 n;
+                    oxDnGeo(pc.geo, q, z, n);
+                    if (z <= 0.0) continue;
+                    float dist = length(vec2(x, y)) * float(step);
+                    float wz = abs(z - z0) / (pc.phiDepth * grad * dist + z0 * 1e-3);
+                    float wn = pow(max(dot(n0, n), 0.0), pc.phiNormal);
+                    float wl = abs(oxDnLuma(c, pc.lumaWeights) - l0) / sigmaL;
+                    w *= wn * exp(-wz - wl);
+                }
+                sumC += c * w;
+                sumV += v * w * w;
+                sumW += w;
+            }
+        }
+        if (sumW > 1e-6) {
+            outC = sumC / sumW;
+            outV = sumV / (sumW * sumW);
+        }
+    }
+#if defined(OX_OUT_RGBA8)
+    OX_IMAGE_STORE_2D(rgba8, pc.outColor, p, clamp(outC, 0.0, 1.0));
+#elif defined(OX_OUT_R8)
+    OX_IMAGE_STORE_2D(r8, pc.outColor, p, vec4(clamp(outC.r, 0.0, 1.0)));
+#else
+    OX_IMAGE_STORE_2D(rgba16f, pc.outColor, p, outC);
+    OX_IMAGE_STORE_2D(r16f, pc.outVariance, p, vec4(outV));
+#endif
+}

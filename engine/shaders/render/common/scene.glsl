@@ -24,6 +24,7 @@ const uint OX_INSTANCE_RECEIVE_SHADOWS = 2u;
 const uint OX_INSTANCE_SKINNED = 4u;
 const uint OX_INSTANCE_MOVED = 8u;
 const uint OX_INSTANCE_SELECTED = 16u;
+const uint OX_INSTANCE_SKINNED_OUTPUT = 64u; // compute-skinned: palette offsets index SceneHeader.skinnedVertices
 
 struct MeshInfo {
     uint firstIndex;
@@ -131,6 +132,14 @@ OX_READONLY_BUFFER(ShadowBuffer, { Shadow s[]; });
 OX_READONLY_BUFFER(MeshletBuffer, { uint data[]; });
 OX_READONLY_BUFFER(InstanceIdBuffer, { uint id[]; });
 
+// Compute skinning output (mirrors ox::render::GpuSkinnedVertex; model space).
+struct SkinnedVertex {
+    vec3 position;
+    vec3 normal;
+    vec4 tangent;
+};
+OX_READONLY_BUFFER(SkinnedVertexBuffer, { SkinnedVertex v[]; });
+
 struct SceneHeader {
     InstanceBuffer instances;
     MaterialBuffer materials;
@@ -148,8 +157,7 @@ struct SceneHeader {
     uint directionalLightCount;
     uint shadowCount;
     uint meshCount;
-    uint pad0;
-    uint pad1;
+    SkinnedVertexBuffer skinnedVertices; // compute skinning output (0 when unused)
 };
 
 OX_READONLY_BUFFER(SceneBuffer, { SceneHeader s; });
@@ -203,7 +211,18 @@ OxVertex oxFetchVertex(SceneBuffer sb, uint instanceId, uint vertexIndex) {
     mat4 world = instances.i[instanceId].world;
     mat4 prevWorld = instances.i[instanceId].prevWorld;
     uint flags = instances.i[instanceId].flags;
-    if ((flags & OX_INSTANCE_SKINNED) != 0u) {
+    vec3 prevP = p;
+    if ((flags & OX_INSTANCE_SKINNED_OUTPUT) != 0u) {
+        // Pre-skinned by the compute pass (model space, current + previous frame).
+        uint meshIndex = instances.i[instanceId].meshIndex;
+        uint local = vertexIndex - uint(sb.s.meshes.m[meshIndex].vertexOffset);
+        SkinnedVertexBuffer sv = sb.s.skinnedVertices;
+        SkinnedVertex cur = sv.v[instances.i[instanceId].paletteOffset + local];
+        p = cur.position;
+        prevP = sv.v[instances.i[instanceId].prevPaletteOffset + local].position;
+        a.normal = cur.normal;
+        a.tangent = cur.tangent;
+    } else if ((flags & OX_INSTANCE_SKINNED) != 0u) {
         uint meshIndex = instances.i[instanceId].meshIndex;
         uint paletteOffset = instances.i[instanceId].paletteOffset;
         uint prevPaletteOffset = instances.i[instanceId].prevPaletteOffset;
@@ -217,7 +236,7 @@ OxVertex oxFetchVertex(SceneBuffer sb, uint instanceId, uint vertexIndex) {
     }
     OxVertex v;
     v.position = (world * vec4(p, 1.0)).xyz;
-    v.prevPosition = (prevWorld * vec4(p, 1.0)).xyz;
+    v.prevPosition = (prevWorld * vec4(prevP, 1.0)).xyz;
     v.normal = oxCofactor(world) * a.normal;
     v.tangent = vec4(mat3(world) * a.tangent.xyz, a.tangent.w);
     v.uv0 = a.uv0;

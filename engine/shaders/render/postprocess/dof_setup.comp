@@ -1,0 +1,37 @@
+#version 460
+// Depth of field 1/4: half-resolution colour + signed CoC (in half-res pixels).
+#include <render/postprocess/dof_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    ViewBuffer view;
+    uint color;
+    uint depth;
+    uint dst;          // rgba16f half res: rgb, a = signed CoC (half-res px)
+    float focusDistance;
+    float cocScale;    // half-res pixels
+    float maxRadius;   // half-res pixels
+    vec2 halfSize;
+    vec2 depthSize;
+});
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.halfSize)))) return;
+    vec2 uv = (vec2(p) + 0.5) / pc.halfSize;
+    vec3 c = ppSanitize(OX_SAMPLE_2D_LOD(pc.color, OX_SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb);
+    // CoC of the closest of the 2×2 depth texels: foreground edges keep their blur.
+    vec2 dp = uv * pc.depthSize - 0.5;
+    ivec2 d0 = ivec2(floor(dp));
+    float dmax = 0.0;
+    for (int y = 0; y <= 1; ++y) {
+        for (int x = 0; x <= 1; ++x) {
+            ivec2 q = clamp(d0 + ivec2(x, y), ivec2(0), ivec2(pc.depthSize) - 1);
+            dmax = max(dmax, OX_FETCH_2D(pc.depth, q, 0).r);
+        }
+    }
+    float z = oxLinearDepth(pc.view, dmax);
+    float coc = dofCocRadius(z, pc.focusDistance, pc.cocScale, pc.maxRadius);
+    OX_IMAGE_STORE_2D(rgba16f, pc.dst, p, vec4(c, coc));
+}

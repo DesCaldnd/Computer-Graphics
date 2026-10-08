@@ -1,0 +1,60 @@
+#version 460
+// Clustered reflection probe lists: one invocation per cluster of the view's light-cluster grid (same slices as
+// LightClusters) tests every visible probe's bounding sphere against the cluster's view-space AABB. Probes are
+// pre-sorted on the CPU (priority, then smaller volume first), so each list is in blending order.
+#include <render/reflections/probes.glsl>
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 64) in;
+
+OX_RENDER_PUSH(OxReflectionProbeBuffer probes; OxProbeClusters lists; uint probeCount; uint pad;);
+
+vec3 clusterPoint(vec2 ndc, float depth, bool ortho) {
+    if (ortho) {
+        vec4 p = VIEW.invProj * vec4(ndc, 0.5, 1.0);
+        return vec3(p.xy / p.w, -depth);
+    }
+    vec4 p = VIEW.invProj * vec4(ndc, 1.0, 1.0);
+    vec3 v = p.xyz / p.w;
+    return v * (depth / -v.z);
+}
+
+void main() {
+    uvec3 grid = VIEW.clusterGrid.xyz;
+    uint clusterCount = grid.x * grid.y * grid.z;
+    uint cluster = gl_GlobalInvocationID.x;
+    if (cluster >= clusterCount) return;
+    uint cx = cluster % grid.x;
+    uint cy = (cluster / grid.x) % grid.y;
+    uint cz = cluster / (grid.x * grid.y);
+    float zNear = VIEW.clusterDepth.z, zFar = VIEW.clusterDepth.w;
+    float d0 = zNear * pow(zFar / zNear, float(cz) / float(grid.z));
+    float d1 = zNear * pow(zFar / zNear, float(cz + 1u) / float(grid.z));
+    // The last slice extends to infinity for lookups (oxClusterSlice clamps), so do the probe test.
+    if (cz + 1u == grid.z) d1 = 1e6;
+    if (cz == 0u) d0 = 0.0;
+    bool ortho = (VIEW.flags & OX_VIEW_ORTHOGRAPHIC) != 0u;
+    vec2 ndcMin = vec2(cx, cy) / vec2(grid.xy) * 2.0 - 1.0;
+    vec2 ndcMax = vec2(cx + 1u, cy + 1u) / vec2(grid.xy) * 2.0 - 1.0;
+    vec3 bmin = vec3(1e30), bmax = vec3(-1e30);
+    for (uint i = 0u; i < 4u; ++i) {
+        vec2 ndc = vec2((i & 1u) != 0u ? ndcMax.x : ndcMin.x, (i & 2u) != 0u ? ndcMax.y : ndcMin.y);
+        vec3 a = clusterPoint(ndc, max(d0, 1e-4), ortho);
+        vec3 b = clusterPoint(ndc, d1, ortho);
+        bmin = min(bmin, min(a, b));
+        bmax = max(bmax, max(a, b));
+    }
+    mat4 view = VIEW.view;
+    uint count = 0u;
+    for (uint i = 0u; i < pc.probeCount && count < OX_MAX_PROBES_PER_CLUSTER; ++i) {
+        vec4 s = pc.probes.p[i].boundingSphere;
+        vec3 c = (view * vec4(s.xyz, 1.0)).xyz;
+        vec3 closest = clamp(c, bmin, bmax);
+        vec3 d = c - closest;
+        if (dot(d, d) <= s.w * s.w) {
+            pc.lists.data[clusterCount + cluster * OX_MAX_PROBES_PER_CLUSTER + count] = i;
+            count++;
+        }
+    }
+    pc.lists.data[cluster] = count;
+}

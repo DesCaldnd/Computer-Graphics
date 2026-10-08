@@ -1,8 +1,10 @@
+#include <oxwald/core/jobs.hpp>
 #include <oxwald/core/profile.hpp>
 #include <oxwald/render/render_types.hpp>
 #include <oxwald/render/snapshot.hpp>
 #include <oxwald/scene/world.hpp>
 
+#include <algorithm>
 #include <mutex>
 
 namespace ox::render {
@@ -20,6 +22,9 @@ void RenderSnapshot::clear() {
     debugLines.clear();
     debugLinesOverlay.clear();
     selection.clear();
+    for (auto& [type, ext] : extensions) {
+        if (ext) ext->clear();
+    }
 }
 
 i32 RenderSnapshot::primaryCamera() const {
@@ -37,6 +42,10 @@ std::mutex& hookMutex() {
 }
 std::vector<ExtractHook>& hooks() {
     static std::vector<ExtractHook> h;
+    return h;
+}
+std::vector<ExtractHookEx>& hooksEx() {
+    static std::vector<ExtractHookEx> h;
     return h;
 }
 
@@ -58,11 +67,105 @@ void addExtractHook(ExtractHook hook) {
     hooks().push_back(hook);
 }
 
+void addExtractHookEx(ExtractHookEx hook) {
+    std::lock_guard lock(hookMutex());
+    if (std::find(hooksEx().begin(), hooksEx().end(), hook) == hooksEx().end()) hooksEx().push_back(hook);
+}
+
+namespace {
+
+// Mesh renderers: serial, or two parallel passes (count → prefix sums → write) into pre-sized arrays. Steady state
+// allocates nothing: the scratch arrays are thread-local and keep their capacity, the snapshot keeps its own.
+template <class Visible>
+void extractMeshes(const entt::registry& reg, RenderSnapshot& out, const ExtractOptions& options, Visible&& visible) {
+    OX_PROFILE_ZONE();
+    auto view = reg.view<const MeshRendererComponent, const WorldTransformComponent>();
+    auto write = [&](entt::entity e, const MeshRendererComponent& mr, const WorldTransformComponent& wt, SnapshotMesh& m,
+                     Uuid* materials, u32 materialOffset) {
+        m.entityId = entityId(e);
+        m.mesh = mr.mesh;
+        m.materialOffset = materialOffset;
+        m.materialCount = u32(mr.materials.size());
+        std::copy(mr.materials.begin(), mr.materials.end(), materials);
+        m.world = wt.matrix;
+        m.prevWorld = wt.previous;
+        m.flags = (mr.castShadows ? kMeshCastShadows : 0u) | (mr.receiveShadows ? kMeshReceiveShadows : 0u);
+        m.layerMask = mr.layerMask;
+    };
+    thread_local std::vector<entt::entity> entities;
+    entities.clear();
+    for (entt::entity e : view) entities.push_back(e);
+    const u32 n = u32(entities.size());
+    if (!options.jobs || n < options.parallelThreshold) {
+        for (entt::entity e : entities) {
+            const auto& mr = view.get<const MeshRendererComponent>(e);
+            if (!mr.visible || !mr.mesh.isValid() || !visible(e)) continue;
+            const auto& wt = view.get<const WorldTransformComponent>(e);
+            const u32 matOffset = u32(out.materials.size());
+            out.materials.resize(matOffset + mr.materials.size());
+            out.meshes.emplace_back();
+            write(e, mr, wt, out.meshes.back(), out.materials.data() + matOffset, matOffset);
+        }
+        return;
+    }
+    // Pass 1: per chunk, accepted meshes and materials (accepted flag per entity).
+    const u32 grain = 512;
+    const u32 chunks = (n + grain - 1) / grain;
+    thread_local std::vector<u8> accepted;
+    thread_local std::vector<u32> chunkMeshes, chunkMaterials;
+    accepted.resize(n);
+    chunkMeshes.assign(chunks + 1, 0);
+    chunkMaterials.assign(chunks + 1, 0);
+    u8* acc = accepted.data();
+    u32* cm = chunkMeshes.data();
+    u32* cmat = chunkMaterials.data();
+    const entt::entity* ents = entities.data();
+    options.jobs->parallelFor(chunks, 1, [&](u32 begin, u32 end, u32) {
+        for (u32 c = begin; c < end; ++c) {
+            u32 meshes = 0, materials = 0;
+            for (u32 i = c * grain; i < std::min(n, (c + 1) * grain); ++i) {
+                const auto& mr = view.get<const MeshRendererComponent>(ents[i]);
+                acc[i] = mr.visible && mr.mesh.isValid() && visible(ents[i]) ? 1 : 0;
+                meshes += acc[i];
+                materials += acc[i] ? u32(mr.materials.size()) : 0u;
+            }
+            cm[c + 1] = meshes;
+            cmat[c + 1] = materials;
+        }
+    });
+    for (u32 c = 0; c < chunks; ++c) {
+        cm[c + 1] += cm[c];
+        cmat[c + 1] += cmat[c];
+    }
+    const u32 meshBase = u32(out.meshes.size()), materialBase = u32(out.materials.size());
+    out.meshes.resize(meshBase + cm[chunks]);
+    out.materials.resize(materialBase + cmat[chunks]);
+    SnapshotMesh* meshes = out.meshes.data() + meshBase;
+    Uuid* materials = out.materials.data() + materialBase;
+    // Pass 2: write (same order as the serial path).
+    options.jobs->parallelFor(chunks, 1, [&](u32 begin, u32 end, u32) {
+        for (u32 c = begin; c < end; ++c) {
+            u32 mi = cm[c], mat = cmat[c];
+            for (u32 i = c * grain; i < std::min(n, (c + 1) * grain); ++i) {
+                if (!acc[i]) continue;
+                const auto& mr = view.get<const MeshRendererComponent>(ents[i]);
+                const auto& wt = view.get<const WorldTransformComponent>(ents[i]);
+                write(ents[i], mr, wt, meshes[mi], materials + mat, materialBase + mat);
+                ++mi;
+                mat += u32(mr.materials.size());
+            }
+        }
+    });
+}
+
+} // namespace
+
 void extract(const World& world, RenderSnapshot& out, const ExtractOptions& options) {
     OX_PROFILE_ZONE();
-    const std::vector<u32> selection = std::move(out.selection);
+    std::vector<u32> selection;
+    selection.swap(out.selection); // keep the editor selection (and its capacity) across clear()
     out.clear();
-    out.selection = selection;
+    out.selection.swap(selection);
     out.frame = options.frame;
     out.time = options.time;
     out.deltaTime = options.deltaTime;
@@ -74,20 +177,7 @@ void extract(const World& world, RenderSnapshot& out, const ExtractOptions& opti
         out.cameras.push_back({entityId(e), cam, wt.matrix, wt.previous});
     }
 
-    for (auto [e, mr, wt] : reg.view<const MeshRendererComponent, const WorldTransformComponent>().each()) {
-        if (!mr.visible || !mr.mesh.isValid() || !visible(e)) continue;
-        SnapshotMesh m;
-        m.entityId = entityId(e);
-        m.mesh = mr.mesh;
-        m.materialOffset = u32(out.materials.size());
-        m.materialCount = u32(mr.materials.size());
-        out.materials.insert(out.materials.end(), mr.materials.begin(), mr.materials.end());
-        m.world = wt.matrix;
-        m.prevWorld = wt.previous;
-        m.flags = (mr.castShadows ? kMeshCastShadows : 0u) | (mr.receiveShadows ? kMeshReceiveShadows : 0u);
-        m.layerMask = mr.layerMask;
-        out.meshes.push_back(m);
-    }
+    extractMeshes(reg, out, options, visible);
 
     i32 brightestSun = -1;
     f32 brightest = -1.0f;
@@ -133,12 +223,15 @@ void extract(const World& world, RenderSnapshot& out, const ExtractOptions& opti
         out.debugLinesOverlay.assign(o.begin(), o.end());
     }
 
-    std::vector<ExtractHook> hs;
+    thread_local std::vector<ExtractHook> hs; // copies outside the lock; capacity is kept (no per-frame allocation)
+    thread_local std::vector<ExtractHookEx> hsEx;
     {
         std::lock_guard lock(hookMutex());
-        hs = hooks();
+        hs.assign(hooks().begin(), hooks().end());
+        hsEx.assign(hooksEx().begin(), hooksEx().end());
     }
     for (ExtractHook h : hs) h(world, out);
+    for (ExtractHookEx h : hsEx) h(world, out, options);
 }
 
 void SnapshotBuffer::publish() {

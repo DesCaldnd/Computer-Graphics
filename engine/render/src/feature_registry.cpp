@@ -1,8 +1,11 @@
 #include "renderer_impl.hpp"
 
+#include "features/gpu_driven/gpu_driven.hpp"
+
 #include <oxwald/core/log.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace ox::render {
@@ -186,7 +189,10 @@ GpuViewConstants& FeatureContext::viewConstants() { return m_frame->constants; }
 VkDeviceAddress FeatureContext::viewAddress() const { return m_frame->constantsAlloc.address; }
 VkDeviceAddress FeatureContext::sceneAddress() const { return m_frame->headerAlloc.address; }
 GpuAllocation FeatureContext::allocate(u64 size, u64 alignment) { return m_frame->r->frameAlloc.allocate(size, alignment); }
-const ViewDrawLists& FeatureContext::drawLists() const { return m_frame->drawLists; }
+const ViewDrawLists& FeatureContext::drawLists() const {
+    if (!m_frame->cpuDrawListsBuilt) m_frame->r->buildCpuDrawLists(*m_frame);
+    return m_frame->drawLists;
+}
 const DefaultTextures& FeatureContext::defaults() const { return m_frame->r->cache->defaults(); }
 RenderStats& FeatureContext::stats() { return *m_frame->stats; }
 
@@ -203,8 +209,64 @@ DrawList FeatureContext::buildDrawList(const DrawFilter& filter) {
     return list;
 }
 
+DrawList FeatureContext::cullDrawList(const DrawFilter& filter, u32 instanceMultiplier) {
+    GpuDriven* gd = m_frame->r->gpuDriven.get();
+    if (gd && m_frame->gpuDriven) return gd->cull(*m_frame, filter, instanceMultiplier);
+    return buildDrawList(filter);
+}
+
+LodSelection FeatureContext::lodSelection() const {
+    const GpuViewConstants& c = m_frame->constants;
+    LodSelection s;
+    s.cameraPosition = glm::vec3(c.cameraPosition);
+    s.orthographic = (c.flags & 1u) != 0;
+    s.projScale = 0.5f * c.renderSize.y * std::abs(c.proj[1][1]);
+    const f32 pixels = m_frame->r->gpuDriven ? m_frame->r->gpuDriven->settings().lodErrorPixels : 1.0f;
+    s.thresholdPixels = pixels * std::exp2(m_frame->settings.lodBias);
+    return s;
+}
+
 void FeatureContext::drawBatches(rhi::CommandList& cmd, const DrawList& list, std::span<const rhi::PipelineHandle> pipelines,
                                  const void* pushConstants, u32 pushSize, u32 instanceMultiplier) {
+    if (list.gpuDriven()) {
+        OX_ASSERT(list.indirectMultiplier == std::max(instanceMultiplier, 1u),
+                  "indirect list culled for instanceMultiplier {}, drawn with {}", list.indirectMultiplier, instanceMultiplier);
+        GpuScene& scene = *m_frame->r->scene;
+        const bool multiDraw = m_frame->r->device->caps().multiDrawIndirect;
+        cmd.bindIndexBuffer(scene.indexBuffer());
+        rhi::PipelineHandle bound;
+        bool pushed = false;
+        constexpr u32 stride = sizeof(VkDrawIndexedIndirectCommand);
+        for (const DrawIndirectRun& r : list.indirectRuns) {
+            const rhi::PipelineHandle p = pipelines[std::min<usize>(r.variant, pipelines.size() - 1)];
+            if (!p || r.commandCount == 0) continue;
+            if (p != bound) {
+                cmd.bindPipeline(p);
+                bound = p;
+                if (!pushed) {
+                    cmd.pushConstants(pushConstants, pushSize);
+                    pushed = true;
+                }
+            }
+            const u64 offset = list.indirectOffset + u64(r.firstCommand) * stride;
+            if (list.indirectCountBuffer && r.countSlot != ~0u) {
+                cmd.drawIndexedIndirectCount(list.indirectBuffer, offset, list.indirectCountBuffer,
+                                             list.indirectCountOffset + u64(r.countSlot) * 4, r.commandCount, stride);
+                m_frame->stats->drawCalls += 1;
+                m_frame->stats->indirectDrawCalls += 1;
+            } else if (multiDraw) {
+                cmd.drawIndexedIndirect(list.indirectBuffer, offset, r.commandCount, stride);
+                m_frame->stats->drawCalls += 1;
+                m_frame->stats->indirectDrawCalls += 1;
+            } else {
+                for (u32 c = 0; c < r.commandCount; ++c) cmd.drawIndexedIndirect(list.indirectBuffer, offset + u64(c) * stride, 1, stride);
+                m_frame->stats->drawCalls += r.commandCount;
+                m_frame->stats->indirectDrawCalls += r.commandCount;
+            }
+            m_frame->stats->indirectCommands += r.commandCount;
+        }
+        return;
+    }
     if (list.batches.empty()) return;
     GpuScene& scene = *m_frame->r->scene;
     cmd.bindIndexBuffer(scene.indexBuffer());

@@ -1,0 +1,36 @@
+#version 460
+// Depth of field 4/4: full-resolution composite. Far field blends in by the full-resolution CoC (sharp in-focus
+// pixels stay untouched), the near field is laid over with its coverage.
+#include <render/postprocess/dof_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    ViewBuffer view;
+    uint color;
+    uint depth;
+    uint farTex;
+    uint nearTex;
+    uint dst;
+    float focusDistance;
+    float cocScale;  // full-res pixels
+    float maxRadius; // full-res pixels
+    vec2 size;
+    vec2 depthSize;
+});
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.size)))) return;
+    vec2 uv = (vec2(p) + 0.5) / pc.size;
+    vec3 sharp = OX_FETCH_2D(pc.color, p, 0).rgb;
+    ivec2 dp = clamp(ivec2(uv * pc.depthSize), ivec2(0), ivec2(pc.depthSize) - 1);
+    float z = oxLinearDepth(pc.view, OX_FETCH_2D(pc.depth, dp, 0).r);
+    float coc = dofCocRadius(z, pc.focusDistance, pc.cocScale, pc.maxRadius);
+    vec4 farS = OX_SAMPLE_2D_LOD(pc.farTex, OX_SAMPLER_LINEAR_CLAMP, uv, 0.0);
+    vec4 nearS = OX_SAMPLE_2D_LOD(pc.nearTex, OX_SAMPLER_LINEAR_CLAMP, uv, 0.0);
+    float farBlend = smoothstep(0.75, 2.5, coc) * farS.a;
+    vec3 c = mix(sharp, farS.rgb, farBlend);
+    c = mix(c, nearS.rgb, clamp(nearS.a, 0.0, 1.0));
+    OX_IMAGE_STORE_2D(rgba16f, pc.dst, p, vec4(ppSanitize(c), 1.0));
+}

@@ -1,0 +1,30 @@
+#version 460
+// Reference path tracer, ray query megakernel (r.PathTracing.Mode 0). Progressive: adds `samples` paths per pixel to
+// the RGBA32F accumulation (rgb sum, a = sample count) and writes the average × preExposure into SceneColorHDR.
+#include "rt_query.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(RtSceneBuffer rt; uint accum; uint sceneColor; uint width; uint height; uint frame; uint maxBounces;
+               uint samples; uint reset;);
+
+RtHit ptTraceClosest(vec3 origin, vec3 dir, float tmax, uint mask) {
+    return oxRtTraceClosest(pc.scene, pc.rt, origin, dir, 0.0, tmax, mask);
+}
+vec3 ptShadow(vec3 origin, vec3 dir, float tmax) { return oxRtShadow(pc.scene, pc.rt, origin, dir, tmax, true); }
+
+#include "path_common.glsl"
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.width, pc.height)))) return;
+    vec4 acc = pc.reset != 0u ? vec4(0.0) : OX_IMAGE_LOAD_2D(rgba32f, pc.accum, p);
+    for (uint s = 0u; s < pc.samples; ++s) {
+        uint rng = oxRtSeed(uvec2(p), pc.frame, s);
+        vec3 c = ptTracePath(p, rng);
+        if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
+        acc += vec4(c, 1.0);
+    }
+    OX_IMAGE_STORE_2D(rgba32f, pc.accum, p, acc);
+    OX_IMAGE_STORE_2D(rgba16f, pc.sceneColor, p, vec4(acc.rgb / max(acc.a, 1.0) * VIEW.preExposure, 1.0));
+}

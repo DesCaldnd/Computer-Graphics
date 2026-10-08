@@ -4,6 +4,7 @@
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/profile.hpp>
 #include <oxwald/core/services.hpp>
+#include <oxwald/render/features/postprocess/postprocess.hpp>
 #include <oxwald/render/quality.hpp>
 #include <oxwald/render/renderer.hpp>
 #include <oxwald/render/runtime_renderer.hpp>
@@ -34,6 +35,7 @@ public:
         rhi::DeviceDesc dd;
         dd.appName = "OxwaldEngine";
         dd.surface = surface.provider;
+        appendUpscalerVulkanExtensions(dd); // NGX (DLSS) extensions where DLSS can run
         std::string error;
         m_device = rhi::Device::create(dd, &error);
         if (!m_device) return makeError("Vulkan device creation failed: {}", error);
@@ -49,12 +51,17 @@ public:
             td.usage = rhi::TextureUsage::ColorAttachment | rhi::TextureUsage::Sampled | rhi::TextureUsage::TransferSrc;
             m_offscreen = m_device->createTexture(td);
         }
-        if (m_options.autoDetectQuality) applyQuality(autoDetectQuality(*m_device));
+        if (m_options.autoDetectQuality) {
+            // Scalability levels + AA/upscaler (DLSS on RTX, TAAU/FSR 1 on slower GPUs, see recommendedSettings()).
+            const BenchmarkResult bench = autoDetectQuality(*m_device);
+            if (bench.valid) applyRecommendedSettings(recommendedSettings(*m_device, bench.score));
+        }
         RendererDesc rd;
         rd.jobs = services.tryGet<JobSystem>();
         m_renderer = Renderer::create(*m_device, rd);
         m_view = m_renderer->createView({.name = "Main"});
         m_debugDraw = services.tryGet<DebugDraw>();
+        m_services = &services;
 #if OX_RENDER_HAS_ASSETS
         if (auto* am = services.tryGet<assets::AssetManager>()) {
             m_renderer->resources().setProvider(makeAssetManagerProvider(*am), rd.jobs);
@@ -84,7 +91,9 @@ public:
         const auto t0 = std::chrono::steady_clock::now();
         if (m_debugDraw) m_debugDraw->flush(ctx.dt);
         RenderSnapshot& slot = m_slots[ctx.slot % kRenderSnapshotSlots];
-        render::extract(world, slot, {.debugDraw = m_debugDraw, .time = ctx.time, .deltaTime = ctx.dt, .frame = ctx.frameIndex});
+        render::extract(world, slot,
+                        {.debugDraw = m_debugDraw, .time = ctx.time, .deltaTime = ctx.dt, .frame = ctx.frameIndex,
+                         .services = m_services});
         m_lastExtractMs.store(std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - t0).count());
     }
 
@@ -153,6 +162,7 @@ private:
     rhi::TextureHandle m_offscreen;
     ViewId m_view = 0;
     DebugDraw* m_debugDraw = nullptr;
+    Services* m_services = nullptr; // ExtractHookEx hooks (gameplay WorldRenderData bridge)
     std::array<RenderSnapshot, kRenderSnapshotSlots> m_slots;
     glm::uvec2 m_size{0, 0};
     std::atomic<u64> m_frames{0};

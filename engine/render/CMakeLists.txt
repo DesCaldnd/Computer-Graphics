@@ -28,6 +28,38 @@ else()
     target_include_directories(ox_render PUBLIC $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/engine/assets/include>)
 endif()
 
+# --- NVIDIA DLSS (postprocess-upscalers) ---
+# The nvidia-dlss overlay port always provides NVIDIA::DLSSHeaders and, on Windows/Linux, NVIDIA::DLSS (NGX + runtime).
+# dlss_ngx.cpp is linked only with the runtime and OX_ENABLE_DLSS; otherwise dlss_stub.cpp reports why DLSS is
+# unavailable and the NGX code is still compiled (never linked) by ox_dlss_syntax_check against the headers.
+find_package(nvidia-dlss CONFIG QUIET)
+set(_ox_dlss_dir ${CMAKE_CURRENT_SOURCE_DIR}/src/features/postprocess/upscalers)
+get_target_property(_render_srcs ox_render SOURCES)
+list(FILTER _render_srcs EXCLUDE REGEX "/upscalers/dlss_(ngx|stub)\\.cpp$")
+if(OX_ENABLE_DLSS AND TARGET NVIDIA::DLSS)
+    list(APPEND _render_srcs ${_ox_dlss_dir}/dlss_ngx.cpp)
+    target_link_libraries(ox_render PRIVATE NVIDIA::DLSS)
+    target_compile_definitions(ox_render PUBLIC OX_RENDER_HAS_DLSS=1)
+    if(NVIDIA_DLSS_RUNTIME_FILES)
+        set(OX_DLSS_RUNTIME_FILES ${NVIDIA_DLSS_RUNTIME_FILES} CACHE INTERNAL "NGX runtime libraries to deploy next to executables")
+    endif()
+    message(STATUS "Oxwald render: NVIDIA DLSS backend enabled")
+else()
+    list(APPEND _render_srcs ${_ox_dlss_dir}/dlss_stub.cpp)
+    if(NOT OX_ENABLE_DLSS)
+        set_source_files_properties(${_ox_dlss_dir}/dlss_stub.cpp PROPERTIES COMPILE_DEFINITIONS OX_DLSS_DISABLED_BY_OPTION=1)
+    endif()
+endif()
+set_target_properties(ox_render PROPERTIES SOURCES "${_render_srcs}")
+if(TARGET NVIDIA::DLSSHeaders AND NOT (OX_ENABLE_DLSS AND TARGET NVIDIA::DLSS))
+    add_library(ox_dlss_syntax_check OBJECT ${_ox_dlss_dir}/dlss_ngx.cpp)
+    target_link_libraries(ox_dlss_syntax_check PRIVATE NVIDIA::DLSSHeaders ox_rhi volk::volk)
+    target_include_directories(ox_dlss_syntax_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                               $<TARGET_PROPERTY:ox_render,INCLUDE_DIRECTORIES>)
+    target_compile_features(ox_dlss_syntax_check PRIVATE cxx_std_20)
+    add_dependencies(ox_render ox_dlss_syntax_check)
+endif()
+
 if(OX_BUILD_TESTS AND TARGET ox_render_tests)
     # tests/*.cpp -> ox_render_tests (CPU); tests/gpu/*.cpp -> ox_render_gpu_tests (labels render;gpu).
     get_target_property(_srcs ox_render_tests SOURCES)
@@ -64,3 +96,23 @@ function(ox_render_link_runtime)
     endif()
 endfunction()
 cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL ox_render_link_runtime)
+
+# world-skinning feature area (src/features/world): terrain / vegetation / sky need the world module and the gameplay
+# bridge (WorldRenderData, SkinnedMeshComponent palettes) needs gameplay. Both are optional and configured after
+# render, so resolve them once the whole tree is known. The sources compile to stubs without them.
+function(ox_render_link_world_skinning)
+    if(TARGET ox_world)
+        target_link_libraries(ox_render PUBLIC ox_world)
+        target_compile_definitions(ox_render PUBLIC OX_RENDER_HAS_WORLD=1)
+    endif()
+    if(TARGET ox_gameplay)
+        target_link_libraries(ox_render PRIVATE ox_gameplay)
+        target_compile_definitions(ox_render PRIVATE OX_RENDER_HAS_GAMEPLAY=1)
+    endif()
+    if(TARGET ox_render_gpu_tests AND TARGET ox_animation)
+        # Skinned-mesh golden: procedural skeleton + clip sampled with the animation runtime.
+        target_link_libraries(ox_render_gpu_tests PRIVATE ox_animation)
+        target_compile_definitions(ox_render_gpu_tests PRIVATE OX_RENDER_TEST_HAS_ANIMATION=1)
+    endif()
+endfunction()
+cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL ox_render_link_world_skinning)

@@ -1,0 +1,63 @@
+#version 460
+// Auto exposure, step 2 (one work group): average EV of the histogram between two percentiles, clamp to the
+// min/max EV100, exponential adaptation (separate speeds up/down) in EV space, write the 1×1 Exposure texture, the
+// persistent state and the CPU readback slot (pre-exposure of later frames); clears the histogram for the next frame.
+#include <render/postprocess/exposure_common.glsl>
+
+layout(local_size_x = 128) in;
+
+OX_PUSH_CONSTANTS({
+    ExposureHistogram histogram;
+    ExposureState state;
+    ExposureReadback readback;
+    uint exposureTex; // storage r32f
+    uint readbackSlot;
+    float minEV;
+    float maxEV;
+    float compensation; // EV, positive = brighter
+    float speedUp;      // EV / s
+    float speedDown;
+    float deltaTime;
+    float lowFraction;  // 0..1
+    float highFraction;
+    uint reset;
+});
+
+shared uint sBins[kExposureBins];
+
+void main() {
+    uint i = gl_LocalInvocationIndex;
+    sBins[i] = pc.histogram.bins[i];
+    pc.histogram.bins[i] = 0u;
+    barrier();
+    if (i != 0u) return;
+
+    float total = 0.0;
+    for (uint b = 0u; b < kExposureBins; ++b) total += float(sBins[b]);
+    vec4 st = pc.state.state;
+    float target = st.z;
+    if (total > 0.0) {
+        float lo = total * clamp(pc.lowFraction, 0.0, 1.0);
+        float hi = total * clamp(max(pc.highFraction, pc.lowFraction + 0.01), 0.0, 1.0);
+        float acc = 0.0, sumEV = 0.0, sumW = 0.0;
+        for (uint b = 0u; b < kExposureBins; ++b) {
+            float c = float(sBins[b]);
+            // Portion of this bin inside [lo, hi] of the cumulative distribution.
+            float inside = max(min(acc + c, hi) - max(acc, lo), 0.0);
+            sumEV += inside * exposureBinEV(b);
+            sumW += inside;
+            acc += c;
+        }
+        if (sumW > 0.0) target = sumEV / sumW;
+    }
+    target = clamp(target, pc.minEV, pc.maxEV) - pc.compensation;
+    float ev = target;
+    if (st.y > 0.5 && pc.reset == 0u) {
+        float speed = target > st.x ? pc.speedUp : pc.speedDown;
+        ev = st.x + (target - st.x) * (1.0 - exp(-max(pc.deltaTime, 0.0) * speed));
+    }
+    float exposure = exposureFromEV100(ev);
+    pc.state.state = vec4(ev, 1.0, target + pc.compensation, exposure);
+    OX_IMAGE_STORE_2D(r32f, pc.exposureTex, ivec2(0), vec4(exposure));
+    pc.readback.values[pc.readbackSlot] = exposure;
+}

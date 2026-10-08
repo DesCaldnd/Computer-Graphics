@@ -17,12 +17,17 @@
 
 #include <array>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <typeindex>
+#include <unordered_map>
 #include <vector>
 
 namespace ox {
 class World;
+class Services;
+class JobSystem;
 }
 
 namespace ox::render {
@@ -67,6 +72,18 @@ struct SnapshotEnvironment {
     i32 sunLight = -1; // index into RenderSnapshot::lights (Environment::sun or brightest directional)
     // Optional analytic sky supplied by the world module: world::PreethamSky::Gpu (8 × vec4).
     std::optional<std::array<glm::vec4, 8>> preetham;
+    // When set, the IBL is regenerated only when this key changes (plus IBL resolution / shader reloads) instead of
+    // hashing the sky constants and the quantised sun. The world sky sets it to a 1°-quantised sun/moon key so a
+    // running time of day refreshes the IBL at a throttled rate.
+    std::optional<u64> iblKey;
+};
+
+// Feature data attached to a snapshot by extract hooks (particle emitters, water surfaces, fog volumes, probes...).
+// One object per type, created on demand with RenderSnapshot::extension<T>(); clear() runs at the start of every
+// extract so the type can keep its capacity. Features read it with findExtension<T>().
+struct ISnapshotExtension {
+    virtual ~ISnapshotExtension() = default;
+    virtual void clear() = 0;
 };
 
 struct RenderSnapshot {
@@ -84,6 +101,21 @@ struct RenderSnapshot {
     std::vector<DebugVertex> debugLinesOverlay; // line list, always on top
     std::vector<u32> selection; // editor: selected entity ids (encodeEntityId), filled by the editor
 
+    // Type-erased feature data (see ISnapshotExtension). Shared pointers keep the snapshot copyable (shallow).
+    std::unordered_map<std::type_index, std::shared_ptr<ISnapshotExtension>> extensions;
+
+    template <class T>
+    T& extension() {
+        std::shared_ptr<ISnapshotExtension>& slot = extensions[std::type_index(typeid(T))];
+        if (!slot) slot = std::make_shared<T>();
+        return static_cast<T&>(*slot);
+    }
+    template <class T>
+    [[nodiscard]] const T* findExtension() const {
+        auto it = extensions.find(std::type_index(typeid(T)));
+        return it != extensions.end() ? static_cast<const T*>(it->second.get()) : nullptr;
+    }
+
     void clear();
     [[nodiscard]] i32 primaryCamera() const; // first camera with `primary`, else 0, -1 when empty
 };
@@ -94,6 +126,10 @@ struct ExtractOptions {
     f64 time = 0.0;
     f32 deltaTime = 0.0f;
     u64 frame = 0;
+    Services* services = nullptr; // engine services for ExtractHookEx hooks (runtime adapter); may be null
+    // Mesh renderers are extracted with parallelFor when set and there are more than parallelThreshold of them.
+    JobSystem* jobs = nullptr;
+    u32 parallelThreshold = 32768; // measured break-even on M4 Pro is ~30-50k meshes (docs/dev/perf.md)
 };
 
 // Game thread. Reads Camera, MeshRenderer, Light, Environment + WorldTransform (current and previous; call
@@ -104,6 +140,10 @@ void extract(const World& world, RenderSnapshot& out, const ExtractOptions& opti
 // built-in components. Register once at startup (process-wide, like component registration).
 using ExtractHook = void (*)(const World& world, RenderSnapshot& out);
 void addExtractHook(ExtractHook hook);
+// Variant receiving the extract options (services, time): integration glue that reads engine services
+// (e.g. the gameplay WorldRenderData) registers this kind.
+using ExtractHookEx = void (*)(const World& world, RenderSnapshot& out, const ExtractOptions& options);
+void addExtractHookEx(ExtractHookEx hook);
 
 // Two snapshots: the game thread writes one while the render thread reads the other.
 class SnapshotBuffer {

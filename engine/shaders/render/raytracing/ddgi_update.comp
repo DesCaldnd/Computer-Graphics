@@ -1,0 +1,58 @@
+#version 460
+// DDGI probe update, step 2: blends the probe's rays into its octahedral tile (one workgroup per probe, one thread
+// per interior texel). Default: irradiance (cosine weights, stored with gamma 1/5 for stable blending, see
+// oxDdgiIrradiance); OX_DDGI_DEPTH: mean distance + mean squared distance (cos^sharpness weights). Probes whose slot
+// changed world coordinate (volume scrolled) or were never written restart without hysteresis. No ray tracing here.
+#include <render/common/view.glsl>
+#include "ddgi.glsl"
+
+#ifdef OX_DDGI_DEPTH
+const uint TEXELS = 16u;
+layout(local_size_x = 16, local_size_y = 16) in;
+#else
+const uint TEXELS = 8u;
+layout(local_size_x = 8, local_size_y = 8) in;
+#endif
+
+OX_PUSH_CONSTANTS({ DdgiVolumeRef volume; DdgiProbeStateBuffer state; uint rayTexture; uint atlas; uint probeCount; uint pad; });
+
+void main() {
+    uint probe = gl_WorkGroupID.x;
+    DdgiVolume v = pc.volume.v;
+    if (probe >= pc.probeCount) return;
+    uvec2 texel = gl_LocalInvocationID.xy;
+    vec3 dir = oxOctDecode((vec2(texel) + 0.5) / float(TEXELS));
+    ivec4 state = pc.state.s[probe];
+    ivec3 coord = oxDdgiWorldCoord(v, probe);
+    bool reset = state.w == 0 || state.xyz != coord;
+
+    vec4 sum = vec4(0.0);
+    for (uint r = 0u; r < v.raysPerProbe; ++r) {
+        vec3 rd = oxDdgiRayDirection(v, r);
+        vec4 ray = OX_FETCH_2D(pc.rayTexture, ivec2(r, probe), 0);
+        float c = dot(dir, rd);
+#ifdef OX_DDGI_DEPTH
+        float w = pow(max(c, 0.0), v.depthSharpness);
+        float dist = min(abs(ray.a), v.spacing * 1.5); // clamp to about the probe-to-probe distance
+        sum += vec4(dist, dist * dist, 0.0, 0.0) * w;
+        sum.w += w;
+#else
+        float w = max(c, 0.0);
+        if (ray.a < 0.0) continue; // back face hits do not contribute light
+        sum += vec4(ray.rgb * w, w);
+#endif
+    }
+    ivec2 dst = ivec2(oxDdgiTileInterior(v, probe, TEXELS) + texel);
+#ifdef OX_DDGI_DEPTH
+    vec2 value = sum.w > 1e-5 ? sum.xy / sum.w : vec2(v.spacing, v.spacing * v.spacing);
+    vec2 prev = imageLoad(oxImages2D_rg16f[nonuniformEXT(pc.atlas)], dst).xy;
+    vec2 outV = reset ? value : mix(value, prev, v.hysteresis);
+    imageStore(oxImages2D_rg16f[nonuniformEXT(pc.atlas)], dst, vec4(outV, 0.0, 0.0));
+#else
+    vec3 value = sum.w > 1e-5 ? sum.rgb / sum.w : vec3(0.0);
+    value = pow(max(value, vec3(0.0)), vec3(1.0 / 5.0));
+    vec3 prev = imageLoad(oxImages2D_rgba16f[nonuniformEXT(pc.atlas)], dst).rgb;
+    vec3 outV = reset ? value : mix(value, prev, v.hysteresis);
+    imageStore(oxImages2D_rgba16f[nonuniformEXT(pc.atlas)], dst, vec4(outV, 1.0));
+#endif
+}

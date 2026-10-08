@@ -1,0 +1,137 @@
+#version 460
+// SSR ray generation + hierarchical (HiZClosest) screen-space ray march, one ray per trace pixel (full or half
+// resolution; half resolution picks one of the 4 full-resolution pixels of each 2×2 block per frame).
+// Rays: stochastic GGX (visible normals) for rough surfaces, the mirror direction below roughness 0.05.
+// Output (RGBA16F): xy = hit uv, z = pdf of the sampled direction (1 for mirror rays), w = hit confidence
+// (screen-edge / back-facing / camera-facing fades, 0 = miss → probes).
+#include <render/reflections/ssr_common.glsl>
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint depth; uint normals; uint hiz; uint hizMips; uint outHit; uint downscale; uint maxSteps;
+               float maxRoughness; float thickness; uint traceWidth; uint traceHeight; uint pad;);
+
+const ivec2 kHalfResOffsets[4] = ivec2[](ivec2(0, 0), ivec2(1, 1), ivec2(1, 0), ivec2(0, 1));
+
+float linearDepth(float d) { return oxLinearDepth(pc.view, d); }
+
+void main() {
+    ivec2 tp = ivec2(gl_GlobalInvocationID.xy);
+    if (tp.x >= int(pc.traceWidth) || tp.y >= int(pc.traceHeight)) return;
+    ivec2 size = ivec2(VIEW.renderSize.xy);
+    ivec2 p = tp * int(pc.downscale);
+    if (pc.downscale > 1u) p += kHalfResOffsets[(VIEW.frameIndex + uint(tp.x + tp.y)) & 3u];
+    p = min(p, size - 1);
+    vec4 miss = vec4(0.0);
+
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    vec4 nr = OX_FETCH_2D(pc.normals, p, 0);
+    float rough = clamp(nr.w, OX_MIN_PERCEPTUAL_ROUGHNESS, 1.0);
+    if (d <= 0.0 || rough > pc.maxRoughness) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outHit, tp, miss);
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+    vec3 Pv = oxViewPositionFromDepth(pc.view, uv, d);
+    vec3 Nw = normalize(nr.xyz);
+    vec3 Nv = normalize(mat3(VIEW.view) * Nw);
+    vec3 Vv = (VIEW.flags & OX_VIEW_ORTHOGRAPHIC) != 0u ? vec3(0.0, 0.0, 1.0) : normalize(-Pv);
+
+    // Direction.
+    float a = rough * rough;
+    vec3 Lv;
+    float pdf = 1.0;
+    float NdotV = max(dot(Nv, Vv), 1e-4);
+    if (rough < 0.05) {
+        Lv = reflect(-Vv, Nv);
+    } else {
+        vec3 t, b;
+        oxBasis(Nv, t, b);
+        vec3 Ve = vec3(dot(Vv, t), dot(Vv, b), dot(Vv, Nv));
+        vec2 u = oxRandom2(uvec2(p), VIEW.frameIndex);
+        u.x *= 0.85; // truncate the GGX tail (less noise, slightly darker grazing lobes)
+        vec3 He = oxSampleGGXVNDF(Ve, a, u);
+        vec3 H = t * He.x + b * He.y + Nv * He.z;
+        Lv = reflect(-Vv, H);
+        if (dot(Lv, Nv) <= 0.0) Lv = reflect(-Vv, Nv);
+        float NdotH = clamp(dot(Nv, normalize(Vv + Lv)), 0.0, 1.0);
+        pdf = oxVndfPdf(NdotH, NdotV, a);
+    }
+
+    // Screen-space ray (uv, device depth): device depth is linear in screen space under perspective.
+    float lin = -Pv.z;
+    vec3 origin = Pv + Nv * (0.002 + 0.0005 * lin);
+    float rayLen = max(lin * 4.0, 20.0);
+    if (Lv.z > 1e-4) rayLen = min(rayLen, (-VIEW.nearPlane * 1.05 - origin.z) / Lv.z);
+    vec3 o = oxProjectView(pc.view, origin);
+    vec3 e = oxProjectView(pc.view, origin + Lv * max(rayLen, 1e-3));
+    vec3 dir = e - o;
+    // Clip to the screen.
+    float tMax = 1.0;
+    if (dir.x > 1e-7) tMax = min(tMax, (1.0 - o.x) / dir.x);
+    if (dir.x < -1e-7) tMax = min(tMax, -o.x / dir.x);
+    if (dir.y > 1e-7) tMax = min(tMax, (1.0 - o.y) / dir.y);
+    if (dir.y < -1e-7) tMax = min(tMax, -o.y / dir.y);
+    tMax = max(tMax, 0.0);
+
+    vec2 dirPx = dir.xy * VIEW.renderSize.xy;
+    float pxLen = max(length(dirPx), 1e-4);
+    float tStart = 1.5 / pxLen;
+    float tEps = 0.02 / pxLen;
+    int maxLevel = int(pc.hizMips) - 1;
+    int level = 0;
+    float t = tStart;
+    bool hit = false;
+    vec3 hitPos = vec3(0.0);
+    float thickness = pc.thickness;
+    for (uint i = 0u; i < pc.maxSteps; ++i) {
+        if (t > tMax) break;
+        vec3 pos = o + dir * t;
+        ivec2 msize = textureSize(OX_TEX2D(pc.hiz), level);
+        vec2 cellF = pos.xy * vec2(msize);
+        ivec2 cell = clamp(ivec2(cellF), ivec2(0), msize - 1);
+        float hz = texelFetch(OX_TEX2D(pc.hiz), cell, level).r;
+        vec2 cellMin = vec2(cell) / vec2(msize);
+        vec2 cellMax = vec2(cell + 1) / vec2(msize);
+        vec2 bound = mix(cellMin, cellMax, greaterThan(dir.xy, vec2(0.0)));
+        vec2 tb = vec2(abs(dir.x) > 1e-7 ? (bound.x - o.x) / dir.x : 1e30, abs(dir.y) > 1e-7 ? (bound.y - o.y) / dir.y : 1e30);
+        float tNext = min(tb.x, tb.y) + tEps;
+        float dEnd = o.z + dir.z * min(tNext, tMax);
+        float rayFar = min(pos.z, dEnd); // reversed-Z: smaller = farther
+        if (rayFar > hz) {
+            t = tNext;
+            level = min(level + 1, maxLevel);
+            continue;
+        }
+        if (level > 0) {
+            --level;
+            continue;
+        }
+        float tHit = t;
+        if (pos.z > hz && abs(dir.z) > 1e-9) tHit = clamp(t + (hz - pos.z) / dir.z, t, tNext);
+        vec3 hp = o + dir * tHit;
+        float rayLin = linearDepth(max(hp.z, 1e-7));
+        float sceneLin = linearDepth(max(hz, 1e-7));
+        if (hz > 0.0 && rayLin - sceneLin <= thickness * (1.0 + sceneLin * 0.05)) {
+            hit = true;
+            hitPos = hp;
+            break;
+        }
+        t = tNext;
+    }
+    if (!hit) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outHit, tp, vec4(0.0, 0.0, pdf, 0.0));
+        return;
+    }
+
+    // Confidence.
+    ivec2 hitPx = clamp(ivec2(hitPos.xy * VIEW.renderSize.xy), ivec2(0), size - 1);
+    vec3 hitN = mat3(VIEW.view) * OX_FETCH_2D(pc.normals, hitPx, 0).xyz;
+    float conf = 1.0;
+    if (dot(hitN, Lv) > 0.1) conf = 0.0; // hit a surface seen from behind (silhouette / thin-object error)
+    vec2 edge = min(hitPos.xy, 1.0 - hitPos.xy);
+    conf *= clamp(min(edge.x, edge.y) / 0.06, 0.0, 1.0);
+    conf *= 1.0 - smoothstep(0.6, 0.95, Lv.z); // rays towards the camera leave the depth buffer's coverage
+    OX_IMAGE_STORE_2D(rgba16f, pc.outHit, tp, vec4(hitPos.xy, min(pdf, 60000.0), conf));
+}

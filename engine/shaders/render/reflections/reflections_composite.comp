@@ -1,0 +1,86 @@
+#version 460
+// ReflectionsSpecular: per pixel specular radiance replacing the sky IBL in the lighting pass (a = 1).
+//   sky IBL (fallback) ← local probes (clustered lists, priority order, box projection, influence blending)
+//                      ← planar reflectors (pixels lying on a reflector plane)
+//                      ← SSR (confidence-weighted)
+// rgb is radiance, not pre-exposed (render.md contract).
+#include <render/reflections/planar.glsl>
+#include <render/reflections/probes.glsl>
+#include <render/common/clusters.glsl>
+#include <render/common/lighting.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint depth; uint normals; uint outRefl; uint ssr; OxReflectionProbeBuffer probes; OxProbeClusters lists;
+               uint probeCount; uint maxPerPixel; uint flags;);
+
+const uint kFlagPlanar = 1u;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(VIEW.renderSize.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    if (d <= 0.0) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outRefl, p, vec4(0.0));
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+    vec3 P = oxWorldPositionFromDepth(pc.view, uv, d);
+    vec4 nr = OX_FETCH_2D(pc.normals, p, 0);
+    vec3 N = normalize(nr.xyz);
+    float rough = clamp(nr.w, OX_MIN_PERCEPTUAL_ROUGHNESS, 1.0);
+    vec3 camPos = VIEW.cameraPosition.xyz;
+    vec3 V = (VIEW.flags & OX_VIEW_ORTHOGRAPHIC) != 0u ? normalize(VIEW.invView[2].xyz) : normalize(camPos - P);
+    vec3 R = reflect(-V, N);
+
+    // Local probes over the sky IBL.
+    vec3 probeSum = vec3(0.0);
+    float remaining = 1.0;
+    if (pc.probeCount > 0u) {
+        float viewDepth = oxLinearDepth(pc.view, d);
+        uint cluster = oxClusterIndex(pc.view, uv, viewDepth);
+        uint clusterCount = VIEW.clusterGrid.x * VIEW.clusterGrid.y * VIEW.clusterGrid.z;
+        uint n = min(pc.lists.data[cluster], OX_MAX_PROBES_PER_CLUSTER);
+        uint used = 0u;
+        for (uint i = 0u; i < n && used < pc.maxPerPixel && remaining > 0.001; ++i) {
+            OxReflectionProbe pr = pc.probes.p[pc.lists.data[clusterCount + cluster * OX_MAX_PROBES_PER_CLUSTER + i]];
+            float w = oxProbeInfluence(pr, P);
+            if (w <= 0.0) continue;
+            vec3 dir = oxProbeDirection(pr, P, R);
+            probeSum += oxSampleProbe(pr, dir, rough) * (w * remaining);
+            remaining *= 1.0 - w;
+            ++used;
+        }
+    }
+    vec3 spec = probeSum;
+    if (remaining > 0.0) spec += oxSamplePrefiltered(pc.view, R, rough) * VIEW.iblIntensity * remaining;
+
+    // Planar reflectors.
+    float planarWeight = 0.0;
+    if ((pc.flags & kFlagPlanar) != 0u) {
+        OxPlanarReflectionBuffer pb = VIEW.planarReflections;
+        uint n = oxPlanarReflectionCount(pc.view);
+        for (uint i = 0u; i < n; ++i) {
+            OxPlanarReflection r = pb.r[i];
+            if (rough > r.params.y || dot(N, r.plane.xyz) < 0.7) continue;
+            float tolerance = max(0.02, 0.002 * oxLinearDepth(pc.view, d));
+            float w = oxPlanarReflectorCoverage(r, P, tolerance);
+            if (w <= 0.0) continue;
+            w *= 1.0 - smoothstep(r.params.y * 0.5, r.params.y, rough);
+            vec4 c = oxSamplePlanarReflection(pc.view, r, uv, N);
+            w *= c.a;
+            spec = mix(spec, c.rgb, w);
+            planarWeight = max(planarWeight, w);
+            break;
+        }
+    }
+
+    // Screen-space reflections.
+    if (pc.ssr != OX_INVALID_INDEX) {
+        vec4 s = OX_FETCH_2D(pc.ssr, p, 0);
+        float w = clamp(s.a, 0.0, 1.0) * (1.0 - planarWeight);
+        spec = mix(spec, s.rgb, w);
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.outRefl, p, vec4(spec, 1.0));
+}

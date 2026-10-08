@@ -6,6 +6,8 @@
 #include <oxwald/core/math.hpp>
 #include <oxwald/core/types.hpp>
 
+#include <algorithm>
+
 namespace ox::render {
 
 inline constexpr u32 kMaxCascades = 4;
@@ -19,7 +21,18 @@ enum GpuInstanceFlags : u32 {
     kInstanceMoved = 1u << 3, // world != previous this frame (shadow cache invalidation, velocity)
     kInstanceSelected = 1u << 4,
     kInstanceVisible = 1u << 5,
+    // Skinned by the compute skinning pass (world-skinning feature): paletteOffset / prevPaletteOffset are then the
+    // first SkinnedVertex of this frame's / the previous frame's output in GpuSceneHeader::skinnedVertices.
+    kInstanceSkinnedOutput = 1u << 6,
 };
+
+// Output of the compute skinning pass (model space, 40 bytes; render/world/skinning.comp).
+struct GpuSkinnedVertex {
+    glm::vec3 position{0.0f};
+    glm::vec3 normal{0.0f, 1.0f, 0.0f};
+    glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
+};
+static_assert(sizeof(GpuSkinnedVertex) == 40);
 
 // One drawable = one (entity, submesh) pair. Persistent buffer, updated incrementally.
 struct GpuInstance {
@@ -54,10 +67,48 @@ struct GpuMeshInfo {
 };
 static_assert(sizeof(GpuMeshInfo) == 80);
 
+// LOD chain of a submesh (GpuScene::meshLodAddress(): kMaxMeshLods entries per GpuMeshInfo index). Used by GPU-driven
+// culling (gpu_driven/cull.comp) and the CPU draw lists for screen-space LOD selection, and by meshlet culling.
+inline constexpr u32 kMaxMeshLods = 8;
+struct GpuMeshLod {
+    u32 firstIndex = 0;      // absolute, into the shared index arena
+    u32 indexCount = 0;
+    f32 error = 0.0f;        // simplification error in mesh units (0 for LOD 0)
+    u32 meshletFirst = kInvalidIndex; // u32 offset of the first Meshlet header (16 words each) in the meshlet arena
+    u32 meshletCount = 0;
+    u32 meshletVertexBase = 0;   // u32 offset of the mesh's meshletVertices in the arena
+    u32 meshletTriangleBase = 0; // u32 offset of the mesh's meshletTriangles (bytes, packed 4 per word)
+    u32 pad = 0;
+};
+static_assert(sizeof(GpuMeshLod) == 32);
+
+// Screen-space LOD selection shared by the CPU draw lists and the GPU culling shader (keep in sync with
+// oxSelectLod in gpu_driven/cull_common.glsl): the coarsest LOD whose projected simplification error stays below
+// `thresholdPixels`. projScale = pixels per world unit at distance 1 (0 = always LOD 0); orthographic views use
+// projScale as pixels per world unit without the distance division.
+struct LodSelection {
+    glm::vec3 cameraPosition{0.0f};
+    f32 projScale = 0.0f;
+    f32 thresholdPixels = 1.0f;
+    bool orthographic = false;
+};
+[[nodiscard]] inline u32 selectLod(const GpuMeshLod* lods, u32 lodCount, f32 instanceScale, f32 distance,
+                                   const LodSelection& s) {
+    if (s.projScale <= 0.0f || lodCount <= 1) return 0;
+    const f32 perUnit = s.orthographic ? s.projScale : s.projScale / std::max(distance, 1e-3f);
+    u32 lod = 0;
+    for (u32 l = 1; l < lodCount && l < kMaxMeshLods; ++l) {
+        if (lods[l].indexCount == 0 || lods[l].error * instanceScale * perUnit > s.thresholdPixels) break;
+        lod = l;
+    }
+    return lod;
+}
+
 enum GpuMaterialFlags : u32 {
     kMaterialBlendMask = 0x7u, // assets::BlendMode (Opaque, AlphaTest, Transparent, Refractive)
     kMaterialDoubleSided = 1u << 3,
     kMaterialUnlit = 1u << 4,
+    kMaterialSorted = 1u << 5, // transparent: always the sorted path (assets renderQueueOffset != 0), see translucency
 };
 
 struct GpuMaterial {
@@ -189,6 +240,16 @@ struct GpuViewConstants {
     u32 blackTexture = kInvalidIndex;
     u32 flatNormalTexture = kInvalidIndex;
     u32 pad2 = 0;
+
+    // Froxel volumetric fog (written by the volumetrics feature; all zero when it is inactive). Sample the
+    // VolumetricFog resource with render/volumetrics/fog_sample.glsl, which reads these.
+    glm::vec4 volumetricFogGrid{0.0f};     // xyz froxel grid size, w = grid far distance in metres (0 = no froxel fog)
+    glm::vec4 volumetricFogDepth{0.0f};    // x depth distribution scale, y log2(1 + far·scale), z slice jitter, w unused
+    glm::vec4 volumetricFogLighting{0.0f}; // x ambient, y directional intensity, z anisotropy (HG g), w sky distance
+
+    // Planar reflections (reflections-ao feature): address of GpuPlanarReflections (features/reflections/
+    // reflection_gpu_types.hpp, render/reflections/planar.glsl), 0 = none this frame.
+    u64 planarReflections = 0;
 };
 
 // Scene-wide buffer addresses for a frame. Passed as push constant `scene` (see common/scene.glsl).
@@ -209,7 +270,7 @@ struct GpuSceneHeader {
     u32 directionalLightCount = 0; // directional lights are stored first
     u32 shadowCount = 0;
     u32 meshCount = 0;
-    u32 pad0 = 0, pad1 = 0;
+    u64 skinnedVertices = 0; // GpuSkinnedVertex arena of the compute skinning pass (0 = none)
 };
 static_assert(sizeof(GpuSceneHeader) == 112);
 

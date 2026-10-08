@@ -1,0 +1,41 @@
+#version 460
+// Synthetic noisy signal for validating the denoiser without ray tracing hardware: stochastic screen-space ambient
+// occlusion with `samples` random cosine-distributed samples per pixel (1 = as noisy as 1-spp RTAO, hundreds =
+// reference). The per-frame `seed` changes the noise pattern, like a ray traced effect does every frame.
+#include "rt_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint depth; uint normals; uint outImg; uint width; uint height; uint scale; uint samples; uint seed;
+               float radius;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.width, pc.height)))) return;
+    ivec2 renderSize = ivec2(VIEW.renderSize.xy);
+    ivec2 gp = clamp(p * int(pc.scale) + int(pc.scale / 2u), ivec2(0), renderSize - 1);
+    float d = OX_FETCH_2D(pc.depth, gp, 0).r;
+    if (d <= 0.0) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outImg, p, vec4(1.0));
+        return;
+    }
+    vec2 uv = (vec2(gp) + 0.5) * VIEW.renderSize.zw;
+    vec3 P = oxWorldPositionFromDepth(pc.view, uv, d);
+    vec3 N = normalize(OX_FETCH_2D(pc.normals, gp, 0).xyz);
+    P += N * 0.01;
+    float occluded = 0.0;
+    for (uint s = 0u; s < pc.samples; ++s) {
+        uint rng = oxRtSeed(uvec2(p * int(pc.scale)), pc.seed, s);
+        vec3 dir = oxSampleCosineHemisphere(oxRtRandom2(rng), N);
+        vec3 q = P + dir * pc.radius * mix(0.05, 1.0, oxRtRandom(rng));
+        float dq;
+        vec2 quv = oxProjectToUv(VIEW.unjitteredViewProj, q, dq);
+        if (any(lessThan(quv, vec2(0.0))) || any(greaterThanEqual(quv, vec2(1.0))) || dq <= 0.0) continue;
+        float ds = OX_FETCH_2D(pc.depth, ivec2(quv * VIEW.renderSize.xy), 0).r;
+        float zq = oxLinearDepth(pc.view, dq);
+        float zs = ds > 0.0 ? oxLinearDepth(pc.view, ds) : 1e9;
+        if (zs < zq - 0.02 && zq - zs < pc.radius * 2.0) occluded += 1.0;
+    }
+    float ao = 1.0 - occluded / float(max(pc.samples, 1u));
+    OX_IMAGE_STORE_2D(rgba16f, pc.outImg, p, vec4(ao, ao, ao, 1.0));
+}

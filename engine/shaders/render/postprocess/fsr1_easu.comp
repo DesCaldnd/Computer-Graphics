@@ -1,0 +1,133 @@
+#version 460
+// AMD FidelityFX Super Resolution 1.0 — EASU (Edge Adaptive Spatial Upsampling), scalar FP32 port.
+//
+// Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright
+// notice and this permission notice shall be included in all copies or substantial portions of the Software.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+// WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// Differences to ffx_fsr1.h: texel fetches instead of gathers, exact reciprocals, and the input is HDR: it is
+// converted to a perceptual 0..1 range with the reversible tonemap first (as AMD recommends running FSR 1 on
+// perceptual data). Output stays tonemapped for RCAS unless `linearOut` is set.
+#include <render/postprocess/pp_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    uint src;
+    uint dst;
+    uint linearOut; // 1 = inverse tonemap the result (no RCAS afterwards)
+    uint pad;
+    vec4 inSize;  // xy size, zw 1 / size
+    vec4 outSize;
+});
+
+vec3 tap(ivec2 p) {
+    p = clamp(p, ivec2(0), ivec2(pc.inSize.xy) - 1);
+    return ppTonemap(ppSanitize(OX_FETCH_2D(pc.src, p, 0).rgb));
+}
+float lumaOf(vec3 c) { return c.b * 0.5 + (c.r * 0.5 + c.g); }
+
+// Direction is the '+' difference around 'c' (a up, b left, d right, e down); length turns gradient reversal into 0.
+void easuSet(inout vec2 dir, inout float len, float w, float lA, float lB, float lC, float lD, float lE) {
+    float dc = lD - lC;
+    float cb = lC - lB;
+    float lenX = max(abs(dc), abs(cb));
+    lenX = 1.0 / max(lenX, 1e-8);
+    float dirX = lD - lB;
+    dir.x += dirX * w;
+    lenX = clamp(abs(dirX) * lenX, 0.0, 1.0);
+    lenX *= lenX;
+    len += lenX * w;
+    float ec = lE - lC;
+    float ca = lC - lA;
+    float lenY = max(abs(ec), abs(ca));
+    lenY = 1.0 / max(lenY, 1e-8);
+    float dirY = lE - lA;
+    dir.y += dirY * w;
+    lenY = clamp(abs(dirY) * lenY, 0.0, 1.0);
+    lenY *= lenY;
+    len += lenY * w;
+}
+
+// Lanczos-2 approximation without sin/rcp/sqrt, rotated and stretched along the edge.
+void easuTap(inout vec3 aC, inout float aW, vec2 off, vec2 dir, vec2 len2, float lob, float clp, vec3 c) {
+    vec2 v;
+    v.x = off.x * dir.x + off.y * dir.y;
+    v.y = off.x * (-dir.y) + off.y * dir.x;
+    v *= len2;
+    float d2 = min(dot(v, v), clp);
+    float wB = 2.0 / 5.0 * d2 - 1.0;
+    float wA = lob * d2 - 1.0;
+    wB *= wB;
+    wA *= wA;
+    wB = 25.0 / 16.0 * wB - (25.0 / 16.0 - 1.0);
+    float w = wB * wA;
+    aC += c * w;
+    aW += w;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.outSize.xy)))) return;
+    vec2 pp = (vec2(p) + 0.5) * pc.inSize.xy * pc.outSize.zw - 0.5;
+    vec2 fp = floor(pp);
+    pp -= fp;
+    ivec2 f0 = ivec2(fp);
+    //      b c
+    //    e f g h
+    //    i j k l
+    //      n o
+    vec3 bC = tap(f0 + ivec2(0, -1)), cC = tap(f0 + ivec2(1, -1));
+    vec3 eC = tap(f0 + ivec2(-1, 0)), fC = tap(f0), gC = tap(f0 + ivec2(1, 0)), hC = tap(f0 + ivec2(2, 0));
+    vec3 iC = tap(f0 + ivec2(-1, 1)), jC = tap(f0 + ivec2(0, 1)), kC = tap(f0 + ivec2(1, 1)), lC = tap(f0 + ivec2(2, 1));
+    vec3 nC = tap(f0 + ivec2(0, 2)), oC = tap(f0 + ivec2(1, 2));
+    float bL = lumaOf(bC), cL = lumaOf(cC), eL = lumaOf(eC), fL = lumaOf(fC), gL = lumaOf(gC), hL = lumaOf(hC);
+    float iL = lumaOf(iC), jL = lumaOf(jC), kL = lumaOf(kC), lL = lumaOf(lC), nL = lumaOf(nC), oL = lumaOf(oC);
+
+    vec2 dir = vec2(0.0);
+    float len = 0.0;
+    easuSet(dir, len, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL);
+    easuSet(dir, len, pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL);
+    easuSet(dir, len, (1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL);
+    easuSet(dir, len, pp.x * pp.y, gL, jL, kL, lL, oL);
+
+    vec2 dir2 = dir * dir;
+    float dirR = dir2.x + dir2.y;
+    bool zro = dirR < 1.0 / 32768.0;
+    dirR = zro ? 1.0 : inversesqrt(dirR);
+    dir.x = zro ? 1.0 : dir.x;
+    dir *= dirR;
+    len = len * 0.5;
+    len *= len;
+    float stretch = (dir.x * dir.x + dir.y * dir.y) / max(max(abs(dir.x), abs(dir.y)), 1e-8);
+    vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+    float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
+    float clp = 1.0 / lob;
+
+    vec3 min4 = min(min(fC, gC), min(jC, kC));
+    vec3 max4 = max(max(fC, gC), max(jC, kC));
+    vec3 aC = vec3(0.0);
+    float aW = 0.0;
+    easuTap(aC, aW, vec2(0.0, -1.0) - pp, dir, len2, lob, clp, bC);
+    easuTap(aC, aW, vec2(1.0, -1.0) - pp, dir, len2, lob, clp, cC);
+    easuTap(aC, aW, vec2(-1.0, 1.0) - pp, dir, len2, lob, clp, iC);
+    easuTap(aC, aW, vec2(0.0, 1.0) - pp, dir, len2, lob, clp, jC);
+    easuTap(aC, aW, vec2(0.0, 0.0) - pp, dir, len2, lob, clp, fC);
+    easuTap(aC, aW, vec2(-1.0, 0.0) - pp, dir, len2, lob, clp, eC);
+    easuTap(aC, aW, vec2(1.0, 1.0) - pp, dir, len2, lob, clp, kC);
+    easuTap(aC, aW, vec2(2.0, 1.0) - pp, dir, len2, lob, clp, lC);
+    easuTap(aC, aW, vec2(2.0, 0.0) - pp, dir, len2, lob, clp, hC);
+    easuTap(aC, aW, vec2(1.0, 0.0) - pp, dir, len2, lob, clp, gC);
+    easuTap(aC, aW, vec2(1.0, 2.0) - pp, dir, len2, lob, clp, oC);
+    easuTap(aC, aW, vec2(0.0, 2.0) - pp, dir, len2, lob, clp, nC);
+    vec3 pix = min(max4, max(min4, aC / aW));
+    if (pc.linearOut != 0u) pix = ppTonemapInverse(clamp(pix, 0.0, 0.9998));
+    OX_IMAGE_STORE_2D(rgba16f, pc.dst, p, vec4(pix, 1.0));
+}

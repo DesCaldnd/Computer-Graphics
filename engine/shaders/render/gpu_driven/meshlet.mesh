@@ -1,0 +1,53 @@
+#version 460
+// Mesh shader of the mesh shader meshlet path: one workgroup per visible meshlet (≤ 64 vertices, ≤ 124 triangles),
+// same vertex outputs and math as passes/mesh.vert (depth prepass and forward both use this pipeline kind).
+#include "meshlet_mesh_common.glsl"
+
+layout(local_size_x = 64) in;
+layout(triangles, max_vertices = 64, max_primitives = 124) out;
+taskPayloadSharedEXT OxTaskPayload payload;
+
+layout(location = 0) out vec3 vWorldPos[];
+layout(location = 1) out vec3 vNormal[];
+layout(location = 2) out vec4 vTangent[];
+layout(location = 3) out vec2 vUv0[];
+layout(location = 4) out vec4 vColor[];
+layout(location = 5) out vec4 vCurClip[];
+layout(location = 6) out vec4 vPrevClip[];
+layout(location = 7) flat out uint vInstance[];
+
+out gl_MeshPerVertexEXT {
+    invariant vec4 gl_Position;
+} gl_MeshVerticesEXT[];
+
+void main() {
+    uint instanceId = payload.instanceId;
+    Instance inst = SCENE.instances.i[instanceId];
+    MeshLod L = pc.lods.l[inst.meshIndex * OX_MAX_MESH_LODS + payload.lod];
+    OxMeshletHeader h = oxLoadMeshletHeader(L.meshletFirst + payload.meshlets[gl_WorkGroupID.x] * 16u);
+    SetMeshOutputsEXT(h.vertexCount, h.triangleCount);
+    uint t = gl_LocalInvocationIndex;
+    uint baseVertex = uint(SCENE.meshes.m[inst.meshIndex].vertexOffset);
+    if (t < h.vertexCount) {
+        uint vertexIndex = baseVertex + SCENE.meshlets.data[L.meshletVertexBase + h.vertexOffset + t];
+        OxVertex v = oxFetchVertex(pc.scene, instanceId, vertexIndex);
+        vWorldPos[t] = v.position;
+        vNormal[t] = v.normal;
+        vTangent[t] = v.tangent;
+        vUv0[t] = v.uv0;
+        vColor[t] = v.color;
+        vInstance[t] = instanceId;
+        vCurClip[t] = VIEW.unjitteredViewProj * vec4(v.position, 1.0);
+        vPrevClip[t] = VIEW.prevUnjitteredViewProj * vec4(v.prevPosition, 1.0);
+        gl_MeshVerticesEXT[t].gl_Position = VIEW.viewProj * vec4(v.position, 1.0);
+    }
+    uint triBytes = L.meshletTriangleBase * 4u + h.triangleOffset;
+    for (uint p = t; p < h.triangleCount; p += 64u) {
+        uvec3 idx;
+        for (uint c = 0u; c < 3u; ++c) {
+            uint b = triBytes + p * 3u + c;
+            idx[c] = (SCENE.meshlets.data[b >> 2] >> ((b & 3u) * 8u)) & 0xFFu;
+        }
+        gl_PrimitiveTriangleIndicesEXT[p] = idx;
+    }
+}

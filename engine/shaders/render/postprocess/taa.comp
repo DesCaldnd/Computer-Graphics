@@ -1,0 +1,177 @@
+#version 460
+// Temporal anti-aliasing and temporal upsampling (TAAU): the same kernel resolves a jittered render-resolution
+// frame into an output-resolution history (output == render size for plain TAA).
+//
+//  * current frame: 3×3 render samples around the output pixel, each weighted by a Gaussian (Blackman-Harris fit)
+//    of its distance to the output pixel centre — the jitter decides where each sample lies;
+//  * history: reprojected with the velocity of the closest depth in the 3×3 (dilation), Catmull-Rom (5 taps);
+//  * history rectification in YCoCg of tonemapped colour: variance clipping (mean ± γσ) intersected with min/max,
+//    clipped towards the mean;
+//  * disocclusion: the velocity stored with the history at the reprojected position is compared with the current
+//    velocity (> ~1 px difference rejects the history);
+//  * accumulation: history alpha stores the accumulated sample weight (count), the blend factor is
+//    current weight / (accumulated + current), floored by r.TAA.CurrentFrameWeight; blending happens in tonemapped
+//    space (= luminance weighting) and static pixels widen the clip box (anti-flicker of sub-pixel features).
+#include <render/postprocess/pp_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    ViewBuffer view;
+    uint color;        // render res, pre-exposed HDR (jittered)
+    uint depth;        // render res
+    uint velocity;     // render res, uvCurrent - uvPrevious
+    uint historyColor; // output res: rgb pre-exposed (previous frame's pre-exposure), a = accumulated weight
+    uint historyVel;   // output res: velocity used last frame
+    uint outHistory;
+    uint outHistoryVel;
+    uint outColor;
+    uint flags;        // bit 0 history valid, bit 1 anti-flicker, bits 8.. quality
+    float exposureScale; // preExposure(current) / preExposure(previous)
+    float currentWeight;
+    vec4 inSize;       // render size, 1 / size
+    vec4 outSize;
+    vec2 jitter;       // render pixels (x right, y down)
+});
+
+float filterWeight(vec2 d) { return exp(-2.29 * dot(d, d)); }
+
+vec3 sampleColor(ivec2 p) {
+    p = clamp(p, ivec2(0), ivec2(pc.inSize.xy) - 1);
+    return ppSanitize(OX_FETCH_2D(pc.color, p, 0).rgb);
+}
+
+// Catmull-Rom history fetch with 5 bilinear taps (corners dropped).
+vec4 sampleHistoryCatmullRom(vec2 uv) {
+    vec2 pos = uv * pc.outSize.xy;
+    vec2 center = floor(pos - 0.5) + 0.5;
+    vec2 f = pos - center;
+    vec2 f2 = f * f;
+    vec2 f3 = f2 * f;
+    vec2 w0 = -0.5 * f3 + f2 - 0.5 * f;
+    vec2 w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+    vec2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
+    vec2 w3 = 0.5 * f3 - 0.5 * f2;
+    vec2 w12 = w1 + w2;
+    vec2 tc12 = (center + w2 / w12) * pc.outSize.zw;
+    vec2 tc0 = (center - 1.0) * pc.outSize.zw;
+    vec2 tc3 = (center + 2.0) * pc.outSize.zw;
+    vec4 c = vec4(0.0);
+    float wsum = 0.0;
+    float w;
+    w = w12.x * w0.y; c += OX_SAMPLE_2D_LOD(pc.historyColor, OX_SAMPLER_LINEAR_CLAMP, vec2(tc12.x, tc0.y), 0.0) * w; wsum += w;
+    w = w0.x * w12.y; c += OX_SAMPLE_2D_LOD(pc.historyColor, OX_SAMPLER_LINEAR_CLAMP, vec2(tc0.x, tc12.y), 0.0) * w; wsum += w;
+    w = w12.x * w12.y; c += OX_SAMPLE_2D_LOD(pc.historyColor, OX_SAMPLER_LINEAR_CLAMP, vec2(tc12.x, tc12.y), 0.0) * w; wsum += w;
+    w = w3.x * w12.y; c += OX_SAMPLE_2D_LOD(pc.historyColor, OX_SAMPLER_LINEAR_CLAMP, vec2(tc3.x, tc12.y), 0.0) * w; wsum += w;
+    w = w12.x * w3.y; c += OX_SAMPLE_2D_LOD(pc.historyColor, OX_SAMPLER_LINEAR_CLAMP, vec2(tc12.x, tc3.y), 0.0) * w; wsum += w;
+    return max(c / max(wsum, 1e-4), vec4(0.0));
+}
+
+// Clip `h` towards the box centre (Karis, "High quality temporal supersampling").
+vec3 clipAabb(vec3 h, vec3 mn, vec3 mx) {
+    vec3 center = 0.5 * (mx + mn);
+    vec3 extents = 0.5 * (mx - mn) + 1e-5;
+    vec3 v = h - center;
+    vec3 a = abs(v / extents);
+    float m = max(a.x, max(a.y, a.z));
+    return m > 1.0 ? center + v / m : h;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.outSize.xy)))) return;
+    uint quality = pc.flags >> 8;
+    bool historyValid = (pc.flags & 1u) != 0u;
+    bool antiFlicker = (pc.flags & 2u) != 0u;
+
+    vec2 uv = (vec2(p) + 0.5) * pc.outSize.zw;
+    vec2 inPos = uv * pc.inSize.xy; // unjittered position in render pixels
+    // Render sample i lies (unjittered) at i + 0.5 - jitter: the nearest one is floor(inPos + jitter).
+    ivec2 base = ivec2(floor(inPos + pc.jitter));
+
+    vec3 m1 = vec3(0.0), m2 = vec3(0.0), mn = vec3(1e9), mx = vec3(-1e9);
+    vec3 filtered = vec3(0.0);
+    float wsum = 0.0, wmax = 0.0;
+    float closestDepth = -1.0;
+    ivec2 closest = base;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 q = base + ivec2(x, y);
+            vec3 c = ppRgbToYCoCg(ppTonemap(sampleColor(q)));
+            vec2 d = vec2(q) + 0.5 - pc.jitter - inPos;
+            // Upsampling: kernel radius in output pixels shrinks the render-pixel footprint.
+            float w = filterWeight(d * max(pc.outSize.x * pc.inSize.z, 1.0));
+            filtered += c * w;
+            wsum += w;
+            wmax = max(wmax, w);
+            m1 += c;
+            m2 += c * c;
+            mn = min(mn, c);
+            mx = max(mx, c);
+            ivec2 qc = clamp(q, ivec2(0), ivec2(pc.inSize.xy) - 1);
+            float dz = OX_FETCH_2D(pc.depth, qc, 0).r; // reversed-Z: larger = closer
+            if (dz > closestDepth) {
+                closestDepth = dz;
+                closest = qc;
+            }
+        }
+    }
+    vec3 current = filtered / max(wsum, 1e-5);
+    // Confidence that a render sample landed near this output pixel (1 at native resolution).
+    float currentConfidence = clamp(wmax, 0.05, 1.0);
+
+    ivec2 velPixel = quality >= 2u ? closest : clamp(base, ivec2(0), ivec2(pc.inSize.xy) - 1);
+    vec2 velocity = OX_FETCH_2D(pc.velocity, velPixel, 0).rg;
+    vec2 prevUv = uv - velocity;
+
+    vec3 result = current;
+    float accumulated = currentConfidence;
+    if (historyValid && all(greaterThanEqual(prevUv, vec2(0.0))) && all(lessThanEqual(prevUv, vec2(1.0)))) {
+        vec4 hist = quality >= 2u ? sampleHistoryCatmullRom(prevUv)
+                                  : OX_SAMPLE_2D_LOD(pc.historyColor, OX_SAMPLER_LINEAR_CLAMP, prevUv, 0.0);
+        vec3 h = ppRgbToYCoCg(ppTonemap(ppSanitize(hist.rgb * pc.exposureScale)));
+        float histWeight = clamp(hist.a, 0.0, 1.0 / max(pc.currentWeight, 1e-3));
+
+        // Disocclusion: the history pixel moved differently than this one.
+        vec2 prevVelocity = OX_SAMPLE_2D_LOD(pc.historyVel, OX_SAMPLER_LINEAR_CLAMP, prevUv, 0.0).rg;
+        float velDiffPx = length((velocity - prevVelocity) * pc.inSize.xy);
+        float disocclusion = clamp((velDiffPx - 0.75) * 0.75, 0.0, 1.0);
+        histWeight *= 1.0 - disocclusion;
+
+        vec3 clipped;
+        if (quality == 0u) {
+            clipped = clamp(h, mn, mx);
+        } else {
+            vec3 mean = m1 / 9.0;
+            vec3 sigma = sqrt(abs(m2 / 9.0 - mean * mean));
+            float speedPx = length(velocity * pc.outSize.xy);
+            float stillness = antiFlicker ? clamp(1.0 - speedPx * 0.5, 0.0, 1.0) : 0.0;
+            float gamma = mix(1.0, quality >= 3u ? 1.75 : 1.4, stillness);
+            vec3 bmin = max(mn, mean - gamma * sigma);
+            vec3 bmax = min(mx, mean + gamma * sigma);
+            // Keep the box non-empty when variance and min/max disagree.
+            bmin = min(bmin, current);
+            bmax = max(bmax, current);
+            clipped = clipAabb(h, bmin, bmax);
+            // Sub-pixel features that the current samples miss in some jitter phases would be clipped away and
+            // flicker; where nothing moves, part of the unclipped history is kept (lighting changes still converge
+            // within a few frames).
+            if (antiFlicker && quality >= 2u) {
+                float relax = stillness * (quality >= 3u ? 0.75 : 0.5) * (1.0 - disocclusion);
+                clipped = mix(clipped, h, relax);
+            }
+        }
+        // History that had to be clipped far is stale: let the current frame in faster.
+        float clipDistance = length(clipped.x - h.x) / max(clipped.x + h.x, 1e-3);
+        histWeight *= 1.0 - clamp(clipDistance * 2.0, 0.0, 0.75);
+
+        float alpha = currentConfidence / max(histWeight + currentConfidence, 1e-5);
+        alpha = max(alpha, pc.currentWeight * currentConfidence);
+        result = mix(clipped, current, alpha);
+        accumulated = min(histWeight + currentConfidence, 1.0 / max(pc.currentWeight, 1e-3));
+    }
+    vec3 rgb = ppSanitize(ppTonemapInverse(clamp(ppYCoCgToRgb(result), 0.0, 0.9998)));
+    OX_IMAGE_STORE_2D(rgba16f, pc.outHistory, p, vec4(rgb, accumulated));
+    OX_IMAGE_STORE_2D(rg16f, pc.outHistoryVel, p, vec4(velocity, 0.0, 0.0));
+    OX_IMAGE_STORE_2D(rgba16f, pc.outColor, p, vec4(rgb, 1.0));
+}

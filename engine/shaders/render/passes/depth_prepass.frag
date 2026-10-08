@@ -24,7 +24,18 @@ void main() {
     uint materialIndex = instances.i[vInstance].materialIndex;
     Material m = SCENE.materials.m[materialIndex];
 #ifdef OX_ALPHA_TEST
-    if (oxMaterialAlpha(m, vUv0, vColor, VIEW.mipBias) < m.alphaCutoff) discard;
+    float alpha = oxMaterialAlpha(m, vUv0, vColor, VIEW.mipBias);
+    if ((VIEW.flags & 4u) != 0u) {
+        // Hashed alpha (Translucency feature, r.AlphaTest.Dither): alpha sharpened around the cutoff, compared with
+        // a per-pixel, per-frame threshold; TAA resolves it into smooth coverage. The forward pass (depth EQUAL)
+        // inherits the coverage.
+        float a = clamp((alpha - m.alphaCutoff) / max(fwidth(alpha), 1e-4) + 0.5, 0.0, 1.0);
+        vec2 px = gl_FragCoord.xy + 5.588238 * float(VIEW.frameIndex & 63u);
+        float threshold = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
+        if (a <= threshold) discard;
+    } else if (alpha < m.alphaCutoff) {
+        discard;
+    }
 #endif
     OxMaterialSample ms = oxSampleMaterial(m, vUv0, vColor, vNormal, vTangent, gl_FrontFacing, VIEW.mipBias);
     outNormals = vec4(ms.normal, clamp(ms.perceptualRoughness, 0.0, 1.0));

@@ -80,7 +80,7 @@ struct RenderSettings {
 
     // --- anti-aliasing / upscaling hooks (implemented by features) ---
     i32 antiAliasing = 0; // r.AntiAliasing: 0 None, 1 FXAA, 2 TAA (features read it)
-    i32 upscaler = 0;     // r.Upscaler: Off, FSR1, DLSS
+    i32 upscaler = 0;     // r.Upscaler: Off, FSR1, DLSS, TAAU
     i32 upscalerQuality = 3;
     bool rayTracing = false; // r.RayTracing (forced false when DeviceCaps lack support)
 

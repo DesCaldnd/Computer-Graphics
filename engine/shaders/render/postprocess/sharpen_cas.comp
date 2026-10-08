@@ -1,0 +1,57 @@
+#version 460
+// Contrast Adaptive Sharpening, after AMD FidelityFX CAS (sharpen-only path).
+//
+// Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+// permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright
+// notice and this permission notice shall be included in all copies or substantial portions of the Software.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+// WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// Works on HDR input by sharpening in reversible-tonemapped space.
+#include <render/postprocess/pp_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    uint src;
+    uint dst;
+    float sharpness; // 0..1
+    uint pad;
+    vec2 size;
+});
+
+vec3 tap(ivec2 p) {
+    p = clamp(p, ivec2(0), ivec2(pc.size) - 1);
+    return ppTonemap(ppSanitize(OX_FETCH_2D(pc.src, p, 0).rgb));
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.size)))) return;
+    //  a b c
+    //  d e f
+    //  g h i
+    vec3 a = tap(p + ivec2(-1, -1)), b = tap(p + ivec2(0, -1)), c = tap(p + ivec2(1, -1));
+    vec3 d = tap(p + ivec2(-1, 0)), e = tap(p), f = tap(p + ivec2(1, 0));
+    vec3 g = tap(p + ivec2(-1, 1)), h = tap(p + ivec2(0, 1)), i = tap(p + ivec2(1, 1));
+    // Soft min/max: cross + 2 × (cross + corners).
+    vec3 mnRGB = min(min(min(d, e), min(f, b)), h);
+    vec3 mnRGB2 = min(mnRGB, min(min(a, c), min(g, i)));
+    mnRGB += mnRGB2;
+    vec3 mxRGB = max(max(max(d, e), max(f, b)), h);
+    vec3 mxRGB2 = max(mxRGB, max(max(a, c), max(g, i)));
+    mxRGB += mxRGB2;
+    // Amount of sharpening from the headroom to 0 and 1 (in the 2× soft range).
+    vec3 amp = clamp(min(mnRGB, 2.0 - mxRGB) / max(mxRGB, 1e-5), 0.0, 1.0);
+    amp = sqrt(amp);
+    float peak = -1.0 / mix(8.0, 5.0, clamp(pc.sharpness, 0.0, 1.0));
+    vec3 w = amp * peak;
+    vec3 rcpW = 1.0 / (1.0 + 4.0 * w);
+    vec3 outC = clamp((b * w + d * w + f * w + h * w + e) * rcpW, 0.0, 0.9998);
+    OX_IMAGE_STORE_2D(rgba16f, pc.dst, p, vec4(ppTonemapInverse(outC), 1.0));
+}

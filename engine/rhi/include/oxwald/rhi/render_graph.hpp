@@ -59,6 +59,9 @@ public:
     PassBuilder& queue(QueueType hint);
     // Never culled (e.g. readback, debug capture, writes to memory the graph does not know about).
     PassBuilder& sideEffect();
+    // The pass's rendering scope is filled with secondary command lists only (multithreaded recording):
+    // PassContext::secondaryRendering describes the attachments for Device::secondaryCommandList().
+    PassBuilder& secondaryCommandLists();
     PassBuilder& execute(std::function<void(PassContext&)> fn);
 
 private:
@@ -214,6 +217,8 @@ class PassContext {
 public:
     CommandList& cmd;
     Device& device;
+    // Set for passes declared with secondaryCommandLists(): inheritance info for Device::secondaryCommandList().
+    const SecondaryRenderingInfo* secondaryRendering = nullptr;
 
     [[nodiscard]] TextureHandle texture(RGTexture t) const;
     [[nodiscard]] BufferHandle buffer(RGBuffer b) const;

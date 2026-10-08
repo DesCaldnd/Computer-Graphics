@@ -1,0 +1,149 @@
+#version 460
+// GPU-driven instance culling. One job = one culling view (camera phase, shadow cascade, spot/point light, ...).
+// Stages (separated by barriers, all jobs of a pass run stage by stage):
+//   0 RESET   per batch: commands ← LOD draw args with instanceCount 0
+//   1 CULL    per item:  flags / frustum / sphere / distance / two-phase HiZ occlusion, LOD selection,
+//                        slot = atomicAdd(command.instanceCount)
+//   2 PREFIX  per batch: firstInstance of each LOD command (prefix over the batch's LODs), × multiplier,
+//                        optional compaction into per-run arrays (drawIndirectCount)
+//   3 SCATTER per item:  ids[firstInstance / multiplier + slot] = instance
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#include "cull_common.glsl"
+
+layout(local_size_x = 64) in;
+// All jobs of a pass run in one dispatch per stage: gl_WorkGroupID.y selects the job.
+// Plain 64-bit addresses: an array of buffer references inside a buffer reference block crashes spirv-reflect.
+layout(buffer_reference, scalar, buffer_reference_align = 8) readonly buffer CullJobTable { uint64_t address[]; };
+OX_RENDER_PUSH(CullJobTable jobs; MeshLodBuffer lods; uint stage;);
+// The job reference is passed as a parameter rather than kept in a global variable (spirv-reflect).
+
+void count(CullJobBuffer J, uint slot, uint value) {
+    if (value != 0u) atomicAdd(J.j.counters.v[slot], value);
+}
+
+void resetBatch(CullJobBuffer J, uint b) {
+    CullBatch B = J.j.batches.b[b];
+    int vertexOffset = SCENE.meshes.m[B.meshIndex].vertexOffset;
+    for (uint l = 0u; l < B.lodCount; ++l) {
+        MeshLod m = pc.lods.l[B.meshIndex * OX_MAX_MESH_LODS + l];
+        DrawCommand c;
+        c.indexCount = m.indexCount;
+        c.instanceCount = 0u;
+        c.firstIndex = m.firstIndex;
+        c.vertexOffset = vertexOffset;
+        c.firstInstance = 0u;
+        J.j.commands.c[B.firstCommand + l] = c;
+    }
+}
+
+void cullItem(CullJobBuffer J, uint i) {
+    uvec2 item = J.j.items.i[i];
+    uint flags = J.j.flags;
+    Instance inst = SCENE.instances.i[item.x];
+    J.j.scratch.v[i * 2u] = OX_INVALID_INDEX;
+    if ((inst.flags & (1u << 5)) == 0u) return; // freed slot (kInstanceVisible)
+    vec3 c = inst.boundingSphere.xyz;
+    float r = inst.boundingSphere.w;
+    bool visible = true;
+    if ((flags & OX_CULL_FRUSTUM) != 0u) {
+        for (uint p = 0u; p < 6u; ++p) {
+            vec4 pl = J.j.planes[p];
+            visible = visible && (dot(pl.xyz, c) + pl.w >= -r);
+        }
+    }
+    if ((flags & OX_CULL_SPHERE) != 0u) {
+        vec4 s = J.j.sphere;
+        visible = visible && (distance(c, s.xyz) <= r + s.w);
+    }
+    vec4 cam = J.j.lodCamera;
+    float dist = length(c - cam.xyz) - r;
+    if ((flags & OX_CULL_DISTANCE) != 0u) visible = visible && dist <= J.j.drawDistance;
+    bool early = (flags & OX_CULL_EARLY) != 0u, late = (flags & OX_CULL_LATE) != 0u;
+    if (!early) count(J, OX_COUNTER_TESTED, 1u);
+    if (!visible) {
+        if (late) J.j.visibility.v[i] = 0u;
+        if (!early) count(J, OX_COUNTER_FRUSTUM_CULLED, 1u);
+        return;
+    }
+    if (early && J.j.visibility.v[i] == 0u) return;
+    if (late) {
+        bool occluded = oxOccludedByHiZ(J.j.viewProj, c, r, J.j.hiz, J.j.hizMips, J.j.hizSize);
+        // One atomic read-modify-write: SPIRV-Cross (MoltenVK) forwards plain loads through buffer references past
+        // later stores to the same address, which made `drawnEarly` read the new value.
+        bool drawnEarly = atomicExchange(J.j.visibility.v[i], occluded ? 0u : 1u) != 0u;
+        if (occluded) count(J, OX_COUNTER_OCCLUDED, 1u);
+        if (occluded || drawnEarly) return;
+    }
+    CullBatch B = J.j.batches.b[item.y];
+    MeshInfo mi = SCENE.meshes.m[B.meshIndex];
+    float scale = r / max(mi.boundingSphere.w, 1e-6);
+    uint lod = oxSelectLod(pc.lods, B.meshIndex, B.lodCount, scale, dist, cam, J.j.lodThreshold,
+                           J.j.lodOrtho != 0u);
+    count(J, OX_COUNTER_VISIBLE, 1u);
+    count(J, OX_COUNTER_LOD_SUM, lod);
+    if ((flags & OX_CULL_MESHLETS) != 0u && (inst.flags & OX_INSTANCE_SKINNED) == 0u &&
+        pc.lods.l[B.meshIndex * OX_MAX_MESH_LODS + lod].meshletCount > 0u) {
+        uint n = atomicAdd(J.j.meshletInstances.v[0], 1u);
+        if (n < J.j.meshletCapacity) {
+            J.j.meshletInstances.v[2u + n * 2u] = item.x;
+            J.j.meshletInstances.v[3u + n * 2u] = lod;
+            return;
+        }
+        // Over capacity: fall back to the instanced draw.
+    }
+    uint cmd = B.firstCommand + lod;
+    uint slot = atomicAdd(J.j.commands.c[cmd].instanceCount, 1u);
+    J.j.scratch.v[i * 2u] = cmd;
+    J.j.scratch.v[i * 2u + 1u] = slot;
+}
+
+void prefixBatch(CullJobBuffer J, uint b) {
+    CullBatch B = J.j.batches.b[b];
+    uint mult = max(J.j.multiplier, 1u);
+    uint running = B.idBase;
+    bool compact = (J.j.flags & OX_CULL_COMPACT) != 0u;
+    for (uint l = 0u; l < B.lodCount; ++l) {
+        uint ci = B.firstCommand + l;
+        // Every use of the loaded command precedes the store (see the note on load forwarding in cullItem).
+        DrawCommand c = J.j.commands.c[ci];
+        uint n = c.instanceCount;
+        c.firstInstance = running * mult;
+        c.instanceCount = n * mult;
+        running += n;
+        if (n > 0u) {
+            count(J, OX_COUNTER_DRAWS, 1u);
+            count(J, OX_COUNTER_TRIANGLES, c.indexCount / 3u * n);
+            if (compact) {
+                uint k = atomicAdd(J.j.runCounts.v[B.run], 1u);
+                J.j.compacted.c[B.runFirst + k] = c;
+            }
+        }
+        J.j.commands.c[ci] = c;
+    }
+}
+
+void scatterItem(CullJobBuffer J, uint i) {
+    uint cmd = J.j.scratch.v[i * 2u];
+    if (cmd == OX_INVALID_INDEX) return;
+    uint slot = J.j.scratch.v[i * 2u + 1u];
+    uint mult = max(J.j.multiplier, 1u);
+    uint base = J.j.commands.c[cmd].firstInstance / mult;
+    J.j.ids.v[base + slot] = J.j.items.i[i].x;
+}
+
+void main() {
+    CullJobBuffer J = CullJobBuffer(pc.jobs.address[gl_WorkGroupID.y]);
+    uint t = gl_GlobalInvocationID.x;
+    if (pc.stage == 0u) {
+        if (t < J.j.batchCount) resetBatch(J, t);
+        if (t < J.j.runCount) J.j.runCounts.v[t] = 0u;
+        if ((J.j.flags & OX_CULL_RESET_VISIBILITY) != 0u && t < J.j.itemCount) J.j.visibility.v[t] = 1u;
+        if (t == 0u && uint64_t(J.j.meshletInstances) != 0ul) J.j.meshletInstances.v[0] = 0u;
+    } else if (pc.stage == 1u) {
+        if (t < J.j.itemCount) cullItem(J, t);
+    } else if (pc.stage == 2u) {
+        if (t < J.j.batchCount) prefixBatch(J, t);
+    } else {
+        if (t < J.j.itemCount) scatterItem(J, t);
+    }
+}

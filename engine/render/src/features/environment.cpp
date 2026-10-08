@@ -169,14 +169,19 @@ public:
         mix(&env.skyIntensity, sizeof(f32));
         mix(&c.skyMode, sizeof(u32));
         mix(&skyKey, sizeof(skyKey));
-        if (c.skyMode == 2) mix(c.preetham, sizeof(c.preetham));
-        if (c.sunLight >= 0) {
-            const GpuLight& sun = fs.lights[usize(c.sunLight)];
-            // Quantise the sun so tiny animation steps do not regenerate every frame.
-            const glm::ivec3 qd = glm::ivec3(sun.direction * 512.0f);
-            const glm::ivec3 qc = glm::ivec3(glm::log2(glm::max(sun.color, glm::vec3(1e-6f))) * 32.0f);
-            mix(&qd, sizeof(qd));
-            mix(&qc, sizeof(qc));
+        if (snap.environment->iblKey) {
+            // Throttled by the provider (world sky): only its key, not the per-frame sky constants / sun.
+            mix(&*snap.environment->iblKey, sizeof(u64));
+        } else {
+            if (c.skyMode == 2) mix(c.preetham, sizeof(c.preetham));
+            if (c.sunLight >= 0) {
+                const GpuLight& sun = fs.lights[usize(c.sunLight)];
+                // Quantise the sun so tiny animation steps do not regenerate every frame.
+                const glm::ivec3 qd = glm::ivec3(sun.direction * 512.0f);
+                const glm::ivec3 qc = glm::ivec3(glm::log2(glm::max(sun.color, glm::vec3(1e-6f))) * 32.0f);
+                mix(&qd, sizeof(qd));
+                mix(&qc, sizeof(qc));
+            }
         }
         mix(&m_prefilteredSize, sizeof(u32));
         const u32 versions[3] = {dev.pipelineVersion(m_capture), dev.pipelineVersion(m_prefilter), dev.pipelineVersion(m_sh)};

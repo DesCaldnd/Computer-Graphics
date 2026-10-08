@@ -1,0 +1,39 @@
+#version 460
+// AO output at render resolution (R8): depth-aware bilinear upsample of the accumulated AO (or a copy at full
+// resolution), with the intensity exponent applied.
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint src; uint depth; uint dst; uint downscale; uint aoWidth; uint aoHeight; float power;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(VIEW.renderSize.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    float ao;
+    if (pc.downscale <= 1u) {
+        ao = OX_FETCH_2D(pc.src, p, 0).x;
+    } else {
+        float d = OX_FETCH_2D(pc.depth, p, 0).r;
+        float z = d > 0.0 ? oxLinearDepth(pc.view, d) : 1e6;
+        vec2 ac = (vec2(p) + 0.5) / float(pc.downscale) - 0.5;
+        ivec2 base = ivec2(floor(ac));
+        vec2 f = ac - vec2(base);
+        ivec2 aoMax = ivec2(pc.aoWidth, pc.aoHeight) - 1;
+        float sum = 0.0, wsum = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            ivec2 o = ivec2(i & 1, i >> 1);
+            ivec2 q = clamp(base + o, ivec2(0), aoMax);
+            vec2 h = OX_FETCH_2D(pc.src, q, 0).xy;
+            float wb = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+            float wd = 1.0 / (1e-3 + abs(h.y - z) / max(z, 1e-3));
+            float w = wb * wd + 1e-6;
+            sum += h.x * w;
+            wsum += w;
+        }
+        ao = sum / wsum;
+    }
+    ao = pow(clamp(ao, 0.0, 1.0), pc.power);
+    OX_IMAGE_STORE_2D(r8, pc.dst, p, vec4(ao));
+}

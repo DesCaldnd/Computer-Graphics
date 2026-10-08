@@ -1,0 +1,21 @@
+#version 460
+// Terrain normal map from the heightmap (central differences, mirrors world::Heightfield::sampleNormalAtSample) for
+// the texels of a dirty rectangle. Output RGBA8: xyz * 0.5 + 0.5, a = 1.
+#include <render/common/view.glsl>
+layout(local_size_x = 8, local_size_y = 8) in;
+OX_PUSH_CONSTANTS({ uint height; uint dst; ivec2 rectMin; ivec2 rectSize; int resolution; float heightScale; float spacing; });
+
+float h(ivec2 p) {
+    p = clamp(p, ivec2(0), ivec2(pc.resolution - 1));
+    return texelFetch(OX_TEX2D(pc.height), p, 0).r * pc.heightScale;
+}
+
+void main() {
+    ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(local, pc.rectSize))) return;
+    ivec2 p = pc.rectMin + local;
+    float dx = h(p + ivec2(1, 0)) - h(p - ivec2(1, 0));
+    float dz = h(p + ivec2(0, 1)) - h(p - ivec2(0, 1));
+    vec3 n = normalize(vec3(-dx, 2.0 * pc.spacing, -dz));
+    OX_IMAGE_STORE_2D(rgba8, pc.dst, p, vec4(n * 0.5 + 0.5, 1.0));
+}

@@ -103,15 +103,17 @@ u64 GrowableBuffer::allocate(rhi::Device& device, u64 count) {
 
 GpuScene::GpuScene(rhi::Device& device) : m_device(&device) {
     using U = rhi::BufferUsage;
-    m_positions.init(device, "scene.positions", sizeof(glm::vec3), 256 * 1024, U::Storage);
+    m_positions.init(device, "scene.positions", sizeof(glm::vec3), 256 * 1024, U::Storage | U::AccelStructInput);
     m_attributes.init(device, "scene.attributes", sizeof(assets::VertexAttributes), 256 * 1024, U::Storage);
-    m_indices.init(device, "scene.indices", sizeof(u32), 1024 * 1024, U::Index);
+    m_indices.init(device, "scene.indices", sizeof(u32), 1024 * 1024, U::Index | U::AccelStructInput);
     m_skin.init(device, "scene.skin", sizeof(assets::SkinVertex), 16 * 1024, U::Storage);
     m_meshlets.init(device, "scene.meshlets", sizeof(u32), 256 * 1024, U::Storage);
     m_meshInfoBuffer.init(device, "scene.meshInfos", sizeof(GpuMeshInfo), 4096, U::Storage);
     m_materialBuffer.init(device, "scene.materials", sizeof(GpuMaterial), 1024, U::Storage);
     m_instanceBuffer.init(device, "scene.instances", sizeof(GpuInstance), 16 * 1024, U::Storage);
+    m_meshLodBuffer.init(device, "scene.meshLods", sizeof(GpuMeshLod) * kMaxMeshLods, 4096, U::Storage);
     m_meshInfos.resize(m_meshInfoBuffer.capacity());
+    m_meshLods.resize(m_meshLodBuffer.capacity() * kMaxMeshLods);
     // Slot 0 = default material (white, roughness 0.5).
     const u32 def = allocateMaterial();
     OX_ASSERT(def == 0);
@@ -120,7 +122,7 @@ GpuScene::GpuScene(rhi::Device& device) : m_device(&device) {
 
 GpuScene::~GpuScene() {
     for (GrowableBuffer* b : {&m_positions, &m_attributes, &m_indices, &m_skin, &m_meshlets, &m_meshInfoBuffer,
-                              &m_materialBuffer, &m_instanceBuffer}) {
+                              &m_materialBuffer, &m_instanceBuffer, &m_meshLodBuffer}) {
         b->release(*m_device);
     }
 }
@@ -165,7 +167,12 @@ bool GpuScene::uploadMesh(const assets::MeshData& mesh, GpuMesh& out) {
     }
     out.submeshCount = u32(mesh.submeshes.size());
     out.firstMeshInfo = u32(m_meshInfoBuffer.allocate(dev, out.submeshCount));
+    const u64 lodOffset = m_meshLodBuffer.allocate(dev, out.submeshCount);
+    OX_ASSERT(lodOffset == out.firstMeshInfo, "mesh LOD table out of sync");
     if (m_meshInfos.size() < m_meshInfoBuffer.capacity()) m_meshInfos.resize(m_meshInfoBuffer.capacity());
+    if (m_meshLods.size() < m_meshLodBuffer.capacity() * kMaxMeshLods) m_meshLods.resize(m_meshLodBuffer.capacity() * kMaxMeshLods);
+    ++m_structureVersion;
+    const u64 meshletWords = mesh.meshlets.size() * sizeof(assets::Meshlet) / 4;
     out.bounds = mesh.bounds;
     out.boundingSphere = mesh.boundingSphere;
     for (u32 s = 0; s < out.submeshCount; ++s) {
@@ -185,8 +192,25 @@ bool GpuScene::uploadMesh(const assets::MeshData& mesh, GpuMesh& out) {
         mi.meshletCount = 0;
         for (const assets::Meshlet& m : mesh.meshlets) mi.meshletCount += m.submesh == s ? 1u : 0u;
         mi.skinOffset = out.skinOffset == ~0ull ? kInvalidIndex : u32(out.skinOffset);
-        mi.lodCount = std::max<u32>(1, u32(sm.lods.size()));
+        mi.lodCount = std::clamp<u32>(u32(sm.lods.size()), 1, kMaxMeshLods);
         m_meshInfos[out.firstMeshInfo + s] = mi;
+        GpuMeshLod* lods = &m_meshLods[usize(out.firstMeshInfo + s) * kMaxMeshLods];
+        for (u32 l = 0; l < kMaxMeshLods; ++l) {
+            GpuMeshLod gl;
+            if (l < sm.lods.size() || (l == 0 && sm.lods.empty())) {
+                const assets::MeshLod ml = sm.lods.empty() ? lod : sm.lods[l];
+                gl.firstIndex = u32(out.indexOffset) + ml.indexOffset;
+                gl.indexCount = ml.indexCount;
+                gl.error = ml.error;
+                if (out.meshletOffset != ~0ull && ml.meshletCount > 0) {
+                    gl.meshletFirst = u32(out.meshletOffset) + ml.meshletOffset * u32(sizeof(assets::Meshlet) / 4);
+                    gl.meshletCount = ml.meshletCount;
+                    gl.meshletVertexBase = u32(out.meshletOffset + meshletWords);
+                    gl.meshletTriangleBase = u32(out.meshletOffset + meshletWords + mesh.meshletVertices.size());
+                }
+            }
+            lods[l] = gl;
+        }
         m_dirtyMeshInfos.push_back(out.firstMeshInfo + s);
         out.submeshMaterialSlots.push_back(sm.materialSlot);
         out.slotMaterials.push_back(sm.materialSlot < mesh.materials.size() ? mesh.materials[sm.materialSlot].material : Uuid{});
@@ -202,7 +226,11 @@ void GpuScene::freeMesh(GpuMesh& mesh) {
     }
     if (mesh.indexCount) m_indices.free(mesh.indexOffset, mesh.indexCount);
     if (mesh.skinOffset != ~0ull) m_skin.free(mesh.skinOffset, mesh.vertexCount);
-    if (mesh.submeshCount) m_meshInfoBuffer.free(mesh.firstMeshInfo, mesh.submeshCount);
+    if (mesh.submeshCount) {
+        m_meshInfoBuffer.free(mesh.firstMeshInfo, mesh.submeshCount);
+        m_meshLodBuffer.free(mesh.firstMeshInfo, mesh.submeshCount);
+    }
+    ++m_structureVersion;
     // Meshlet ranges are not tracked by size here; they leak until the arena is rebuilt (rare: hot reload only).
     mesh = {};
 }
@@ -219,7 +247,12 @@ u32 GpuScene::allocateMaterial() {
 }
 
 void GpuScene::setMaterial(u32 index, const GpuMaterial& material) {
-    if (m_materials.size() <= index) m_materials.resize(index + 1);
+    if (m_materials.size() <= index) {
+        m_materials.resize(index + 1);
+        ++m_structureVersion;
+    }
+    constexpr u32 kBatchFlags = kMaterialBlendMask | kMaterialDoubleSided;
+    if ((m_materials[index].flags & kBatchFlags) != (material.flags & kBatchFlags)) ++m_structureVersion;
     m_materials[index] = material;
     m_dirtyMaterials.push_back(index);
 }
@@ -277,6 +310,7 @@ void GpuScene::updateInstances(const RenderSnapshot& snapshot, GpuResourceCache&
                 }
                 m_instanceSlots.emplace(key, slot);
                 m_instances[slot].flags = ~0u; // force upload
+                ++m_structureVersion;
             } else {
                 slot = it->second;
             }
@@ -302,11 +336,25 @@ void GpuScene::updateInstances(const RenderSnapshot& snapshot, GpuResourceCache&
                 inst.flags |= kInstanceSkinned;
                 inst.paletteOffset = sm.paletteOffset;
                 inst.prevPaletteOffset = sm.prevPaletteOffset != ~0u ? sm.prevPaletteOffset : sm.paletteOffset;
+                u32 cur = 0, prev = 0;
+                if (m_skinResolver && m_skinResolver(sm, *gm, s, m_updateStamp, cur, prev)) {
+                    inst.flags |= kInstanceSkinnedOutput;
+                    inst.paletteOffset = cur;
+                    inst.prevPaletteOffset = prev;
+                }
                 // Skinned bounds are not known: inflate conservatively.
                 inst.boundingSphere.w *= 2.0f;
                 inst.flags |= kInstanceMoved;
             }
             inst.entityId = sm.entityId;
+            {
+                const GpuInstance& old = m_instances[slot];
+                constexpr u32 kBatchFlags = kInstanceVisible | kInstanceCastShadows;
+                if (old.meshIndex != inst.meshIndex || old.materialIndex != inst.materialIndex ||
+                    (old.flags & kBatchFlags) != (inst.flags & kBatchFlags)) {
+                    ++m_structureVersion;
+                }
+            }
             if (std::memcmp(&inst, &m_instances[slot], sizeof(GpuInstance)) != 0) {
                 m_instances[slot] = inst;
                 markInstanceDirty(slot);
@@ -332,6 +380,7 @@ void GpuScene::updateInstances(const RenderSnapshot& snapshot, GpuResourceCache&
             markInstanceDirty(slot);
             m_freeInstances.push_back(slot);
             it = m_instanceSlots.erase(it);
+            ++m_structureVersion;
         } else {
             ++it;
         }
@@ -372,6 +421,8 @@ void GpuScene::recordUploads(rhi::CommandList& cmd, const std::function<GpuAlloc
     stage(m_dirtyInstances, m_instances.data(), sizeof(GpuInstance), m_instanceBuffer.buffer());
     std::fill(m_instanceDirtyFlag.begin(), m_instanceDirtyFlag.end(), 0);
     stage(m_dirtyMaterials, m_materials.data(), sizeof(GpuMaterial), m_materialBuffer.buffer());
+    std::vector<u32> dirtyLods = m_dirtyMeshInfos;
+    stage(dirtyLods, m_meshLods.data(), sizeof(GpuMeshLod) * kMaxMeshLods, m_meshLodBuffer.buffer());
     stage(m_dirtyMeshInfos, m_meshInfos.data(), sizeof(GpuMeshInfo), m_meshInfoBuffer.buffer());
     // Previous frames (same queue) may still read these buffers: order the copies after them.
     cmd.memoryBarrier(rhi::Access::General, rhi::Access::TransferWrite);
@@ -387,6 +438,7 @@ void GpuScene::fillHeader(GpuSceneHeader& h) const {
     h.attributes = m_attributes.address();
     h.skin = m_skin.address();
     h.meshlets = m_meshlets.address();
+    h.skinnedVertices = m_skinnedVertices;
     h.instanceCount = u32(m_instances.size());
     h.materialCount = u32(m_materials.size());
     h.meshCount = u32(m_meshInfoBuffer.capacity());
@@ -407,11 +459,17 @@ struct SortItem {
     u64 key;
     u32 instance;
     f32 depth;
+    u32 lod;
 };
 
+// Batch key: variant (2 bits) | LOD (3) | mesh index (27) | material (32).
+u64 batchKey(u32 variant, u32 lod, u32 mesh, u32 material) {
+    return (u64(variant) << 62) | (u64(lod & 7u) << 59) | (u64(mesh & 0x7FFFFFFu) << 32) | u64(material);
+}
+
 void groupBatches(std::vector<SortItem>& items, bool sortBackToFront, const std::vector<GpuInstance>& instances,
-                  const std::vector<GpuMeshInfo>& meshes, const std::vector<GpuMaterial>& materials, DrawBucket bucket,
-                  DrawList& out, std::vector<u32>& ids) {
+                  const std::vector<GpuMeshInfo>& meshes, const std::vector<GpuMeshLod>& lods,
+                  const std::vector<GpuMaterial>& materials, DrawBucket bucket, DrawList& out, std::vector<u32>& ids) {
     if (sortBackToFront) {
         std::sort(items.begin(), items.end(), [](const SortItem& a, const SortItem& b) { return a.depth > b.depth; });
     } else {
@@ -426,14 +484,15 @@ void groupBatches(std::vector<SortItem>& items, bool sortBackToFront, const std:
         }
         const GpuInstance& inst = instances[items[i].instance];
         const GpuMeshInfo& mi = meshes[inst.meshIndex];
+        const GpuMeshLod& ml = lods[usize(inst.meshIndex) * kMaxMeshLods + items[i].lod];
         const GpuMaterial& mat = materials[inst.materialIndex];
         DrawBatch b;
         b.meshIndex = inst.meshIndex;
         b.materialIndex = inst.materialIndex;
         b.firstInstance = u32(ids.size());
         b.instanceCount = u32(j - i);
-        b.firstIndex = mi.firstIndex;
-        b.indexCount = mi.indexCount;
+        b.firstIndex = ml.firstIndex;
+        b.indexCount = ml.indexCount;
         b.vertexOffset = mi.vertexOffset;
         b.variant = (bucket == DrawBucket::Masked ? kVariantAlphaTest : 0u) |
                     ((mat.flags & kMaterialDoubleSided) ? kVariantDoubleSided : 0u);
@@ -441,17 +500,23 @@ void groupBatches(std::vector<SortItem>& items, bool sortBackToFront, const std:
         for (usize k = i; k < j; ++k) ids.push_back(items[k].instance);
         out.batches.push_back(b);
         out.instanceCount += b.instanceCount;
-        out.triangleCount += u64(mi.indexCount / 3) * b.instanceCount;
+        out.triangleCount += u64(ml.indexCount / 3) * b.instanceCount;
         i = j;
     }
 }
 
 } // namespace
 
+struct GpuScene::DrawListScratch {
+    std::vector<SortItem> items[u32(DrawBucket::Count)];
+};
+
 void GpuScene::buildDrawList(const DrawFilter& filter, DrawList& out, std::vector<u32>& ids, DrawBucket only) const {
     OX_PROFILE_ZONE();
     out = {};
-    std::vector<SortItem> items[u32(DrawBucket::Count)];
+    if (!m_scratch) m_scratch = std::make_unique<DrawListScratch>();
+    auto& items = m_scratch->items;
+    for (auto& v : items) v.clear();
     for (u32 i = 0; i < m_instances.size(); ++i) {
         const GpuInstance& inst = m_instances[i];
         if (!(inst.flags & kInstanceVisible)) continue;
@@ -464,21 +529,24 @@ void GpuScene::buildDrawList(const DrawFilter& filter, DrawList& out, std::vecto
         if (filter.sphere && !filter.sphere->intersects(sphere)) continue;
         const u32 variant = (bucket == DrawBucket::Masked ? 1u : 0u) |
                             ((m_materials[inst.materialIndex].flags & kMaterialDoubleSided) ? 2u : 0u);
+        const u32 lod = filter.lod ? instanceLod(inst, *filter.lod) : 0u;
         // Shadow lists batch by mesh only (material only matters for alpha test).
-        const u64 key = (u64(variant) << 60) | (u64(inst.meshIndex) << 30) | (bucket == DrawBucket::Masked ? inst.materialIndex : 0u);
-        items[u32(bucket)].push_back({key, i, glm::length(glm::vec3(inst.boundingSphere) - filter.sortOrigin)});
+        const u64 key = batchKey(variant, lod, inst.meshIndex, bucket == DrawBucket::Masked ? inst.materialIndex : 0u);
+        items[u32(bucket)].push_back({key, i, glm::length(glm::vec3(inst.boundingSphere) - filter.sortOrigin), lod});
     }
     for (u32 b = 0; b < u32(DrawBucket::Count); ++b) {
         if (items[b].empty()) continue;
-        groupBatches(items[b], false, m_instances, m_meshInfos, m_materials, DrawBucket(b), out, ids);
+        groupBatches(items[b], false, m_instances, m_meshInfos, m_meshLods, m_materials, DrawBucket(b), out, ids);
     }
 }
 
 void GpuScene::buildViewDrawLists(const Frustum& frustum, const glm::vec3& cameraPos, ViewDrawLists& out,
                                   std::vector<u32> (&ids)[u32(DrawBucket::Count)], f32 drawDistance,
-                                  bool frustumCulling) const {
+                                  bool frustumCulling, const LodSelection* lodSel) const {
     OX_PROFILE_ZONE();
-    std::vector<SortItem> items[u32(DrawBucket::Count)];
+    if (!m_scratch) m_scratch = std::make_unique<DrawListScratch>();
+    auto& items = m_scratch->items;
+    for (auto& v : items) v.clear();
     for (u32 i = 0; i < m_instances.size(); ++i) {
         const GpuInstance& inst = m_instances[i];
         if (!(inst.flags & kInstanceVisible)) continue;
@@ -489,15 +557,30 @@ void GpuScene::buildViewDrawLists(const Frustum& frustum, const glm::vec3& camer
         const GpuMaterial& mat = m_materials[inst.materialIndex];
         const DrawBucket bucket = bucketFor(mat);
         const u32 variant = (bucket == DrawBucket::Masked ? 1u : 0u) | ((mat.flags & kMaterialDoubleSided) ? 2u : 0u);
-        const u64 key = (u64(variant) << 60) | (u64(inst.meshIndex) << 30) | inst.materialIndex;
-        items[u32(bucket)].push_back({key, i, dist});
+        const u32 lod = lodSel ? instanceLod(inst, *lodSel) : 0u;
+        const u64 key = batchKey(variant, lod, inst.meshIndex, inst.materialIndex);
+        items[u32(bucket)].push_back({key, i, dist, lod});
     }
     for (u32 b = 0; b < u32(DrawBucket::Count); ++b) {
-        out.buckets[b] = {};
+        DrawList& l = out.buckets[b]; // reuse capacity
+        l.batches.clear();
+        l.instanceIds = 0;
+        l.instanceCount = 0;
+        l.triangleCount = 0;
         ids[b].clear();
         const bool backToFront = b == u32(DrawBucket::Transparent) || b == u32(DrawBucket::Refractive);
-        groupBatches(items[b], backToFront, m_instances, m_meshInfos, m_materials, DrawBucket(b), out.buckets[b], ids[b]);
+        groupBatches(items[b], backToFront, m_instances, m_meshInfos, m_meshLods, m_materials, DrawBucket(b),
+                     out.buckets[b], ids[b]);
     }
+}
+
+u32 GpuScene::instanceLod(const GpuInstance& inst, const LodSelection& s) const {
+    const GpuMeshInfo& mi = m_meshInfos[inst.meshIndex];
+    if (mi.lodCount <= 1 || s.projScale <= 0.0f) return 0;
+    const f32 meshRadius = std::max(mi.boundingSphere.w, 1e-6f);
+    const f32 scale = inst.boundingSphere.w / meshRadius;
+    const f32 dist = glm::length(glm::vec3(inst.boundingSphere) - s.cameraPosition) - inst.boundingSphere.w;
+    return selectLod(meshLods(inst.meshIndex), mi.lodCount, scale, dist, s);
 }
 
 GpuScene::Stats GpuScene::stats() const {

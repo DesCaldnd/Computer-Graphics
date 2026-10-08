@@ -14,3 +14,8 @@
 - gameplay: one script per entity; child colliders not merged into parent bodies; raycasts empty in edit mode.
 - rhi/vk-bootstrap: creating a windowed device after a headless one in the same process crashes in get_present_queue_index (editor works around it).
 - editor/vcpkg: vcpkg app-local dylib copy breaks ad-hoc code signature; editor CMake re-signs after build. Static Qt links its own MoltenVK; ICD manifest points to Qt's copy.
+- render/postprocess: one unreproducible SEGFAULT in `PostProcessTest.MotionBlurOnMovingObject` during a full -j4 run while other teams were mid-edit — re-run stress after wave 3.
+- render/postprocess: DLSS jitter sign convention to verify with NGX debug overlay on RTX; NGX runtime libs (`NVIDIA_DLSS_RUNTIME_FILES`) not yet deployed next to executables.
+- scene: CameraComponent lacks focus distance / focal length (DoF uses PostProcessVolume values).
+- MoltenVK: copying a GLSL struct containing a 64-bit buffer_reference by value yields zero reads (workaround: access through pc directly).
+- render: renderToImage ignores grid/debug-draw/selection flags (editor works around it); viewport asset loads synchronous on UI thread.

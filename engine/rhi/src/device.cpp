@@ -1,5 +1,7 @@
 #include "device_impl.hpp"
 
+#include <thread>
+
 #include <oxwald/core/assert.hpp>
 #include <oxwald/core/log.hpp>
 #include <oxwald/rhi/environment.hpp>
@@ -186,6 +188,9 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
             ib.enable_extension(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
         }
     }
+    for (const std::string& ext : desc.optionalInstanceExtensions) {
+        if (sysInfo->is_extension_available(ext.c_str())) ib.enable_extension(ext.c_str());
+    }
     auto instRet = ib.build();
     if (!instRet) {
         error = "instance: " + instRet.error().message();
@@ -275,6 +280,11 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
     const bool hasRtPipeline = hasAS && want(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
     const bool hasMesh = desc.enableMeshShaders && want(VK_EXT_MESH_SHADER_EXTENSION_NAME);
     const bool hasFsr = want(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    for (const std::string& ext : desc.optionalDeviceExtensions) {
+        const bool already = std::any_of(enableExts.begin(), enableExts.end(),
+                                         [&](const char* e) { return ext == e; });
+        if (!already) want(ext.c_str());
+    }
 
     // ---------------- features: supported ∩ wanted ----------------
     VkPhysicalDeviceVulkan11Features sup11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
@@ -690,6 +700,7 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
     s.frames.resize(s.desc.framesInFlight);
     for (u32 i = 0; i < s.frames.size(); ++i) {
         FrameContext& f = s.frames[i];
+        f.secondary = std::make_unique<std::array<SecondaryPool, Device::kMaxRecordingThreads>>();
         for (u32 q = 0; q < kQueueTypeCount; ++q) {
             VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
             pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
@@ -737,11 +748,25 @@ Device::~Device() {
         return;
     }
     vkDeviceWaitIdle(s.device);
+    // Background pipeline compiles reference the device state: let them finish, then drop their results.
+    while (s.asyncPipelinesInFlight.load() > 0) std::this_thread::yield();
+    for (auto& r : s.asyncPipelineResults) {
+        if (r.pipeline) vkDestroyPipeline(s.device, r.pipeline, nullptr);
+    }
+    s.asyncPipelineResults.clear();
     savePipelineCache();
     destroyTracyContext(s);
     for (FrameContext& f : s.frames) {
         f.lists.clear();
         for (VkCommandPool p : f.pools) vkDestroyCommandPool(s.device, p, nullptr);
+        if (f.secondary) {
+            for (SecondaryPool& sp : *f.secondary) {
+                sp.lists.clear();
+                for (VkCommandPool p : sp.pools) {
+                    if (p) vkDestroyCommandPool(s.device, p, nullptr);
+                }
+            }
+        }
         if (f.queryPool) vkDestroyQueryPool(s.device, f.queryPool, nullptr);
     }
     s.frames.clear();
@@ -849,6 +874,7 @@ void DeviceState::collectGarbage(bool all) {
 
 namespace detail {
 u32 reloadShadersImpl(Device& device, DeviceState& s, bool force);
+void publishAsyncPipelines(Device& device, DeviceState& s);
 }
 
 void Device::beginFrame() {
@@ -878,12 +904,21 @@ void Device::beginFrame() {
         f.used[q] = 0;
     }
     f.lists.clear();
+    for (SecondaryPool& sp : *f.secondary) {
+        if (sp.lists.empty()) continue;
+        for (u32 q = 0; q < kQueueTypeCount; ++q) {
+            if (sp.pools[q]) OX_VK_CHECK(vkResetCommandPool(s.device, sp.pools[q], 0));
+            sp.used[q] = 0;
+        }
+        sp.lists.clear();
+    }
     f.frameNumber = s.frameNumber;
     s.inFrame = true;
     s.collectGarbage(false);
     if (s.desc.shaderHotReload) {
         reloadShadersImpl(*this, s, false);
     }
+    publishAsyncPipelines(*this, s);
 }
 
 void Device::endFrame() {
@@ -918,6 +953,51 @@ CommandList& Device::commandList(QueueType queue, std::string_view debugName) {
     if (!debugName.empty()) setDebugName(VK_OBJECT_TYPE_COMMAND_BUFFER, u64(cb), debugName);
     CommandList& list = f.lists.emplace_back(*this, cb, queue);
     list.m_frameSlot = i32(frameIndex());
+    return list;
+}
+
+CommandList& Device::secondaryCommandList(u32 thread, const SecondaryRenderingInfo& info, QueueType queue) {
+    DeviceState& s = *m_s;
+    OX_ASSERT(s.inFrame, "secondaryCommandList outside beginFrame/endFrame");
+    OX_ASSERT(thread < kMaxRecordingThreads, "recording thread slot {} out of range", thread);
+    SecondaryPool& sp = (*s.frames[frameIndex()].secondary)[thread];
+    const u32 q = u32(queue);
+    if (!sp.pools[q]) {
+        VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        pi.queueFamilyIndex = s.queue(queue).family;
+        OX_VK_CHECK(vkCreateCommandPool(s.device, &pi, nullptr, &sp.pools[q]));
+    }
+    if (sp.used[q] == sp.buffers[q].size()) {
+        VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        ai.commandPool = sp.pools[q];
+        ai.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+        ai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        OX_VK_CHECK(vkAllocateCommandBuffers(s.device, &ai, &cb));
+        sp.buffers[q].push_back(cb);
+    }
+    VkCommandBuffer cb = sp.buffers[q][sp.used[q]++];
+    VkCommandBufferInheritanceRenderingInfo ri{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO};
+    ri.viewMask = info.viewMask;
+    ri.colorAttachmentCount = u32(info.colorFormats.size());
+    ri.pColorAttachmentFormats = info.colorFormats.data();
+    ri.depthAttachmentFormat = info.depthFormat;
+    ri.stencilAttachmentFormat = info.stencilFormat;
+    ri.rasterizationSamples = VkSampleCountFlagBits(std::max(1u, info.samples));
+    VkCommandBufferInheritanceInfo ii{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+    ii.pNext = &ri;
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT | VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+    bi.pInheritanceInfo = &ii;
+    OX_VK_CHECK(vkBeginCommandBuffer(cb, &bi));
+    CommandList& list = sp.lists.emplace_back(*this, cb, queue);
+    list.m_secondary = true;
+    if (info.area.extent.width > 0) {
+        list.setViewport(f32(info.area.offset.x), f32(info.area.offset.y), f32(info.area.extent.width),
+                         f32(info.area.extent.height));
+        list.setScissor(info.area.offset.x, info.area.offset.y, info.area.extent.width, info.area.extent.height);
+    }
     return list;
 }
 

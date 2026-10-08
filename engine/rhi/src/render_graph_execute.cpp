@@ -206,8 +206,10 @@ void RenderGraph::Impl::recordPass(CommandList& cmd, Device& device, const RGPla
 
     emitBarriers(*this, device, cmd, planned.before);
     const bool rendering = !decl.colors.empty() || decl.depth.has_value();
+    SecondaryRenderingInfo secondaryInfo;
     if (rendering) {
         RenderingDesc rd;
+        rd.secondaryContents = decl.secondary;
         for (const RGAttachmentDecl& a : decl.colors) {
             ColorAttachment c;
             c.texture = textureHandle(a.resource);
@@ -230,9 +232,26 @@ void RenderGraph::Impl::recordPass(CommandList& cmd, Device& device, const RGPla
             rd.depth = d;
         }
         cmd.beginRendering(rd);
+        if (decl.secondary) {
+            for (const ColorAttachment& c : rd.colors) secondaryInfo.colorFormats.push_back(device.desc(c.texture).format);
+            VkExtent2D extent{0, 0};
+            if (!rd.colors.empty()) {
+                const TextureDesc& t = device.desc(rd.colors[0].texture);
+                extent = {std::max(1u, t.width >> rd.colors[0].mip), std::max(1u, t.height >> rd.colors[0].mip)};
+            }
+            if (rd.depth) {
+                const TextureDesc& t = device.desc(rd.depth->texture);
+                const FormatInfo fi = formatInfo(t.format);
+                if (fi.depth) secondaryInfo.depthFormat = t.format;
+                if (fi.stencil) secondaryInfo.stencilFormat = t.format;
+                if (extent.width == 0) extent = {std::max(1u, t.width >> rd.depth->mip), std::max(1u, t.height >> rd.depth->mip)};
+            }
+            secondaryInfo.area = {{0, 0}, extent};
+        }
     }
     if (decl.fn) {
         PassContext ctx(cmd, device, *this);
+        if (decl.secondary && rendering) ctx.secondaryRendering = &secondaryInfo;
         decl.fn(ctx);
     }
     if (rendering) cmd.endRendering();

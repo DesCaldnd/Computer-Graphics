@@ -1,6 +1,7 @@
 #include "device_impl.hpp"
 
 #include <oxwald/core/assert.hpp>
+#include <oxwald/core/jobs.hpp>
 #include <oxwald/core/log.hpp>
 #include <oxwald/rhi/format.hpp>
 
@@ -14,6 +15,10 @@ namespace fs = std::filesystem;
 using namespace detail;
 
 namespace {
+
+// Build errors go to DeviceState::lastPipelineError, except on async compile jobs (thread-local sink: no data race).
+thread_local std::string* tlsPipelineError = nullptr;
+std::string& pipelineError(DeviceState& s) { return tlsPipelineError ? *tlsPipelineError : s.lastPipelineError; }
 
 struct CompiledStage {
     VkShaderModule module = VK_NULL_HANDLE;
@@ -123,13 +128,21 @@ VkPipeline buildGraphics(Device& device, DeviceState& s, PipelineRecord& rec) {
     const bool meshPipeline = !d.mesh.empty();
     if (meshPipeline) {
         if (!s.caps.meshShader) {
-            s.lastPipelineError = std::format("'{}': mesh shaders are not supported", d.name);
+            pipelineError(s) = std::format("'{}': mesh shaders are not supported", d.name);
             return VK_NULL_HANDLE;
         }
         if (!d.task.empty() && set.add(d.task, ShaderStage::Task, limit) < 0) goto fail;
         if (set.add(d.mesh, ShaderStage::Mesh, limit) < 0) goto fail;
     } else if (set.add(d.vertex, ShaderStage::Vertex, limit) < 0) {
         goto fail;
+    }
+    if (!d.tessControl.empty() || !d.tessEval.empty()) {
+        if (!s.caps.tessellationShader) {
+            pipelineError(s) = std::format("'{}': tessellation shaders are not supported", d.name);
+            return VK_NULL_HANDLE;
+        }
+        if (set.add(d.tessControl, ShaderStage::TessControl, limit) < 0) goto fail;
+        if (set.add(d.tessEval, ShaderStage::TessEval, limit) < 0) goto fail;
     }
     if (!d.fragment.empty() && set.add(d.fragment, ShaderStage::Fragment, limit) < 0) goto fail;
     rec.dependencies = set.deps;
@@ -152,6 +165,10 @@ VkPipeline buildGraphics(Device& device, DeviceState& s, PipelineRecord& rec) {
 
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
         ia.topology = d.topology;
+        VkPipelineTessellationStateCreateInfo ts{VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO};
+        ts.patchControlPoints = std::max(d.patchControlPoints, 1u);
+        const bool tessellated = !d.tessEval.empty();
+        if (tessellated) ia.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
 
         VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
         vp.viewportCount = 1;
@@ -217,6 +234,7 @@ VkPipeline buildGraphics(Device& device, DeviceState& s, PipelineRecord& rec) {
         ci.pStages = stages.data();
         ci.pVertexInputState = meshPipeline ? nullptr : &vi;
         ci.pInputAssemblyState = meshPipeline ? nullptr : &ia;
+        ci.pTessellationState = tessellated ? &ts : nullptr;
         ci.pViewportState = &vp;
         ci.pRasterizationState = &rs;
         ci.pMultisampleState = &ms;
@@ -226,7 +244,7 @@ VkPipeline buildGraphics(Device& device, DeviceState& s, PipelineRecord& rec) {
         ci.layout = s.pipelineLayout;
         VkPipeline pipeline = VK_NULL_HANDLE;
         if (VkResult r = vkCreateGraphicsPipelines(s.device, s.pipelineCache, 1, &ci, nullptr, &pipeline); r != VK_SUCCESS) {
-            s.lastPipelineError = std::format("'{}': vkCreateGraphicsPipelines: {}", d.name, vkResultName(r));
+            pipelineError(s) = std::format("'{}': vkCreateGraphicsPipelines: {}", d.name, vkResultName(r));
             return VK_NULL_HANDLE;
         }
         device.setDebugName(VK_OBJECT_TYPE_PIPELINE, u64(pipeline), d.name);
@@ -234,7 +252,7 @@ VkPipeline buildGraphics(Device& device, DeviceState& s, PipelineRecord& rec) {
     }
 fail:
     rec.dependencies = set.deps;
-    s.lastPipelineError = std::format("'{}': {}", d.name, set.error);
+    pipelineError(s) = std::format("'{}': {}", d.name, set.error);
     return VK_NULL_HANDLE;
 }
 
@@ -244,7 +262,7 @@ VkPipeline buildCompute(Device& device, DeviceState& s, PipelineRecord& rec) {
     const i32 idx = set.add(d.shader, ShaderStage::Compute, pushLimit(s, d.pushConstantSize));
     rec.dependencies = set.deps;
     if (idx < 0) {
-        s.lastPipelineError = std::format("'{}': {}", d.name, set.error);
+        pipelineError(s) = std::format("'{}': {}", d.name, set.error);
         return VK_NULL_HANDLE;
     }
     const auto& ls = set.stages[0].reflection.localSize;
@@ -255,7 +273,7 @@ VkPipeline buildCompute(Device& device, DeviceState& s, PipelineRecord& rec) {
     ci.layout = s.pipelineLayout;
     VkPipeline pipeline = VK_NULL_HANDLE;
     if (VkResult r = vkCreateComputePipelines(s.device, s.pipelineCache, 1, &ci, nullptr, &pipeline); r != VK_SUCCESS) {
-        s.lastPipelineError = std::format("'{}': vkCreateComputePipelines: {}", d.name, vkResultName(r));
+        pipelineError(s) = std::format("'{}': vkCreateComputePipelines: {}", d.name, vkResultName(r));
         return VK_NULL_HANDLE;
     }
     device.setDebugName(VK_OBJECT_TYPE_PIPELINE, u64(pipeline), d.name);
@@ -268,7 +286,7 @@ VkPipeline buildRayTracing(Device& device, DeviceState& s, PipelineRecord& rec, 
                            VkStridedDeviceAddressRegionKHR regions[4]) {
     const RayTracingPipelineDesc& d = rec.rayTracing;
     if (!s.caps.rayTracingPipeline) {
-        s.lastPipelineError = std::format("'{}': ray tracing pipelines are not supported on this device", d.name);
+        pipelineError(s) = std::format("'{}': ray tracing pipelines are not supported on this device", d.name);
         return VK_NULL_HANDLE;
     }
     StageSet set(s);
@@ -326,7 +344,7 @@ VkPipeline buildRayTracing(Device& device, DeviceState& s, PipelineRecord& rec, 
         VkPipeline pipeline = VK_NULL_HANDLE;
         if (VkResult r = vkCreateRayTracingPipelinesKHR(s.device, VK_NULL_HANDLE, s.pipelineCache, 1, &ci, nullptr, &pipeline);
             r != VK_SUCCESS) {
-            s.lastPipelineError = std::format("'{}': vkCreateRayTracingPipelinesKHR: {}", d.name, vkResultName(r));
+            pipelineError(s) = std::format("'{}': vkCreateRayTracingPipelinesKHR: {}", d.name, vkResultName(r));
             return VK_NULL_HANDLE;
         }
         device.setDebugName(VK_OBJECT_TYPE_PIPELINE, u64(pipeline), d.name);
@@ -362,7 +380,7 @@ VkPipeline buildRayTracing(Device& device, DeviceState& s, PipelineRecord& rec, 
     }
 fail:
     rec.dependencies = set.deps;
-    s.lastPipelineError = std::format("'{}': {}", d.name, set.error);
+    pipelineError(s) = std::format("'{}': {}", d.name, set.error);
     return VK_NULL_HANDLE;
 }
 
@@ -412,6 +430,62 @@ PipelineHandle Device::createRayTracingPipeline(const RayTracingPipelineDesc& de
     rec.name = desc.name;
     rec.rayTracing = desc;
     return createPipeline(*this, *m_s, std::move(rec));
+}
+
+namespace {
+
+PipelineHandle createAsync(Device& device, DeviceState& s, PipelineRecord rec, JobSystem& jobs) {
+    PipelineHandle h;
+    {
+        std::lock_guard lock(s.resourceMutex);
+        h = s.pipelines.allocate(rec); // no VkPipeline yet: binds are no-ops, draws are skipped
+    }
+    ++s.asyncPipelinesInFlight;
+    jobs.submit([&device, &s, h, rec = std::move(rec)]() mutable {
+        DeviceState::AsyncPipelineResult r;
+        r.handle = h;
+        BufferHandle sbt;
+        VkStridedDeviceAddressRegionKHR regions[4]{};
+        tlsPipelineError = &r.error;
+        r.pipeline = buildPipeline(device, s, rec, sbt, regions);
+        tlsPipelineError = nullptr;
+        r.dependencies = rec.dependencies;
+        r.localSize = rec.localSize;
+        {
+            std::lock_guard lock(s.asyncPipelineMutex);
+            s.asyncPipelineResults.push_back(std::move(r));
+        }
+        --s.asyncPipelinesInFlight;
+    });
+    return h;
+}
+
+} // namespace
+
+PipelineHandle Device::createGraphicsPipelineAsync(const GraphicsPipelineDesc& desc, JobSystem& jobs) {
+    PipelineRecord rec;
+    rec.kind = PipelineKind::Graphics;
+    rec.name = desc.name;
+    rec.graphics = desc;
+    return createAsync(*this, *m_s, std::move(rec), jobs);
+}
+
+PipelineHandle Device::createComputePipelineAsync(const ComputePipelineDesc& desc, JobSystem& jobs) {
+    PipelineRecord rec;
+    rec.kind = PipelineKind::Compute;
+    rec.name = desc.name;
+    rec.compute = desc;
+    return createAsync(*this, *m_s, std::move(rec), jobs);
+}
+
+bool Device::isPipelineReady(PipelineHandle p) const {
+    const PipelineRecord* r = m_s->pipelines.get(p);
+    return r && r->pipeline != VK_NULL_HANDLE;
+}
+
+u32 Device::pendingPipelineCompiles() const {
+    std::lock_guard lock(m_s->asyncPipelineMutex);
+    return m_s->asyncPipelinesInFlight.load() + u32(m_s->asyncPipelineResults.size());
 }
 
 void Device::destroy(PipelineHandle pipeline) {
@@ -485,5 +559,34 @@ u32 reloadShadersImpl(Device& device, DeviceState& s, bool force) {
 } // namespace detail
 
 u32 Device::reloadChangedShaders(bool force) { return reloadShadersImpl(*this, *m_s, force); }
+
+namespace detail {
+
+void publishAsyncPipelines(Device& device, DeviceState& s) {
+    std::vector<DeviceState::AsyncPipelineResult> results;
+    {
+        std::lock_guard lock(s.asyncPipelineMutex);
+        results.swap(s.asyncPipelineResults);
+    }
+    for (auto& r : results) {
+        PipelineRecord* rec = s.pipelines.get(r.handle);
+        for (const auto& d : r.dependencies) s.shaderFiles.watch(d);
+        if (!rec) { // destroyed while compiling
+            if (r.pipeline) s.retire([&s, p = r.pipeline] { vkDestroyPipeline(s.device, p, nullptr); });
+            continue;
+        }
+        rec->dependencies = std::move(r.dependencies);
+        rec->localSize = r.localSize;
+        if (!r.pipeline) {
+            OX_LOG_ERROR("shader", "pipeline {}", r.error);
+            continue;
+        }
+        rec->pipeline = r.pipeline;
+        rec->version = 1;
+    }
+    (void)device;
+}
+
+} // namespace detail
 
 } // namespace ox::rhi

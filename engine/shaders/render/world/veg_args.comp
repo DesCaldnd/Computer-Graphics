@@ -1,0 +1,29 @@
+#version 460
+// Writes the instance count of every indirect draw command from its (prototype, LOD) slot after culling.
+#include <render/common/view.glsl>
+layout(local_size_x = 64) in;
+
+struct Slot {
+    uint base;
+    uint capacity;
+    uint count;
+    uint pad;
+};
+struct DrawArgs {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+OX_READONLY_BUFFER(SlotBuffer, { Slot s[]; });
+OX_BUFFER(ArgsBuffer, { DrawArgs a[]; });
+OX_READONLY_BUFFER(CommandSlotBuffer, { uint s[]; });
+OX_PUSH_CONSTANTS({ SlotBuffer slots; ArgsBuffer args; CommandSlotBuffer commandSlots; uint commandCount; });
+
+void main() {
+    uint c = gl_GlobalInvocationID.x;
+    if (c >= pc.commandCount) return;
+    Slot s = pc.slots.s[pc.commandSlots.s[c]];
+    pc.args.a[c].instanceCount = min(s.count, s.capacity);
+}

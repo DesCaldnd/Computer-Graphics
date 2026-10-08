@@ -1,0 +1,38 @@
+#version 460
+// Motion blur 1/3: dominant (longest) velocity per 16×16 render-pixel tile, in pixels of the colour image, scaled
+// by the shutter fraction and clamped to the maximum blur length (McGuire et al. 2012, "A reconstruction filter for
+// plausible motion blur").
+#include <render/postprocess/pp_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    uint velocity; // render res RG16F: uvCurrent - uvPrevious
+    uint dst;      // rg16f tiles
+    float shutter;
+    float maxLength; // colour pixels
+    vec2 velocitySize;
+    vec2 colorSize;
+    vec2 tileCount;
+});
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(t, ivec2(pc.tileCount)))) return;
+    vec2 best = vec2(0.0);
+    float bestLen = 0.0;
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            ivec2 q = min(t * 16 + ivec2(x, y), ivec2(pc.velocitySize) - 1);
+            vec2 v = OX_FETCH_2D(pc.velocity, q, 0).rg * pc.colorSize * pc.shutter;
+            float l = dot(v, v);
+            if (l > bestLen) {
+                bestLen = l;
+                best = v;
+            }
+        }
+    }
+    float len = sqrt(bestLen);
+    if (len > pc.maxLength) best *= pc.maxLength / len;
+    OX_IMAGE_STORE_2D(rg16f, pc.dst, t, vec4(best, 0.0, 0.0));
+}

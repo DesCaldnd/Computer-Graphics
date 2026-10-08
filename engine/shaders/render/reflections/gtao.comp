@@ -1,0 +1,115 @@
+#version 460
+// Ambient occlusion at full or half resolution (R16F visibility, 1 = unoccluded).
+//   OX_AO_GTAO: ground truth AO (Jimenez et al. 2016): per pixel `slices` screen directions (rotated per pixel and
+//               frame), horizon search with `steps` samples on both sides within the world-space radius, cosine
+//               weighted visibility integrated analytically against the projected normal.
+//   otherwise : normal-oriented hemisphere SSAO with `steps` samples (Low quality).
+#include <render/reflections/ssr_common.glsl>
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint depth; uint normals; uint outAo; uint downscale; uint slices; uint steps; float radius;
+               float falloff; uint aoWidth; uint aoHeight;);
+
+vec3 viewPosAt(ivec2 px) {
+    vec2 uv = (vec2(px) + 0.5) * VIEW.renderSize.zw;
+    float d = OX_FETCH_2D(pc.depth, px, 0).r;
+    return oxViewPositionFromDepth(pc.view, uv, d);
+}
+
+void main() {
+    ivec2 ap = ivec2(gl_GlobalInvocationID.xy);
+    if (ap.x >= int(pc.aoWidth) || ap.y >= int(pc.aoHeight)) return;
+    ivec2 size = ivec2(VIEW.renderSize.xy);
+    ivec2 p = min(ap * int(pc.downscale) + int(pc.downscale) / 2, size - 1);
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    if (d <= 0.0) {
+        OX_IMAGE_STORE_2D(r16f, pc.outAo, ap, vec4(1.0));
+        return;
+    }
+    vec3 P = viewPosAt(p);
+    vec3 N = normalize(mat3(VIEW.view) * OX_FETCH_2D(pc.normals, p, 0).xyz);
+    bool ortho = (VIEW.flags & OX_VIEW_ORTHOGRAPHIC) != 0u;
+    vec3 V = ortho ? vec3(0.0, 0.0, 1.0) : normalize(-P);
+    float lin = -P.z;
+    // Radius in pixels at this depth.
+    float pxPerUnit = abs(VIEW.proj[1][1]) * VIEW.renderSize.y * 0.5 / (ortho ? 1.0 : max(lin, 1e-3));
+    float radiusPx = pc.radius * pxPerUnit;
+    if (radiusPx < 1.0) {
+        OX_IMAGE_STORE_2D(r16f, pc.outAo, ap, vec4(1.0));
+        return;
+    }
+    radiusPx = min(radiusPx, 256.0);
+    vec2 noise = oxRandom2(uvec2(p), VIEW.frameIndex & 7u);
+    float falloffRange = max(pc.radius * pc.falloff, 1e-4);
+    float visibility = 0.0;
+
+#ifdef OX_AO_GTAO
+    uint slices = max(pc.slices, 1u);
+    uint steps = max(pc.steps, 1u);
+    for (uint sl = 0u; sl < slices; ++sl) {
+        float phi = (float(sl) + noise.x) * OX_PI / float(slices);
+        vec2 dirS = vec2(cos(phi), sin(phi));            // screen space (y down)
+        vec3 dirV = vec3(dirS.x, -dirS.y, 0.0);          // view space (y up)
+        vec3 orthoDir = dirV - dot(dirV, V) * V;
+        vec3 axis = normalize(cross(dirV, V));
+        vec3 projN = N - axis * dot(N, axis);
+        float projNLen = length(projN);
+        if (projNLen < 1e-4) continue;
+        float sgnN = sign(dot(orthoDir, projN));
+        float cosN = clamp(dot(projN, V) / projNLen, -1.0, 1.0);
+        float n = sgnN * acos(cosN);
+        float hc[2];
+        for (int side = 0; side < 2; ++side) {
+            float s = side == 0 ? -1.0 : 1.0;
+            float best = -1.0;
+            for (uint st = 0u; st < steps; ++st) {
+                float t = (float(st) + noise.y) / float(steps);
+                t = t * t; // denser near the centre
+                vec2 off = dirS * s * max(t * radiusPx, 1.0 + float(st));
+                ivec2 q = ivec2(vec2(p) + 0.5 + off);
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) break;
+                vec3 Ps = viewPosAt(q);
+                vec3 delta = Ps - P;
+                float dist2 = dot(delta, delta);
+                if (dist2 < 1e-8) continue;
+                float cosH = dot(delta, V) * inversesqrt(dist2);
+                float weight = clamp((pc.radius - sqrt(dist2)) / falloffRange, 0.0, 1.0);
+                cosH = mix(-1.0, cosH, weight);
+                best = max(best, cosH);
+            }
+            hc[side] = best;
+        }
+        float h0 = n + max(-acos(hc[0]) - n, -OX_PI * 0.5);
+        float h1 = n + min(acos(hc[1]) - n, OX_PI * 0.5);
+        float sinN = sin(n);
+        float arc = 0.25 * (-cos(2.0 * h0 - n) + cosN + 2.0 * h0 * sinN) +
+                    0.25 * (-cos(2.0 * h1 - n) + cosN + 2.0 * h1 * sinN);
+        visibility += projNLen * arc;
+    }
+    visibility /= float(slices);
+#else
+    // Hemisphere SSAO: samples on a spiral, oriented along the normal.
+    uint count = max(pc.steps, 1u);
+    vec3 t, b;
+    oxBasis(N, t, b);
+    float occlusion = 0.0;
+    for (uint i = 0u; i < count; ++i) {
+        float fi = (float(i) + noise.x) / float(count);
+        float ang = OX_TWO_PI * (float(i) * 0.618034 + noise.y);
+        float r = sqrt(fi);
+        float z = sqrt(max(1.0 - fi, 0.0));
+        vec3 sdir = t * (cos(ang) * r) + b * (sin(ang) * r) + N * z;
+        vec3 S = P + sdir * pc.radius * mix(0.2, 1.0, fi);
+        vec3 sp = oxProjectView(pc.view, S);
+        if (any(lessThan(sp.xy, vec2(0.0))) || any(greaterThan(sp.xy, vec2(1.0)))) continue;
+        ivec2 q = clamp(ivec2(sp.xy * VIEW.renderSize.xy), ivec2(0), size - 1);
+        vec3 Q = viewPosAt(q);
+        float range = clamp(pc.radius / max(abs(P.z - Q.z), 1e-4), 0.0, 1.0);
+        if (Q.z > S.z + 0.02 * pc.radius) occlusion += range;
+    }
+    visibility = 1.0 - occlusion / float(count);
+#endif
+    OX_IMAGE_STORE_2D(r16f, pc.outAo, ap, vec4(clamp(visibility, 0.0, 1.0)));
+}

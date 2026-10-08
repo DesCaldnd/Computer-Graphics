@@ -168,8 +168,9 @@ void CommandList::beginRendering(const RenderingDesc& desc) {
     ri.pColorAttachments = colors.data();
     ri.pDepthAttachment = hasDepth ? &depth : nullptr;
     ri.pStencilAttachment = hasStencil ? &stencil : nullptr;
+    if (desc.secondaryContents) ri.flags |= VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
     vkCmdBeginRendering(m_cmd, &ri);
-    if (desc.setViewportAndScissor) {
+    if (desc.setViewportAndScissor && !desc.secondaryContents) {
         setViewport(f32(ri.renderArea.offset.x), f32(ri.renderArea.offset.y), f32(ri.renderArea.extent.width),
                     f32(ri.renderArea.extent.height));
         setScissor(ri.renderArea.offset.x, ri.renderArea.offset.y, ri.renderArea.extent.width, ri.renderArea.extent.height);
@@ -177,6 +178,24 @@ void CommandList::beginRendering(const RenderingDesc& desc) {
 }
 
 void CommandList::endRendering() { vkCmdEndRendering(m_cmd); }
+
+void CommandList::executeSecondary(std::span<CommandList* const> lists) {
+    if (lists.empty()) return;
+    VkCommandBuffer stack[64];
+    std::vector<VkCommandBuffer> heap;
+    VkCommandBuffer* cbs = stack;
+    if (lists.size() > std::size(stack)) {
+        heap.resize(lists.size());
+        cbs = heap.data();
+    }
+    for (usize i = 0; i < lists.size(); ++i) {
+        OX_ASSERT(lists[i]->m_secondary, "executeSecondary: not a secondary command list");
+        cbs[i] = lists[i]->vk();
+    }
+    vkCmdExecuteCommands(m_cmd, u32(lists.size()), cbs);
+}
+
+void CommandList::end() { OX_VK_CHECK(vkEndCommandBuffer(m_cmd)); }
 
 void CommandList::setViewport(f32 x, f32 y, f32 width, f32 height, f32 minDepth, f32 maxDepth) {
     const VkViewport vp{x, y, width, height, minDepth, maxDepth};
@@ -269,6 +288,15 @@ void CommandList::drawMeshTasks(u32 x, u32 y, u32 z) {
     OX_ASSERT(st(*m_device).caps.meshShader, "mesh shaders are not supported by this device");
     if (!pipelineReady(*m_device, m_boundPipeline)) return;
     vkCmdDrawMeshTasksEXT(m_cmd, x, y, z);
+}
+
+void CommandList::drawMeshTasksIndirect(BufferHandle args, u64 offset, u32 drawCount, u32 stride) {
+    DeviceState& s = st(*m_device);
+    OX_ASSERT(s.caps.meshShader, "mesh shaders are not supported by this device");
+    if (!pipelineReady(*m_device, m_boundPipeline)) return;
+    const BufferRecord* b = s.buffers.get(args);
+    if (!b) return;
+    vkCmdDrawMeshTasksIndirectEXT(m_cmd, b->buffer, offset, drawCount, stride);
 }
 
 // --- compute / ray tracing ---------------------------------------------------------------------------------------
@@ -433,7 +461,7 @@ void CommandList::beginTimestamp(std::string_view name) {
     }
     const u32 q = f.queryCount++;
     vkCmdWriteTimestamp2(m_cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f.queryPool, q);
-    f.scopes.push_back({std::string(name), u32(m_openTimestamps.size()), q, ~0u});
+    f.scopes.push_back({std::string(name), u32(m_openTimestamps.size()), q, ~0u, u8(m_queue)});
     m_openTimestamps.push_back(u32(f.scopes.size() - 1));
 }
 

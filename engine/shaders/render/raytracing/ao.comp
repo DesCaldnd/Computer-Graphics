@@ -1,0 +1,34 @@
+#version 460
+// RTAO: `spp` cosine-distributed rays per pixel into the hemisphere, length `radius`, alpha-tested; AO = fraction of
+// unoccluded rays, softened by the hit distance (closer occluders darken more). Noisy, denoised afterwards.
+#include "rt_query.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(RtSceneBuffer rt; uint depth; uint normals; uint outAo; uint width; uint height; uint scale;
+               uint frame; uint spp; float radius;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.width, pc.height)))) return;
+    ivec2 renderSize = ivec2(VIEW.renderSize.xy);
+    ivec2 gp = clamp(p * int(pc.scale) + int(pc.scale / 2u), ivec2(0), renderSize - 1);
+    float d = OX_FETCH_2D(pc.depth, gp, 0).r;
+    if (d <= 0.0) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outAo, p, vec4(1.0));
+        return;
+    }
+    vec2 uv = (vec2(gp) + 0.5) * VIEW.renderSize.zw;
+    vec3 P = oxWorldPositionFromDepth(pc.view, uv, d);
+    vec3 N = normalize(OX_FETCH_2D(pc.normals, gp, 0).xyz);
+    vec3 origin = P + N * max(1e-3 * length(VIEW.cameraPosition.xyz - P), 2e-3);
+    uint rng = oxRtSeed(uvec2(p), pc.frame, 0xA0A0u);
+    float ao = 0.0;
+    for (uint i = 0u; i < pc.spp; ++i) {
+        vec3 dir = oxSampleCosineHemisphere(oxRtRandom2(rng), N);
+        RtHit h = oxRtTraceClosest(pc.scene, pc.rt, origin, dir, 0.0, pc.radius, OX_RT_MASK_SOLID);
+        ao += h.hit ? smoothstep(0.0, pc.radius, h.t) * 0.5 : 1.0;
+    }
+    ao /= float(pc.spp);
+    OX_IMAGE_STORE_2D(rgba16f, pc.outAo, p, vec4(ao, ao, ao, 1.0));
+}

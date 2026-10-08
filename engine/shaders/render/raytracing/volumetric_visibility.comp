@@ -1,0 +1,71 @@
+#version 460
+// Ray traced froxel light visibility for the Volumetrics feature ("VolumetricFogVisibility", 3D RGBA16F at the fog's
+// froxel grid; froxel centres from render/volumetrics/fog_common.glsl):
+//   r = sun visibility (shadow ray inside the sun cone, opaque × coloured transmittance luminance)
+//   g = local lights: shadowed / unshadowed in-scattering ratio, estimated with `localSamples` lights of the froxel's
+//       light cluster picked proportionally to their unshadowed contribution (weighted reservoir sampling)
+//   b = sky visibility: `skyRays` cosine rays around +Y (32 m) unoccluded fraction
+// Shadows from anything in the TLAS, on or off screen.
+#include "rt_query.glsl"
+#include <render/common/clusters.glsl>
+#include <render/volumetrics/fog_common.glsl>
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+OX_RENDER_PUSH(RtSceneBuffer rt; uint outVisibility; uint gridX; uint gridY; uint gridZ; uint frame; uint localSamples;
+               uint skyRays; uint flags;);
+
+void main() {
+    uvec3 c = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(c, uvec3(pc.gridX, pc.gridY, pc.gridZ)))) return;
+    float viewDepth;
+    vec3 P = oxFroxelWorldPosition(pc.view, vec3(c) + 0.5, viewDepth);
+    uint rng = oxRtSeed(c.xy + uvec2(0u, c.z * pc.gridY), pc.frame, 0xF0F0u);
+    bool colored = (pc.flags & 1u) != 0u;
+    LightBuffer lights = SCENE.lights;
+    vec4 vis = vec4(1.0, 1.0, 1.0, 1.0);
+
+    int sun = VIEW.sunLight;
+    if (sun >= 0) {
+        vec3 L = oxRtSampleSun(pc.view, lights.l[sun], oxRtRandom2(rng));
+        vec3 T = oxRtShadow(pc.scene, pc.rt, P, L, 1e4, colored);
+        vis.r = oxLuminance(T) / oxLuminance(vec3(1.0));
+    }
+
+    if (pc.localSamples > 0u && VIEW.lightClusterCount > 0u) {
+        vec2 uv = (vec2(c.xy) + 0.5) / vec2(pc.gridX, pc.gridY);
+        uint cluster = oxClusterIndex(pc.view, uv, viewDepth);
+        uint count = oxClusterLightCount(pc.view, cluster);
+        float visSum = 0.0, samples = 0.0;
+        for (uint s = 0u; s < pc.localSamples && count > 0u; ++s) {
+            // Weighted reservoir sampling of one light ∝ luminance × attenuation.
+            uint chosen = OX_INVALID_INDEX;
+            float wsum = 0.0;
+            for (uint i = 0u; i < count; ++i) {
+                uint li = oxClusterLight(pc.view, cluster, i);
+                Light l = lights.l[li];
+                float w = oxLuminance(l.color) * oxRtLocalAttenuation(l, P, normalize(l.position - P));
+                wsum += w;
+                if (w > 0.0 && oxRtRandom(rng) * wsum <= w) chosen = li;
+            }
+            if (chosen == OX_INVALID_INDEX) break;
+            Light l = lights.l[chosen];
+            float dist, solidAngle;
+            vec3 L = oxRtSampleSphereLight(P, l, oxRtRandom2(rng), dist, solidAngle);
+            vec3 T = oxRtShadow(pc.scene, pc.rt, P, L, max(dist - 1e-3, 0.0), colored);
+            visSum += oxLuminance(T) / oxLuminance(vec3(1.0));
+            samples += 1.0;
+        }
+        if (samples > 0.0) vis.g = visSum / samples;
+    }
+
+    if (pc.skyRays > 0u) {
+        float open = 0.0;
+        for (uint s = 0u; s < pc.skyRays; ++s) {
+            vec3 dir = oxSampleCosineHemisphere(oxRtRandom2(rng), vec3(0.0, 1.0, 0.0));
+            open += oxRtVisibility(pc.scene, pc.rt, P, dir, 0.0, 32.0, OX_RT_MASK_SOLID);
+        }
+        vis.b = open / float(pc.skyRays);
+    }
+    imageStore(oxImages3D_rgba16f[nonuniformEXT(pc.outVisibility)], ivec3(c), vis);
+}

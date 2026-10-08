@@ -1,0 +1,82 @@
+#version 460
+// Depth of field 3/4: half-resolution bokeh gather (scatter-as-gather) with separate near and far fields.
+// Concentric rings of samples within the kernel radius (max of the pixel's far CoC and the dilated near CoC of the
+// neighbouring tiles); a sample contributes where its own CoC reaches this pixel. Far: only samples behind the
+// focus plane (no sharp foreground bleeding into the blurred background). Near: coverage → alpha.
+#include <render/postprocess/dof_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    uint src;      // half res: rgb, a = signed CoC
+    uint tiles;    // r16f near CoC max per 8×8 tile
+    uint outFar;   // rgba16f: rgb, a = far weight present
+    uint outNear;  // rgba16f: rgb, a = near coverage
+    uint rings;
+    float maxRadius;
+    vec2 halfSize;
+    vec2 tileSize;
+});
+
+const float kGoldenAngle = 2.39996323;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.halfSize)))) return;
+    vec4 center = OX_FETCH_2D(pc.src, p, 0);
+    float cocC = center.a;
+    ivec2 tile = p / 8;
+    float nearMax = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 t = clamp(tile + ivec2(x, y), ivec2(0), ivec2(pc.tileSize) - 1);
+            nearMax = max(nearMax, OX_FETCH_2D(pc.tiles, t, 0).r);
+        }
+    }
+    float radius = min(max(max(cocC, 0.0), nearMax), pc.maxRadius);
+    if (radius < 0.5) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outFar, p, vec4(center.rgb, 1.0));
+        OX_IMAGE_STORE_2D(rgba16f, pc.outNear, p, vec4(center.rgb, 0.0));
+        return;
+    }
+    // Centre sample.
+    float farC = max(cocC, 0.0);
+    vec3 farSum = center.rgb * (farC > 0.0 ? 1.0 : 0.0);
+    float farW = farC > 0.0 ? 1.0 : 0.0;
+    // Near-field membership: pixels within ~1 half-res pixel of the focus plane are in focus, not foreground.
+    float nearC = max(-cocC, 0.0);
+    float nearMemberC = smoothstep(0.5, 1.5, nearC);
+    vec3 nearSum = center.rgb * nearMemberC;
+    float nearW = nearMemberC;
+    float count = 1.0;
+    float rotation = oxInterleavedGradientNoise(vec2(p)) * 6.2831853;
+    uint rings = max(pc.rings, 1u);
+    for (uint r = 1u; r <= rings; ++r) {
+        float ringRadius = radius * float(r) / float(rings);
+        uint n = 8u * r;
+        for (uint i = 0u; i < n; ++i) {
+            float a = rotation + float(i) * 6.2831853 / float(n) + float(r) * kGoldenAngle;
+            vec2 off = vec2(cos(a), sin(a)) * ringRadius;
+            vec2 uv = (vec2(p) + 0.5 + off) / pc.halfSize;
+            vec4 s = OX_SAMPLE_2D_LOD(pc.src, OX_SAMPLER_LINEAR_CLAMP, uv, 0.0);
+            float dist = ringRadius;
+            // Far field: behind-focus samples whose blur reaches this pixel; never pull from closer than the centre.
+            float sFar = max(s.a, 0.0);
+            float wf = clamp(sFar - dist + 1.0, 0.0, 1.0) * (s.a >= 0.0 ? 1.0 : 0.0);
+            if (cocC > 0.0) wf *= clamp(1.0 + s.a - cocC, 0.0, 1.0) * 0.5 + 0.5;
+            farSum += s.rgb * wf;
+            farW += wf;
+            float sNear = max(-s.a, 0.0);
+            float wn = clamp(sNear - dist + 1.0, 0.0, 1.0) * smoothstep(0.5, 1.5, sNear);
+            nearSum += s.rgb * wn;
+            nearW += wn;
+            count += 1.0;
+        }
+    }
+    vec3 farColor = farW > 1e-3 ? farSum / farW : center.rgb;
+    vec3 nearColor = nearW > 1e-3 ? nearSum / nearW : center.rgb;
+    // Coverage: the share of the kernel area covered by near-field blur (doubled: a disk edge covers ~half).
+    float nearAlpha = clamp(2.0 * nearW / count, 0.0, 1.0);
+    OX_IMAGE_STORE_2D(rgba16f, pc.outFar, p, vec4(farColor, farW > 1e-3 ? 1.0 : 0.0));
+    OX_IMAGE_STORE_2D(rgba16f, pc.outNear, p, vec4(nearColor, nearAlpha));
+}

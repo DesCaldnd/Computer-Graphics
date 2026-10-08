@@ -1,0 +1,44 @@
+#version 460
+// ReSTIR DI pass 2: spatial reuse from `samples` random neighbours within `radius` pixels (geometric similarity
+// test, target function re-evaluated at the centre pixel). Writes the final reservoirs (also next frame's history).
+#include "restir_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(ReservoirBuffer srcRes; ReservoirBuffer dstRes; uint depth; uint normals; uint width; uint height;
+               uint scale; uint frame; uint samples; float radius;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.width, pc.height);
+    if (any(greaterThanEqual(p, size))) return;
+    ivec2 renderSize = ivec2(VIEW.renderSize.xy);
+    ivec2 gp = clamp(p * int(pc.scale) + int(pc.scale / 2u), ivec2(0), renderSize - 1);
+    uint idx = uint(p.y) * pc.width + uint(p.x);
+    Reservoir center = pc.srcRes.r[idx];
+    OxSurface s;
+    float z;
+    if (!oxRestirSurface(pc.view, pc.depth, pc.normals, gp, s, z) || center.light == OX_INVALID_INDEX) {
+        pc.dstRes.r[idx] = center;
+        return;
+    }
+    uint rng = oxRtSeed(uvec2(p), pc.frame, 0x5A71u);
+    Reservoir r = oxReservoirEmpty();
+    float tC = oxRestirTarget(pc.scene, s, center.light);
+    oxReservoirUpdate(r, center.light, center.entity, tC * center.W * center.M, center.M, rng);
+    for (uint i = 0u; i < pc.samples; ++i) {
+        vec2 off = (oxRtRandom2(rng) * 2.0 - 1.0) * pc.radius;
+        ivec2 q = p + ivec2(off);
+        if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size)) || q == p) continue;
+        Reservoir n = pc.srcRes.r[uint(q.y) * pc.width + uint(q.x)];
+        if (n.light == OX_INVALID_INDEX || n.z <= 0.0) continue;
+        if (abs(n.z - z) / max(z, 1e-3) > 0.1 || dot(oxOctDecode(n.normal), s.normal) < 0.9) continue;
+        float t = oxRestirTarget(pc.scene, s, n.light);
+        oxReservoirUpdate(r, n.light, n.entity, t * n.W * n.M, n.M, rng);
+    }
+    float tY = oxRestirTarget(pc.scene, s, r.light);
+    r.W = tY > 0.0 ? r.wSum / (r.M * tY) : 0.0;
+    r.z = z;
+    r.normal = oxOctEncode(s.normal);
+    pc.dstRes.r[idx] = r;
+}

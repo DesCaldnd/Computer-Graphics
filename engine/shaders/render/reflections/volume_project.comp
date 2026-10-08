@@ -1,0 +1,99 @@
+#version 460
+// Irradiance volume bake: projects one probe's capture cube (rgb radiance, a = distance) onto SH L1 (cosine
+// convolved / π, see irradiance_volume.glsl) and fills its 10×10 octahedral depth-moment tile (mean distance and
+// mean squared distance over a cosine-power lobe, DDGI-style mirrored border).
+#include <render/reflections/irradiance_volume.glsl>
+#include <common/bindless.glsl>
+
+layout(local_size_x = 64) in;
+
+OX_PUSH_CONSTANTS({
+    OxIrradianceProbeBuffer probes;
+    uint probe;     // global probe index (buffer entry)
+    uint tile;      // volume-local probe index (atlas tile)
+    uint cube;      // sampled capture cube
+    uint size;      // capture face size
+    uint atlas;     // storage index of the moment atlas (rgba16f)
+    float maxDistance;
+});
+
+shared vec3 sSH[64][4];
+shared float sWeight[64];
+
+// Interior texel coordinate (0..7) of a tile texel (0..9) with the DDGI mirrored border.
+ivec2 interiorTexel(ivec2 t) {
+    const int n = 8;
+    ivec2 c = t - 1;
+    bool bx = c.x < 0 || c.x >= n;
+    bool by = c.y < 0 || c.y >= n;
+    if (bx && by) return ivec2(c.x < 0 ? n - 1 : 0, c.y < 0 ? n - 1 : 0);
+    if (by) return ivec2(n - 1 - c.x, c.y < 0 ? 0 : n - 1);
+    if (bx) return ivec2(c.x < 0 ? 0 : n - 1, n - 1 - c.y);
+    return c;
+}
+
+void main() {
+    uint t = gl_LocalInvocationID.x;
+    vec3 acc[4] = vec3[](vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
+    float wsum = 0.0;
+    uint texels = pc.size * pc.size * 6u;
+    for (uint i = t; i < texels; i += 64u) {
+        uint face = i / (pc.size * pc.size);
+        uint rem = i % (pc.size * pc.size);
+        vec2 uv = (vec2(rem % pc.size, rem / pc.size) + 0.5) / float(pc.size);
+        vec2 pp = uv * 2.0 - 1.0;
+        float w = 1.0 / pow(1.0 + dot(pp, pp), 1.5);
+        vec3 n = oxCubeDirection(face, uv);
+        vec3 c = textureLod(samplerCube(OX_TEXCUBE(pc.cube), OX_SAMPLER(OX_SAMPLER_LINEAR_CLAMP)), n, 0.0).rgb * w;
+        acc[0] += c * 0.282095;
+        acc[1] += c * 0.488603 * n.y;
+        acc[2] += c * 0.488603 * n.z;
+        acc[3] += c * 0.488603 * n.x;
+        wsum += w;
+    }
+    for (int k = 0; k < 4; ++k) sSH[t][k] = acc[k];
+    sWeight[t] = wsum;
+    barrier();
+    for (uint s = 32u; s > 0u; s >>= 1u) {
+        if (t < s) {
+            for (int k = 0; k < 4; ++k) sSH[t][k] += sSH[t + s][k];
+            sWeight[t] += sWeight[t + s];
+        }
+        barrier();
+    }
+    if (t == 0u) {
+        float norm = 4.0 * OX_PI / sWeight[0];
+        OxIrradianceProbe pr;
+        pr.sh[0] = vec4(sSH[0][0] * norm, 1.0);
+        pr.sh[1] = vec4(sSH[0][1] * norm * (2.0 / 3.0), 0.0);
+        pr.sh[2] = vec4(sSH[0][2] * norm * (2.0 / 3.0), 0.0);
+        pr.sh[3] = vec4(sSH[0][3] * norm * (2.0 / 3.0), 0.0);
+        pc.probes.p[pc.probe] = pr;
+    }
+
+    // Depth moments: 100 tile texels over 64 threads.
+    ivec2 tileOrigin = ivec2(int(pc.tile % OX_IRRADIANCE_ATLAS_PROBES_PER_ROW), int(pc.tile / OX_IRRADIANCE_ATLAS_PROBES_PER_ROW)) * 10;
+    for (uint i = t; i < 100u; i += 64u) {
+        ivec2 tt = ivec2(int(i % 10u), int(i / 10u));
+        ivec2 it = interiorTexel(tt);
+        vec3 dir = oxOctDecode((vec2(it) + 0.5) / 8.0);
+        vec3 tb, bb;
+        oxBasis(dir, tb, bb);
+        float m1 = 0.0, m2 = 0.0, ws = 0.0;
+        const uint kSamples = 32u;
+        for (uint s = 0u; s < kSamples; ++s) {
+            vec2 xi = oxHammersley(s, kSamples);
+            // Cosine-power lobe (exponent 40) around the texel direction.
+            float cosT = pow(1.0 - xi.y, 1.0 / 41.0);
+            float sinT = sqrt(max(1.0 - cosT * cosT, 0.0));
+            float phi = OX_TWO_PI * xi.x;
+            vec3 sd = normalize(tb * (cos(phi) * sinT) + bb * (sin(phi) * sinT) + dir * cosT);
+            float dist = textureLod(samplerCube(OX_TEXCUBE(pc.cube), OX_SAMPLER(OX_SAMPLER_LINEAR_CLAMP)), sd, 0.0).a;
+            dist = min(dist, pc.maxDistance);
+            m1 += dist;
+            m2 += dist * dist;
+            ws += 1.0;
+        }
+        imageStore(oxImages2D_rgba16f[nonuniformEXT(pc.atlas)], tileOrigin + tt, vec4(m1 / ws, m2 / ws, 0.0, 1.0));
+    }
+}

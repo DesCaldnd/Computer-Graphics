@@ -12,6 +12,10 @@ struct GpuTiming {
     std::string name;
     f64 milliseconds = 0.0;
     u32 depth = 0;
+    // Start relative to the earliest scope of the frame (all queues share the device time domain): overlap of
+    // async-compute passes with graphics work = intersecting [startMs, startMs + milliseconds) ranges.
+    f64 startMs = 0.0;
+    u8 queue = 0; // QueueType
 };
 
 struct GpuMemoryHeapStats {

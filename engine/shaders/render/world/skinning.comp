@@ -1,0 +1,71 @@
+#version 460
+// Compute skinning of the GPU scene's skinned meshes (positions / attributes / SkinVertex arenas) into the
+// GpuSkinnedVertex arena (model space). One job per skinned entity per frame (gl_WorkGroupID.y), 64 vertices per
+// group. mode 0: linear blend skinning with mat4 palettes (SceneHeader.palettes, model × inverse bind);
+// mode 1: dual quaternion skinning (vec4[2·J] real/dual per joint, ox::anim::DualQuat layout, scale ignored).
+// Same math as engine/shaders/animation/skinning.comp (the animation module's reference shader).
+#include <render/common/scene.glsl>
+layout(local_size_x = 64) in;
+
+struct SkinJob {
+    uint vertexBase;  // first vertex in the position / attribute arenas
+    uint vertexCount;
+    uint skinBase;    // first SkinVertex
+    uint paletteBase; // mat4 index (mode 0) or dual quaternion pair index (mode 1)
+    uint outBase;     // first output vertex
+    uint mode;
+    uint pad0;
+    uint pad1;
+};
+OX_READONLY_BUFFER(SkinJobBuffer, { SkinJob j[]; });
+OX_READONLY_BUFFER(DualQuatBuffer, { vec4 q[]; });
+OX_BUFFER(SkinOutBuffer, { SkinnedVertex v[]; });
+
+OX_PUSH_CONSTANTS({ SceneBuffer scene; SkinJobBuffer jobs; DualQuatBuffer dualQuats; SkinOutBuffer outVertices; uint jobCount; });
+
+vec3 qrot(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
+
+void main() {
+    uint jobIndex = gl_WorkGroupID.y;
+    if (jobIndex >= pc.jobCount) return;
+    SkinJob job = pc.jobs.j[jobIndex];
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= job.vertexCount) return;
+    vec3 p = pc.scene.s.positions.p[job.vertexBase + i];
+    VertexAttributes a = pc.scene.s.attributes.a[job.vertexBase + i];
+    SkinVertex sv = pc.scene.s.skin.s[job.skinBase + i];
+    uvec4 jt = uvec4(sv.joints01 & 0xffffu, sv.joints01 >> 16, sv.joints23 & 0xffffu, sv.joints23 >> 16);
+    vec4 w = vec4(float(sv.weights01 & 0xffffu), float(sv.weights01 >> 16), float(sv.weights23 & 0xffffu),
+                  float(sv.weights23 >> 16)) / 65535.0;
+    w /= max(w.x + w.y + w.z + w.w, 1e-6);
+    SkinnedVertex o;
+    if (job.mode == 0u) {
+        PaletteBuffer pal = pc.scene.s.palettes;
+        uint b = job.paletteBase;
+        mat4 m = pal.m[b + jt.x] * w.x + pal.m[b + jt.y] * w.y + pal.m[b + jt.z] * w.z + pal.m[b + jt.w] * w.w;
+        o.position = (m * vec4(p, 1.0)).xyz;
+        mat3 c = oxCofactor(m);
+        o.normal = normalize(c * a.normal);
+        o.tangent = vec4(normalize(mat3(m) * a.tangent.xyz), a.tangent.w);
+    } else {
+        uint b = job.paletteBase * 2u;
+        vec4 r0 = pc.dualQuats.q[b + jt.x * 2u];
+        vec4 realQ = vec4(0.0), dualQ = vec4(0.0);
+        for (int k = 0; k < 4; ++k) {
+            uint j = jt[k];
+            vec4 r = pc.dualQuats.q[b + j * 2u];
+            vec4 d = pc.dualQuats.q[b + j * 2u + 1u];
+            float s = dot(r, r0) < 0.0 ? -w[k] : w[k]; // shortest path (antipodality)
+            realQ += r * s;
+            dualQ += d * s;
+        }
+        float len = length(realQ);
+        realQ /= len;
+        dualQ /= len;
+        vec3 t = 2.0 * (realQ.w * dualQ.xyz - dualQ.w * realQ.xyz + cross(realQ.xyz, dualQ.xyz));
+        o.position = qrot(realQ, p) + t;
+        o.normal = normalize(qrot(realQ, a.normal));
+        o.tangent = vec4(normalize(qrot(realQ, a.tangent.xyz)), a.tangent.w);
+    }
+    pc.outVertices.v[job.outBase + i] = o;
+}

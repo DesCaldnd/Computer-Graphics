@@ -215,6 +215,8 @@ public:
                     drawFullscreen(p.cmd, m_view, &pc, sizeof(pc));
                 });
         };
+        // Overdraw / wireframe redraw the camera's CPU draw lists (built lazily when the frame is GPU-driven).
+        if (st.debugView == DebugView::Overdraw || st.wireframe || st.debugView == DebugView::Wireframe) (void)ctx.drawLists();
         switch (st.debugView) {
         case DebugView::Velocity: visualize(11, R.texture(res::kVelocity), 20.0f); break;
         case DebugView::Depth: visualize(12, R.texture(res::kDepth), 1.0f); break;

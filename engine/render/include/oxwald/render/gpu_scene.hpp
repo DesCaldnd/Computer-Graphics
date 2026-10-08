@@ -28,6 +28,7 @@ class CommandList;
 namespace ox::render {
 
 struct RenderSnapshot;
+struct SnapshotMesh;
 class GpuResourceCache;
 
 // Suballocation of a growable GPU buffer, in elements.
@@ -108,6 +109,13 @@ public:
     void freeMesh(GpuMesh& mesh);
     [[nodiscard]] const GpuMeshInfo& meshInfo(u32 index) const { return m_meshInfos[index]; }
     [[nodiscard]] rhi::BufferHandle indexBuffer() const { return m_indices.buffer(); }
+    // Position arena (vec3, also AccelStructInput: BLAS builds of the raytracing area).
+    [[nodiscard]] rhi::BufferHandle positionBuffer() const { return m_positions.buffer(); }
+    // LOD chain per mesh info: kMaxMeshLods GpuMeshLod entries at meshIndex * kMaxMeshLods.
+    [[nodiscard]] const GpuMeshLod* meshLods(u32 meshIndex) const { return &m_meshLods[usize(meshIndex) * kMaxMeshLods]; }
+    [[nodiscard]] VkDeviceAddress meshLodAddress() const { return m_meshLodBuffer.address(); }
+    [[nodiscard]] VkDeviceAddress meshletAddress() const { return m_meshlets.address(); }
+    [[nodiscard]] u64 indexCapacity() const { return m_indices.capacity(); }
 
     // --- materials ---
     u32 allocateMaterial();
@@ -126,6 +134,19 @@ public:
     [[nodiscard]] u32 movedInstanceCount() const { return m_movedInstances; }
     // World-space bounding spheres of instances that moved this frame (current and previous positions).
     [[nodiscard]] const std::vector<Sphere>& movedBounds() const { return m_movedBounds; }
+    // Changes whenever the set of drawables changes in a way that affects batching (instances added/removed, mesh,
+    // material, visibility or shadow-casting flags, material blend/sidedness, mesh uploads). Transforms do not.
+    [[nodiscard]] u64 structureVersion() const { return m_structureVersion; }
+
+    // Compute skinning hook (world-skinning feature). Called by updateInstances() for every skinned instance (palette
+    // present, mesh has skin data); `updateStamp` increments once per updateInstances() call. Returning true marks the
+    // instance kInstanceSkinnedOutput: `current` / `previous` become its paletteOffset / prevPaletteOffset (first
+    // GpuSkinnedVertex of this / the previous frame's output).
+    using SkinOutputResolver = std::function<bool(const SnapshotMesh& mesh, const GpuMesh& gpuMesh, u32 submesh,
+                                                  u64 updateStamp, u32& current, u32& previous)>;
+    void setSkinOutputResolver(SkinOutputResolver resolver) { m_skinResolver = std::move(resolver); }
+    // Address of the GpuSkinnedVertex arena written into GpuSceneHeader::skinnedVertices.
+    void setSkinnedVertexAddress(VkDeviceAddress address) { m_skinnedVertices = address; }
 
     // Copies staged instance/material/mesh-table changes from per-frame upload memory (`allocate`). Records into
     // `cmd` (graphics queue) including the barriers against previous frames' reads.
@@ -140,10 +161,13 @@ public:
     void buildDrawList(const DrawFilter& filter, DrawList& out, std::vector<u32>& instanceIdsOut,
                        DrawBucket bucket = DrawBucket::Count) const;
     [[nodiscard]] const GpuMeshInfo* meshInfos() const { return m_meshInfos.data(); }
-    // All four buckets at once (camera view).
+    [[nodiscard]] const GpuMaterial* materials() const { return m_materials.data(); }
+    // All four buckets at once (camera view). `lod`: screen-space LOD selection (nullptr = LOD 0).
     void buildViewDrawLists(const Frustum& frustum, const glm::vec3& cameraPos, ViewDrawLists& out,
                             std::vector<u32> (&instanceIds)[u32(DrawBucket::Count)], f32 drawDistance,
-                            bool frustumCulling = true) const;
+                            bool frustumCulling = true, const LodSelection* lod = nullptr) const;
+    // LOD an instance gets under `s` (CPU mirror of the GPU selection).
+    [[nodiscard]] u32 instanceLod(const GpuInstance& inst, const LodSelection& s) const;
 
     struct Stats {
         u64 positionBytes = 0, attributeBytes = 0, indexBytes = 0;
@@ -164,8 +188,9 @@ private:
 
     rhi::Device* m_device;
     GrowableBuffer m_positions, m_attributes, m_indices, m_skin, m_meshlets;
-    GrowableBuffer m_meshInfoBuffer, m_materialBuffer, m_instanceBuffer;
+    GrowableBuffer m_meshInfoBuffer, m_materialBuffer, m_instanceBuffer, m_meshLodBuffer;
     std::vector<GpuMeshInfo> m_meshInfos;
+    std::vector<GpuMeshLod> m_meshLods; // kMaxMeshLods per mesh info
     RangeAllocator m_meshInfoAlloc{1u << 20};
     std::vector<GpuMaterial> m_materials;
     std::vector<u32> m_freeMaterials;
@@ -179,6 +204,12 @@ private:
     u32 m_liveInstances = 0;
     u32 m_movedInstances = 0;
     u64 m_updateStamp = 0;
+    SkinOutputResolver m_skinResolver;
+    VkDeviceAddress m_skinnedVertices = 0;
+    u64 m_structureVersion = 1;
+    // Sort scratch of the draw list builders (capacity kept: no per-frame heap allocations in steady state).
+    struct DrawListScratch;
+    mutable std::unique_ptr<DrawListScratch> m_scratch;
 };
 
 } // namespace ox::render

@@ -1,8 +1,20 @@
 #include "renderer_impl.hpp"
 
+#include "features/gpu_driven/gpu_driven.hpp"
+#include "features/gpu_driven/texture_streaming.hpp"
+
+#include <oxwald/render/features/gpu_driven/gpu_driven.hpp>
+
+#include <oxwald/core/jobs.hpp>
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/profile.hpp>
 #include <oxwald/render/clusters.hpp>
+#include <oxwald/render/features/postprocess/postprocess.hpp>
+#include <oxwald/render/features/raytracing/raytracing.hpp>
+#include <oxwald/render/features/reflections/reflections.hpp>
+#include <oxwald/render/features/translucency/translucency.hpp>
+#include <oxwald/render/features/volumetrics/volumetrics.hpp>
+#include <oxwald/render/features/world/world_skinning.hpp>
 #include <oxwald/rhi/swapchain.hpp>
 
 #include <algorithm>
@@ -114,6 +126,9 @@ std::unique_ptr<Renderer> Renderer::create(rhi::Device& device, const RendererDe
     m.desc = desc;
     m.scene = std::make_unique<GpuScene>(device);
     m.cache = std::make_unique<GpuResourceCache>(device, *m.scene);
+    m.gpuDriven = std::make_unique<GpuDriven>(device, *m.scene, m.frameAlloc, desc.jobs);
+    m.streamer = std::make_unique<TextureStreamer>(device, *m.cache, *m.scene);
+    m.cache->setStreamingHook(m.streamer.get());
     if (desc.jobs) m.cache->setProvider({}, desc.jobs);
     m.frameAlloc.init(device, device.framesInFlight());
     const std::array<glm::vec4, 9> zero{};
@@ -165,6 +180,9 @@ Renderer::~Renderer() {
     for (auto& [f, h] : p.finalBlit) m.device->destroy(h);
     m.device->destroy(m.zeroSH);
     m.frameAlloc.release(*m.device);
+    m.gpuDriven.reset();
+    m.cache->setStreamingHook(nullptr);
+    m.streamer.reset();
     m.cache.reset();
     m.scene.reset();
 }
@@ -204,6 +222,7 @@ void Renderer::destroyView(ViewId id) {
     for (PickRequest& p : vi.picks) {
         if (p.readback) m.device->destroy(p.readback);
     }
+    m.gpuDriven->releaseView(id);
     it->second->graph().reset();
     it->second->graph().releaseResources(*m.device);
     m.views.erase(it);
@@ -288,6 +307,7 @@ void Renderer::beginFrame(const RenderSnapshot& snapshot) {
     m.frameAlloc.beginFrame(m.device->frameIndex());
     m.building.resetCounters();
     m.building.frame = m.frameCounter;
+    m.gpuDriven->beginFrame(m.building);
     m.cache->setTextureQuality(m.settings.anisotropy, m.settings.mipBias, m.settings.maxTextureSize);
     m.cache->update();
     glm::vec3 camPos(0.0f);
@@ -311,13 +331,32 @@ void Renderer::endFrame() {
     // GPU timings of the last retired frame.
     s.passes.clear();
     s.gpuFrameMs = 0.0;
-    for (const rhi::GpuTiming& t : m.device->gpuTimings()) {
+    const auto& timings = m.device->gpuTimings();
+    f64 wallEnd = 0.0;
+    for (const rhi::GpuTiming& t : timings) {
+        const bool async = t.queue == u8(rhi::QueueType::Compute);
         auto it = std::find_if(s.passes.begin(), s.passes.end(), [&](const PassTiming& p) { return p.name == t.name; });
-        if (it == s.passes.end()) s.passes.push_back({t.name, t.milliseconds});
+        if (it == s.passes.end()) s.passes.push_back({t.name, t.milliseconds, t.startMs, async});
         else it->gpuMs += t.milliseconds;
         if (t.depth == 0) s.gpuFrameMs += t.milliseconds;
+        wallEnd = std::max(wallEnd, t.startMs + t.milliseconds);
+        if (t.depth != 0 || !async) continue;
+        // Async compute: time overlapped by graphics-queue scopes.
+        s.asyncComputeMs += t.milliseconds;
+        f64 overlap = 0.0;
+        for (const rhi::GpuTiming& g : timings) {
+            if (g.depth != 0 || g.queue != u8(rhi::QueueType::Graphics)) continue;
+            overlap += std::max(0.0, std::min(t.startMs + t.milliseconds, g.startMs + g.milliseconds) - std::max(t.startMs, g.startMs));
+        }
+        s.asyncOverlapMs += std::min(overlap, t.milliseconds);
     }
+    s.gpuFrameWallMs = wallEnd;
     s.instances = m.scene->liveInstanceCount();
+    if (s.gpuDriven && s.gpuCulling.valid) {
+        // Indirect draws: visibility and triangles come from the GPU counters (a few frames late).
+        s.visibleInstances += s.gpuCulling.instancesVisible;
+        s.triangles += s.gpuCulling.triangles + s.gpuCulling.meshletTriangles + s.gpuCulling.shadowTriangles;
+    }
     const rhi::GpuMemoryStats mem = m.device->memoryStats();
     s.vramUsageBytes = mem.totalUsageBytes;
     s.vramBudgetBytes = mem.totalBudgetBytes;
@@ -326,6 +365,14 @@ void Renderer::endFrame() {
     const GpuScene::Stats gs = m.scene->stats();
     s.geometryBytes = gs.positionBytes + gs.attributeBytes + gs.indexBytes;
     s.pendingAssetLoads = m.cache->pendingLoads();
+    m.streamer->update(m.streamingCamera, s.streaming);
+    s.pipelinesCompiling = m.device->pendingPipelineCompiles();
+    s.vram.push_back({"geometry", s.geometryBytes});
+    s.vram.push_back({"textures", m.cache->textureBytes()});
+    s.vram.push_back({"gpu-driven buffers", m.gpuDriven->memoryBytes()});
+    u64 transient = 0;
+    for (auto& [id, v] : m.views) transient += v->graph().plan().transientBytesAliased;
+    s.vram.push_back({"render targets (transient)", transient});
     s.cpuRenderMs = std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - m.frameStart).count();
     m.stats = s;
     ++m.frameCounter;
@@ -350,12 +397,25 @@ void Renderer::renderView(const ViewRenderRequest& request) {
     if (!dev.caps().rayTracingSupported()) fs.settings.rayTracing = false;
     fs.stats = &m.building;
     fs.firstViewOfFrame = !m.sceneUploaded;
+    fs.allowParallelRecording = request.recordInto == nullptr;
+    RenderView::Impl& cache = view->impl();
+    auto swapCached = [&] {
+        std::swap(fs.drawLists, cache.cachedLists[0]);
+        std::swap(fs.gpuEarly, cache.cachedLists[1]);
+        std::swap(fs.gpuLate, cache.cachedLists[2]);
+        std::swap(fs.lights, cache.cachedLights);
+        std::swap(fs.shadows, cache.cachedShadows);
+    };
+    swapCached();
+    fs.lights.clear();
+    fs.shadows.clear();
 
     rhi::RenderGraph& graph = view->graph();
     graph.reset();
     rhi::TextureHandle targetTex = request.target.swapchain ? request.target.swapchain->currentTexture() : request.target.texture;
     if (!targetTex) {
         OX_LOG_ERROR("render", "renderView: no target");
+        swapCached();
         return;
     }
     const rhi::TextureDesc& td = dev.desc(targetTex);
@@ -390,6 +450,7 @@ void Renderer::renderView(const ViewRenderRequest& request) {
     m.building.renderGraphCompiles += u32(graph.compileCount() - compilesBefore);
     m.building.featuresEnabled = u32(fs.features.size());
     m.building.lights += u32(fs.lights.size());
+    swapCached();
     view->m_frameIndex += 1;
     view->m_cameraCut = false;
 }
@@ -442,7 +503,8 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
 
     // --- lights ---
     const glm::vec3 camPos = request.camera.position();
-    std::vector<i32> gpuIndex(snap.lights.size(), -1);
+    thread_local std::vector<i32> gpuIndex; // scratch, capacity kept
+    gpuIndex.assign(snap.lights.size(), -1);
     for (usize i = 0; i < snap.lights.size(); ++i) {
         const SnapshotLight& sl = snap.lights[i];
         if (sl.light.type != LightType::Directional) continue;
@@ -457,7 +519,8 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         fs.lights.push_back(g);
     }
     fs.directionalCount = u32(fs.lights.size());
-    std::vector<u32> locals;
+    thread_local std::vector<u32> locals;
+    locals.clear();
     for (usize i = 0; i < snap.lights.size(); ++i) {
         const LightType t = snap.lights[i].light.type;
         if (t == LightType::Point || t == LightType::Spot) locals.push_back(u32(i));
@@ -559,21 +622,15 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
     c.blackTexture = defs.blackIndex;
     c.flatNormalTexture = defs.flatNormalIndex;
 
+    if (fs.firstViewOfFrame) streamingCamera = FeatureContext(fs, nullptr, InjectionPoint::PreDepth).lodSelection();
     fs.constantsAlloc = frameAlloc.allocate(sizeof(GpuViewConstants), 16);
     fs.headerAlloc = frameAlloc.allocate(sizeof(GpuSceneHeader), 16);
     scene->fillHeader(fs.header);
 
-    // --- draw lists ---
-    scene->buildViewDrawLists(view.frustum(), camPos, fs.drawLists, vi.drawIds,
-                              st.drawDistance > 0.0f ? st.drawDistance
-                                                     : (request.camera.farPlane > 0.0f ? request.camera.farPlane : 0.0f),
-                              st.frustumCulling);
-    for (u32 b = 0; b < u32(DrawBucket::Count); ++b) {
-        GpuAllocation a = frameAlloc.allocate(std::max<u64>(vi.drawIds[b].size(), 1) * 4, 16);
-        if (!vi.drawIds[b].empty()) std::memcpy(a.cpu, vi.drawIds[b].data(), vi.drawIds[b].size() * 4);
-        fs.drawLists.buckets[b].instanceIds = a.address;
-        fs.stats->visibleInstances += fs.drawLists.buckets[b].instanceCount;
-    }
+    // --- draw lists (CPU culling; lazily on first FeatureContext::drawLists() when GPU-driven) ---
+    fs.drawDistance = st.drawDistance > 0.0f ? st.drawDistance : (request.camera.farPlane > 0.0f ? request.camera.farPlane : 0.0f);
+    if (gpuDriven->active()) fs.cpuDrawListsBuilt = false;
+    else buildCpuDrawLists(fs);
 
     FrameResources& R = fs.resources;
     R.setTexture(res::kOutput, output);
@@ -587,6 +644,9 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
             scene->recordUploads(ctx.cmd, [this](u64 size) { return frameAlloc.allocate(size, 16); });
         });
     }
+
+    gpuDriven->setupView(fs); // "GpuCull" pass + fs.gpuEarly / fs.gpuLate (r.GpuDriven)
+    fs.stats->gpuDriven = fs.stats->gpuDriven || fs.gpuDriven;
 
     runFeatures(fs, InjectionPoint::PreDepth);
 
@@ -605,18 +665,55 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
             entity = graph.createTexture(targetDesc(formats::kEntityId, re, "EntityID"));
             pb.color(entity, VK_ATTACHMENT_LOAD_OP_CLEAR);
         }
+        if (!fs.gpuDriven && wantsParallelRecording(fs, {&fs.drawLists[DrawBucket::Opaque], &fs.drawLists[DrawBucket::Masked]})) {
+            pb.secondaryCommandLists();
+        }
         pb.execute([&fs, viewAddr, sceneAddr, editor, this](rhi::PassContext& ctx) {
             FeatureContext fc(fs, nullptr, InjectionPoint::PreDepth);
             const rhi::PipelineHandle pipes[4] = {pipelines.prepass[0][editor], pipelines.prepass[1][editor],
                                                   pipelines.prepass[2][editor], pipelines.prepass[3][editor]};
+            if (ctx.secondaryRendering) {
+                DrawPush pc;
+                pc.view = viewAddr;
+                pc.scene = sceneAddr;
+                recordParallel(fs, ctx, {&fs.drawLists[DrawBucket::Opaque], &fs.drawLists[DrawBucket::Masked]}, pipes, &pc, sizeof(pc));
+                return;
+            }
+            const ViewDrawLists& lists = fs.gpuDriven ? fs.gpuEarly : fs.drawLists;
             for (DrawBucket b : {DrawBucket::Opaque, DrawBucket::Masked}) {
-                const DrawList& list = fs.drawLists[b];
+                const DrawList& list = lists[b];
                 DrawPush pc;
                 pc.view = viewAddr;
                 pc.scene = sceneAddr;
                 pc.drawIds = list.instanceIds;
                 fc.drawBatches(ctx.cmd, list, pipes, &pc, sizeof(pc));
             }
+            DrawPush mp;
+            mp.view = viewAddr;
+            mp.scene = sceneAddr;
+            gpuDriven->drawMeshlets(fs, ctx.cmd, false, false, editor, &mp, sizeof(mp));
+        });
+    }
+    // Two-phase occlusion: HiZ of the phase-1 depth, cull the rest, draw the newly visible instances.
+    if (gpuDriven->declareLate(fs, depth)) {
+        rhi::PassBuilder pb = graph.addPass("DepthPrepass.Late");
+        pb.color(normals, VK_ATTACHMENT_LOAD_OP_LOAD).color(velocity, VK_ATTACHMENT_LOAD_OP_LOAD).depth(depth, VK_ATTACHMENT_LOAD_OP_LOAD);
+        if (entity.valid()) pb.color(entity, VK_ATTACHMENT_LOAD_OP_LOAD);
+        pb.execute([&fs, viewAddr, sceneAddr, editor, this](rhi::PassContext& ctx) {
+            FeatureContext fc(fs, nullptr, InjectionPoint::PreDepth);
+            const rhi::PipelineHandle pipes[4] = {pipelines.prepass[0][editor], pipelines.prepass[1][editor],
+                                                  pipelines.prepass[2][editor], pipelines.prepass[3][editor]};
+            for (DrawBucket b : {DrawBucket::Opaque, DrawBucket::Masked}) {
+                DrawPush pc;
+                pc.view = viewAddr;
+                pc.scene = sceneAddr;
+                pc.drawIds = fs.gpuLate[b].instanceIds;
+                fc.drawBatches(ctx.cmd, fs.gpuLate[b], pipes, &pc, sizeof(pc));
+            }
+            DrawPush mp;
+            mp.view = viewAddr;
+            mp.scene = sceneAddr;
+            gpuDriven->drawMeshlets(fs, ctx.cmd, true, false, editor, &mp, sizeof(mp));
         });
     }
     R.setTexture(res::kDepth, depth);
@@ -629,6 +726,7 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         const u32 mips = rhi::fullMipCount(re.width, re.height);
         const rhi::RGTexture hiz = graph.createTexture(targetDesc(formats::kHiZ, re, "HiZ", mips));
         graph.addPass("HiZ", rhi::PassType::Compute)
+            .queue(asyncComputeHint(dev.caps()))
             .read(depth, rhi::Access::SampledCompute)
             .overwrite(hiz, rhi::Access::StorageWriteCompute)
             .execute([this, depth, hiz, re, mips](rhi::PassContext& ctx) {
@@ -661,6 +759,7 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         vi.clusterBuffer, {vi.clusterBufferSize, rhi::BufferUsage::Storage, rhi::MemoryUsage::GpuOnly, "LightClusters"},
         {rhi::Access::General, rhi::Access::Undefined});
     graph.addPass("LightCulling", rhi::PassType::Compute)
+        .queue(asyncComputeHint(dev.caps()))
         .overwrite(clusters, rhi::Access::StorageWriteCompute)
         .execute([this, viewAddr, sceneAddr, grid](rhi::PassContext& ctx) {
             ctx.cmd.bindPipeline(pipelines.lightCull);
@@ -688,17 +787,29 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         for (std::string_view n : {res::kShadowCascades, res::kShadowAtlas, res::kPointShadows}) {
             if (rhi::RGTexture t = R.texture(n); t.valid()) pb.read(t, rhi::Access::SampledFragment);
         }
+        if (!fs.gpuDriven && wantsParallelRecording(fs, {&fs.drawLists[DrawBucket::Opaque], &fs.drawLists[DrawBucket::Masked]})) {
+            pb.secondaryCommandLists();
+        }
         pb.execute([&fs, viewAddr, sceneAddr, inputs, this](rhi::PassContext& ctx) {
             FeatureContext fc(fs, nullptr, InjectionPoint::Lighting);
             DrawPush pc;
             pc.view = viewAddr;
             pc.scene = sceneAddr;
             for (u32 i = 0; i < 4; ++i) pc.inputs[i] = inputs[i].valid() ? ctx.sampledIndex(inputs[i]) : kInvalidIndex;
-            for (DrawBucket b : {DrawBucket::Opaque, DrawBucket::Masked}) {
-                const DrawList& list = fs.drawLists[b];
-                pc.drawIds = list.instanceIds;
-                fc.drawBatches(ctx.cmd, list, pipelines.forward, &pc, sizeof(pc));
+            if (ctx.secondaryRendering) {
+                recordParallel(fs, ctx, {&fs.drawLists[DrawBucket::Opaque], &fs.drawLists[DrawBucket::Masked]},
+                               pipelines.forward, &pc, sizeof(pc));
+                return;
             }
+            for (const ViewDrawLists* lists : {fs.gpuDriven ? &fs.gpuEarly : &fs.drawLists, fs.gpuLateActive ? &fs.gpuLate : nullptr}) {
+                if (!lists) continue;
+                for (DrawBucket b : {DrawBucket::Opaque, DrawBucket::Masked}) {
+                    const DrawList& list = (*lists)[b];
+                    pc.drawIds = list.instanceIds;
+                    fc.drawBatches(ctx.cmd, list, pipelines.forward, &pc, sizeof(pc));
+                }
+            }
+            for (bool late : {false, true}) gpuDriven->drawMeshlets(fs, ctx.cmd, late, true, false, &pc, sizeof(pc));
         });
     }
     R.setTexture(res::kSceneColorHDR, hdr);
@@ -793,6 +904,100 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         }
     }
     (void)core;
+}
+
+bool Renderer::Impl::wantsParallelRecording(const FrameState& fs, std::initializer_list<const DrawList*> lists) const {
+    if (!desc.jobs || !fs.allowParallelRecording || !gpuDriven->settings().parallelRecording) return false;
+    usize batches = 0;
+    for (const DrawList* l : lists) batches += l->batches.size();
+    return batches >= usize(std::max(gpuDriven->settings().parallelMinBatches, 1));
+}
+
+void Renderer::Impl::recordParallel(FrameState& fs, rhi::PassContext& ctx, std::initializer_list<const DrawList*> lists,
+                                    const rhi::PipelineHandle* pipes, const void* push, u32 pushSize) {
+    OX_PROFILE_ZONE();
+    constexpr u32 kMaxChunks = 32;
+    const DrawList* ls[8];
+    u32 listCount = 0, total = 0;
+    for (const DrawList* l : lists) {
+        ls[listCount++] = l;
+        total += u32(l->batches.size());
+    }
+    if (total == 0) return;
+    const u32 perChunk = 64;
+    const u32 chunks = std::clamp(total / perChunk, 1u, std::min(kMaxChunks, desc.jobs->threadCount() * 2));
+    std::array<rhi::CommandList*, kMaxChunks> recorded{};
+    std::array<u32, kMaxChunks> draws{};
+    std::array<u64, kMaxChunks> tris{};
+    const rhi::SecondaryRenderingInfo& info = *ctx.secondaryRendering;
+    rhi::Device& dev = *device;
+    const rhi::BufferHandle indices = scene->indexBuffer();
+    u8 pc[rhi::kMaxPushConstantSize];
+    std::memcpy(pc, push, pushSize);
+    desc.jobs->parallelFor(chunks, 1, [&](u32 begin, u32 end, u32) {
+        for (u32 c = begin; c < end; ++c) {
+            const u32 thread = JobSystem::currentThreadIndex();
+            OX_ASSERT(thread < rhi::Device::kMaxRecordingThreads, "recording thread {} has no command pool slot", thread);
+            rhi::CommandList& cmd = dev.secondaryCommandList(thread, info);
+            cmd.bindIndexBuffer(indices);
+            const u32 first = u64(total) * c / chunks, last = u64(total) * (c + 1) / chunks;
+            u32 global = 0;
+            rhi::PipelineHandle bound;
+            u8 local[rhi::kMaxPushConstantSize];
+            std::memcpy(local, pc, pushSize);
+            for (u32 li = 0; li < listCount; ++li) {
+                const DrawList& l = *ls[li];
+                const u32 n = u32(l.batches.size());
+                if (global + n <= first || global >= last) {
+                    global += n;
+                    continue;
+                }
+                std::memcpy(local + 16, &l.instanceIds, sizeof(u64)); // drawIds of this list (DrawPush layout)
+                bool pushed = false;
+                for (u32 b = std::max(first, global) - global; b < n && global + b < last; ++b) {
+                    const DrawBatch& db = l.batches[b];
+                    const rhi::PipelineHandle p = pipes[std::min<u32>(db.variant, 3)];
+                    if (!p) continue;
+                    if (p != bound) {
+                        cmd.bindPipeline(p);
+                        bound = p;
+                    }
+                    if (!pushed) {
+                        cmd.pushConstants(local, pushSize);
+                        pushed = true;
+                    }
+                    cmd.drawIndexed(db.indexCount, db.instanceCount, db.firstIndex, db.vertexOffset, db.firstInstance);
+                    draws[c] += 1;
+                    tris[c] += u64(db.indexCount / 3) * db.instanceCount;
+                }
+                global += n;
+            }
+            cmd.end();
+            recorded[c] = &cmd;
+        }
+    });
+    ctx.cmd.executeSecondary(std::span<rhi::CommandList* const>(recorded.data(), chunks));
+    for (u32 c = 0; c < chunks; ++c) {
+        fs.stats->drawCalls += draws[c];
+        fs.stats->triangles += tris[c];
+    }
+    fs.stats->parallelRecordedChunks += chunks;
+}
+
+void Renderer::Impl::buildCpuDrawLists(FrameState& fs) {
+    OX_PROFILE_ZONE();
+    fs.cpuDrawListsBuilt = true;
+    RenderView& view = *fs.view;
+    RenderView::Impl& vi = view.impl();
+    const LodSelection lod = FeatureContext(fs, nullptr, InjectionPoint::PreDepth).lodSelection();
+    scene->buildViewDrawLists(view.frustum(), glm::vec3(fs.constants.cameraPosition), fs.drawLists, vi.drawIds,
+                              fs.drawDistance, fs.settings.frustumCulling, &lod);
+    for (u32 b = 0; b < u32(DrawBucket::Count); ++b) {
+        GpuAllocation a = frameAlloc.allocate(std::max<u64>(vi.drawIds[b].size(), 1) * 4, 16);
+        if (!vi.drawIds[b].empty()) std::memcpy(a.cpu, vi.drawIds[b].data(), vi.drawIds[b].size() * 4);
+        fs.drawLists.buckets[b].instanceIds = a.address;
+        if (!fs.gpuDriven) fs.stats->visibleInstances += fs.drawLists.buckets[b].instanceCount;
+    }
 }
 
 void Renderer::Impl::commit(FrameState& fs) {
@@ -901,14 +1106,14 @@ void registerBuiltinFeatures(Renderer& renderer) {
 
     // Feature areas register here. Each team owns exactly one line below: replace your marker with a call
     // like `registerReflectionFeatures(f);` (declared in features/<area>/...); keep the other lines untouched.
-    // [feature-area: reflections-ao]
-    // [feature-area: volumetrics]
-    // [feature-area: translucency-water-particles]
-    // [feature-area: raytracing]
-    // [feature-area: postprocess-upscalers]
-    // [feature-area: gpu-driven]
-    // [feature-area: world-skinning]
-    // [feature-area: ui]
+    registerReflectionFeatures(f); // [feature-area: reflections-ao]
+    volumetrics::registerVolumetricsFeatures(f); // [feature-area: volumetrics]
+    registerTranslucencyFeatures(f); // [feature-area: translucency-water-particles]
+    registerRayTracingFeatures(f); // [feature-area: raytracing]
+    registerPostProcessFeatures(f); // [feature-area: postprocess-upscalers]
+    registerGpuDrivenFeatures(f); // [feature-area: gpu-driven]
+    registerWorldSkinningFeatures(f); // [feature-area: world-skinning]
+    // [feature-area: ui] added by Oxwald::ui per renderer (ui::attachRenderer / ui::withUi); render does not link ui
 }
 
 } // namespace ox::render

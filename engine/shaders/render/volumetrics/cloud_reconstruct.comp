@@ -1,0 +1,56 @@
+#version 460
+// Volumetric clouds, temporal reconstruction at cloud resolution. Pixels traced this frame take the new sample
+// (blended with valid history to average the march jitter); the others reproject last frame's result through the
+// previous camera at their cloud distance. History is rejected outside the old frustum and where the scene depth
+// changed (disocclusion); rejected pixels fall back to the bilinear upsampled trace of this frame.
+#include <render/volumetrics/fog_common.glsl>
+#include <render/volumetrics/volumetrics_types.glsl>
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+OX_RENDER_PUSH(CloudConstantsBuffer clouds; uint traceColor; uint traceData; uint prevColor; uint prevData; uint outColor; uint outData;);
+
+void main() {
+    CloudConstants C = pc.clouds.c;
+    uvec2 q = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(q, C.size.zw))) return;
+    vec2 uv = (vec2(q) + 0.5) / vec2(C.size.zw);
+    uint checker = C.march.x;
+    bool fresh = all(equal(q % checker, C.march.yz));
+
+    vec4 color, data;
+    if (fresh) {
+        ivec2 t = ivec2(min(q / checker, C.size.xy - 1u));
+        color = texelFetch(oxTextures2D[nonuniformEXT(pc.traceColor)], t, 0);
+        data = texelFetch(oxTextures2D[nonuniformEXT(pc.traceData)], t, 0);
+    } else {
+        // Trace texel centres sit at (t · checker + offset + 0.5) in cloud pixels.
+        vec2 tc = ((vec2(q) + 0.5) - (vec2(C.march.yz) + 0.5)) / float(checker) + 0.5;
+        vec2 tuv = tc / vec2(C.size.xy);
+        color = OX_SAMPLE_2D_LOD(pc.traceColor, OX_SAMPLER_LINEAR_CLAMP, tuv, 0.0);
+        data = OX_SAMPLE_2D_LOD(pc.traceData, OX_SAMPLER_LINEAR_CLAMP, tuv, 0.0);
+    }
+
+    if (C.misc.y != 0u) {
+        vec3 cam = VIEW.cameraPosition.xyz;
+        vec3 dir = oxViewRay(pc.view, uv);
+        vec3 p = cam + dir * data.x;
+        vec4 clip = VIEW.prevUnjitteredViewProj * vec4(p, 1.0);
+        if (clip.w > 0.0) {
+            vec2 puv = clip.xy / clip.w * 0.5 + 0.5;
+            if (all(greaterThanEqual(puv, vec2(0.0))) && all(lessThanEqual(puv, vec2(1.0)))) {
+                vec4 hc = OX_SAMPLE_2D_LOD(pc.prevColor, OX_SAMPLER_LINEAR_CLAMP, puv, 0.0);
+                vec4 hd = OX_SAMPLE_2D_LOD(pc.prevData, OX_SAMPLER_LINEAR_CLAMP, puv, 0.0);
+                hc.rgb *= uintBitsToFloat(C.misc.w); // pre-exposure change since last frame
+                // Disocclusion: the geometry limiting the march changed by more than 10 %.
+                bool sameDepth = abs(hd.y - data.y) <= 0.1 * max(data.y, 1.0);
+                if (sameDepth) {
+                    color = fresh ? mix(hc, color, 0.5) : hc;
+                    data = fresh ? data : vec4(hd.x, data.y, hd.zw);
+                }
+            }
+        }
+    }
+    imageStore(oxImages2D_rgba16f[nonuniformEXT(pc.outColor)], ivec2(q), color);
+    imageStore(oxImages2D_rgba16f[nonuniformEXT(pc.outData)], ivec2(q), data);
+}

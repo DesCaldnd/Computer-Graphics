@@ -151,8 +151,9 @@ public:
                 f.frustum = Frustum::fromViewProj(cs.viewProj, true);
                 f.requiredInstanceFlags = kInstanceCastShadows;
                 f.bucketMask = (1u << u32(DrawBucket::Opaque)) | (1u << u32(DrawBucket::Masked));
+                f.lod = ctx.lodSelection(); // casters use the camera's LOD (no self-shadowing mismatch)
                 CascadeDraw d;
-                d.list = ctx.buildDrawList(f);
+                d.list = ctx.cullDrawList(f);
                 d.matrix = ctx.upload(std::span<const glm::mat4>(&cs.viewProj, 1));
                 draws->push_back(std::move(d));
             }
@@ -290,8 +291,9 @@ public:
             else f.frustum = Frustum::fromViewProj(s.viewProj, true);
             f.requiredInstanceFlags = kInstanceCastShadows;
             f.bucketMask = (1u << u32(DrawBucket::Opaque)) | (1u << u32(DrawBucket::Masked));
+            f.lod = ctx.lodSelection();
             LocalDraw d;
-            d.list = ctx.buildDrawList(f);
+            d.list = ctx.cullDrawList(f, a.point && m_layered ? 6u : 1u);
             d.matrices = ctx.upload(std::span<const glm::mat4>(matrices.data(), matrixCount));
             d.tile = a.tile;
             d.cubeSlot = a.cubeSlot;

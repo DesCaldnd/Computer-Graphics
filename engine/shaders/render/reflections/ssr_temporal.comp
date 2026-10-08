@@ -1,0 +1,42 @@
+#version 460
+// SSR temporal accumulation: reprojects last frame's result with the surface motion vector, clamps it to the
+// 3×3 neighbourhood of this frame's resolve (ghosting) and blends. Writes the history (= the SSR output).
+#include <render/reflections/ssr_common.glsl>
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint current; uint history; uint velocity; uint depth; uint outHistory; uint historyValid; float blend;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(VIEW.renderSize.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    vec4 cur = OX_FETCH_2D(pc.current, p, 0);
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    if (pc.historyValid == 0u || d <= 0.0) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outHistory, p, cur);
+        return;
+    }
+    vec4 mn = cur, mx = cur;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            if (x == 0 && y == 0) continue;
+            vec4 c = OX_FETCH_2D(pc.current, clamp(p + ivec2(x, y), ivec2(0), size - 1), 0);
+            mn = min(mn, c);
+            mx = max(mx, c);
+        }
+    }
+    vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+    vec2 vel = OX_FETCH_2D(pc.velocity, p, 0).xy;
+    vec2 prevUv = uv - vel;
+    vec4 result = cur;
+    if (all(greaterThanEqual(prevUv, vec2(0.0))) && all(lessThanEqual(prevUv, vec2(1.0)))) {
+        vec4 hist = OX_SAMPLE_2D_LOD(pc.history, OX_SAMPLER_LINEAR_CLAMP, prevUv, 0.0);
+        vec4 ext = (mx - mn) * 0.25;
+        hist = clamp(hist, mn - ext, mx + ext);
+        hist = max(hist, vec4(0.0));
+        result = mix(hist, cur, pc.blend);
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.outHistory, p, result);
+}

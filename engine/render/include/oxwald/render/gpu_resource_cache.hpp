@@ -44,6 +44,17 @@ struct GpuTexture {
     u32 width = 0, height = 0, mips = 0;
 };
 
+// Texture mip streaming hook (TextureStreamer, area gpu-driven). When installed, applyTexture() hands the CPU data
+// over and uploads only the mips from the returned level on; the streamer changes residency later with
+// createTextureFromData() + replaceTexture() (no CPU or GPU waits: uploads go through the transfer queue).
+class ITextureStreamingHook {
+public:
+    virtual ~ITextureStreamingHook() = default;
+    // Returns the first mip to make resident now (>= minFirstMip, the r.Textures.MaxSize limit).
+    virtual u32 onTextureLoaded(const Uuid& id, std::shared_ptr<const assets::TextureData> data, u32 minFirstMip) = 0;
+    virtual void onTextureRemoved(const Uuid& id) = 0;
+};
+
 class GpuResourceCache {
 public:
     GpuResourceCache(rhi::Device& device, GpuScene& scene);
@@ -79,6 +90,19 @@ public:
     // Sampler state applied to material textures (r.Textures.* cvars); changing it refreshes all materials.
     void setTextureQuality(i32 anisotropy, f32 mipBias, i32 maxTextureSize);
 
+    // --- streaming support ---
+    void setStreamingHook(ITextureStreamingHook* hook) { m_streaming = hook; }
+    // GPU texture holding mips [firstMip, last] of `data`, uploaded asynchronously (transfer queue). Invalid handle
+    // for unsupported data.
+    [[nodiscard]] GpuTexture createTextureFromData(const assets::TextureData& data, u32 firstMip);
+    // Swaps the GPU texture of a loaded texture (residency change): materials are refreshed, the previous texture is
+    // destroyed once the frames using it retired. False when `id` is not a loaded texture.
+    bool replaceTexture(const Uuid& id, const GpuTexture& texture);
+    // Resident GPU texture without triggering a load (nullptr when not ready).
+    [[nodiscard]] const GpuTexture* residentTexture(const Uuid& id) const;
+    // Sum of the GPU memory of loaded (non-external) textures, in bytes.
+    [[nodiscard]] u64 textureBytes() const;
+
     [[nodiscard]] const DefaultTextures& defaults() const { return m_defaults; }
     [[nodiscard]] u32 pendingLoads() const;
 
@@ -108,7 +132,8 @@ private:
 
     void requestLoad(const Uuid& id, u8 kind);
     void applyMesh(const Uuid& id, const assets::MeshData& mesh);
-    void applyTexture(const Uuid& id, const assets::TextureData& texture);
+    void applyTexture(const Uuid& id, const assets::TextureData& texture,
+                      std::shared_ptr<const assets::TextureData> shared = nullptr);
     void applyMaterial(const Uuid& id, const assets::MaterialAsset& material);
     void refreshMaterial(MaterialEntry& entry);
     u32 resolveTexture(const Uuid& id, u32 fallback);
@@ -131,6 +156,7 @@ private:
     i32 m_maxTextureSize = 8192;
     u32 m_samplerRepeat = 4;
     u32 m_samplerClamp = 1;
+    ITextureStreamingHook* m_streaming = nullptr;
 };
 
 } // namespace ox::render

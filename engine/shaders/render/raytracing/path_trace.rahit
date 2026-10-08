@@ -1,0 +1,9 @@
+#version 460
+// Path tracer any-hit (alpha-tested hit groups, radiance and shadow rays): rejects texels below the alpha cutoff.
+#include "path_payload.glsl"
+
+hitAttributeEXT vec2 attribs;
+
+void main() {
+    if (!oxRtAlphaTestPasses(pc.scene, pc.rt, gl_InstanceCustomIndexEXT, gl_PrimitiveID, attribs)) ignoreIntersectionEXT;
+}

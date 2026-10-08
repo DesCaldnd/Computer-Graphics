@@ -252,10 +252,16 @@ void CommandList::buildTlas(AccelStructHandle tlas, std::span<const TlasInstance
 }
 
 void CommandList::refitBlas(AccelStructHandle blas) {
+    const BlasDesc geometry = m_device->state().accelStructs.at(blas).blas;
+    refitBlas(blas, geometry);
+}
+
+void CommandList::refitBlas(AccelStructHandle blas, const BlasDesc& geometry) {
     DeviceState& s = m_device->state();
     AccelStructRecord& rec = s.accelStructs.at(blas);
     OX_ASSERT(!rec.tlas && rec.blas.allowUpdate && rec.scratch, "refitBlas needs a BLAS created with allowUpdate");
-    BlasGeometryInfo geo = describeBlas(*m_device, rec.blas);
+    OX_ASSERT(geometry.geometries.size() == rec.blas.geometries.size(), "refitBlas: geometry count changed");
+    BlasGeometryInfo geo = describeBlas(*m_device, geometry);
     VkAccelerationStructureBuildGeometryInfoKHR build{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
     build.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
     build.flags = VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |

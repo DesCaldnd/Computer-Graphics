@@ -86,12 +86,32 @@ struct DrawBatch {
     f32 sortDepth = 0.0f;  // view distance (transparent buckets are sorted back to front)
 };
 
+// A run of GPU-written VkDrawIndexedIndirectCommands sharing one pipeline variant.
+struct DrawIndirectRun {
+    u32 firstCommand = 0;
+    u32 commandCount = 0; // fixed maximum (commands of culled batches have instanceCount 0)
+    u32 variant = 0;      // DrawVariant bits
+    u32 countSlot = ~0u;  // index into indirectCountBuffer (drawIndirectCount path), ~0u = none
+};
+
 struct DrawList {
     std::vector<DrawBatch> batches;
     VkDeviceAddress instanceIds = 0; // u32[]: GpuInstance index per gl_InstanceIndex
     u32 instanceCount = 0;
     u64 triangleCount = 0;
-    [[nodiscard]] bool empty() const { return batches.empty(); }
+
+    // GPU-driven lists (FeatureContext::cullDrawList with r.GpuDriven): batches is empty and the draws are
+    // VkDrawIndexedIndirectCommands written by GPU culling (instance/triangle counts are unknown on the CPU).
+    // drawBatches() handles both kinds; do not record these draws by hand.
+    rhi::BufferHandle indirectBuffer;
+    u64 indirectOffset = 0; // byte offset of command 0
+    std::vector<DrawIndirectRun> indirectRuns;
+    u32 indirectMultiplier = 1; // instanceMultiplier the list was culled for (baked into the commands)
+    rhi::BufferHandle indirectCountBuffer; // per-run u32 draw counts (compacted commands), when valid
+    u64 indirectCountOffset = 0;
+
+    [[nodiscard]] bool empty() const { return batches.empty() && indirectRuns.empty(); }
+    [[nodiscard]] bool gpuDriven() const { return !indirectRuns.empty(); }
 };
 
 struct ViewDrawLists {
@@ -106,6 +126,8 @@ struct DrawFilter {
     u32 requiredInstanceFlags = 0; // e.g. kInstanceCastShadows
     u32 bucketMask = 0xF;          // bit per DrawBucket
     glm::vec3 sortOrigin{0.0f};
+    // Mesh LOD selection (FeatureContext::lodSelection() = this view's camera); unset = LOD 0.
+    std::optional<LodSelection> lod;
 };
 
 // Per-frame GPU upload memory (host visible). Valid until the frame retires.
@@ -181,6 +203,13 @@ public:
     [[nodiscard]] const ViewDrawLists& drawLists() const;
     // Custom culled draw list (instance ids uploaded to frame memory).
     DrawList buildDrawList(const DrawFilter& filter);
+    // Like buildDrawList(), but culled on the GPU when r.GpuDriven is active (Opaque/Masked buckets): frustum /
+    // sphere / flags / LOD tests run in a compute pass recorded before the next pass declared after this call, and
+    // the result is an indirect list (draw it with drawBatches(), passing the same instanceMultiplier). Falls back
+    // to buildDrawList() otherwise.
+    DrawList cullDrawList(const DrawFilter& filter, u32 instanceMultiplier = 1);
+    // LOD selection for this view's camera (r.ViewDistance.LODBias, r.GpuDriven.LODErrorPixels).
+    [[nodiscard]] LodSelection lodSelection() const;
     // Binds pipelines[batch.variant] per batch, pushes `pushConstants` (must start with view, scene, instanceIds
     // addresses; see OX_RENDER_DRAW_PUSH in common/scene.glsl) and issues one indexed instanced draw per batch.
     void drawBatches(rhi::CommandList& cmd, const DrawList& list, std::span<const rhi::PipelineHandle> pipelines,

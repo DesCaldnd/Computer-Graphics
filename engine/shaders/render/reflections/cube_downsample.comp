@@ -1,0 +1,16 @@
+#version 460
+// 2×2 box downsample of one mip of a cube map (storage views are 2D arrays, z = face) for the capture mip chain
+// used by the GGX prefilter's filtered importance sampling.
+#include <common/bindless.glsl>
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+OX_PUSH_CONSTANTS({ uint src; uint dst; uint dstSize; });
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= pc.dstSize || id.y >= pc.dstSize) return;
+    ivec3 s = ivec3(id.xy * 2u, id.z);
+    vec4 c = imageLoad(oxImages2DArray_rgba16f[nonuniformEXT(pc.src)], s) +
+             imageLoad(oxImages2DArray_rgba16f[nonuniformEXT(pc.src)], s + ivec3(1, 0, 0)) +
+             imageLoad(oxImages2DArray_rgba16f[nonuniformEXT(pc.src)], s + ivec3(0, 1, 0)) +
+             imageLoad(oxImages2DArray_rgba16f[nonuniformEXT(pc.src)], s + ivec3(1, 1, 0));
+    imageStore(oxImages2DArray_rgba16f[nonuniformEXT(pc.dst)], ivec3(id), c * 0.25);
+}

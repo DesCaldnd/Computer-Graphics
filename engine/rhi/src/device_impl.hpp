@@ -8,6 +8,7 @@
 #include <vk_mem_alloc.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <mutex>
@@ -90,10 +91,20 @@ struct TimestampScope {
     u32 depth = 0;
     u32 beginQuery = 0;
     u32 endQuery = ~0u;
+    u8 queue = 0;
+};
+
+// Per recording thread: secondary command buffers of one frame slot (Device::secondaryCommandList).
+struct SecondaryPool {
+    std::array<VkCommandPool, kQueueTypeCount> pools{};
+    std::array<std::vector<VkCommandBuffer>, kQueueTypeCount> buffers;
+    std::array<u32, kQueueTypeCount> used{};
+    std::deque<CommandList> lists;
 };
 
 struct FrameContext {
     std::array<VkCommandPool, kQueueTypeCount> pools{};
+    std::unique_ptr<std::array<SecondaryPool, 64>> secondary; // indexed by recording thread, created on demand
     std::array<std::vector<VkCommandBuffer>, kQueueTypeCount> buffers;
     std::array<u32, kQueueTypeCount> used{};
     std::deque<CommandList> lists;
@@ -167,6 +178,17 @@ struct DeviceState {
     FilePoller shaderFiles;
     std::chrono::steady_clock::time_point lastShaderPoll{};
     std::string lastPipelineError;
+    // Async pipeline compiles (Device::create*PipelineAsync): results are published at beginFrame.
+    struct AsyncPipelineResult {
+        PipelineHandle handle;
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        std::vector<std::filesystem::path> dependencies;
+        std::array<u32, 3> localSize{1, 1, 1};
+        std::string error;
+    };
+    std::mutex asyncPipelineMutex;
+    std::vector<AsyncPipelineResult> asyncPipelineResults;
+    std::atomic<u32> asyncPipelinesInFlight{0};
 
     // Frames
     std::vector<FrameContext> frames;

@@ -19,6 +19,9 @@
 
 namespace ox::render {
 
+class GpuDriven;
+class TextureStreamer;
+
 // Linear allocator over host-visible buffers, one chunk list per frame in flight.
 class GpuFrameAllocator {
 public:
@@ -69,6 +72,10 @@ struct RenderView::Impl {
     u64 lastSettingsHash = 0;
     u64 lastGraphCompiles = 0;
     std::vector<u32> drawIds[u32(DrawBucket::Count)];
+    // FrameState containers swapped in/out every frame so their capacity is reused (no steady-state allocations).
+    ViewDrawLists cachedLists[3]; // CPU lists, GPU early, GPU late
+    std::vector<GpuLight> cachedLights;
+    std::vector<GpuShadow> cachedShadows;
 };
 
 // Everything one view's frame needs; FeatureContext forwards to it.
@@ -85,10 +92,17 @@ struct FrameState {
     std::vector<GpuLight> lights;    // directional first
     std::vector<GpuShadow> shadows;
     u32 directionalCount = 0;
-    ViewDrawLists drawLists;
+    ViewDrawLists drawLists;        // CPU-culled; built lazily on first drawLists() access when gpuDriven
+    bool cpuDrawListsBuilt = true;
+    f32 drawDistance = 0.0f;
+    // GPU-driven path (features/gpu_driven): Opaque/Masked indirect lists of the two occlusion phases.
+    bool gpuDriven = false;
+    bool gpuLateActive = false;
+    ViewDrawLists gpuEarly, gpuLate;
     std::vector<IRenderFeature*> features; // resolved, registration order
     RenderStats* stats = nullptr;
     bool firstViewOfFrame = false;
+    bool allowParallelRecording = false; // not when recording into a caller's command list
     VkFormat outputFormat = VK_FORMAT_UNDEFINED;
 };
 
@@ -108,6 +122,9 @@ struct Renderer::Impl {
     RendererDesc desc;
     std::unique_ptr<GpuScene> scene;
     std::unique_ptr<GpuResourceCache> cache;
+    std::unique_ptr<GpuDriven> gpuDriven;
+    std::unique_ptr<TextureStreamer> streamer;
+    LodSelection streamingCamera; // main view of the frame (texture streaming heuristic)
     FeatureRegistry features;
     std::map<ViewId, std::unique_ptr<RenderView>> views;
     ViewId nextViewId = 1;
@@ -135,6 +152,11 @@ struct Renderer::Impl {
     void runFeatures(FrameState& fs, InjectionPoint point);
     void commit(FrameState& fs);
     void collectPicks();
+    void buildCpuDrawLists(FrameState& fs);
+    // Multithreaded recording of CPU-path instanced batches (secondary command lists, r.ParallelRecording).
+    [[nodiscard]] bool wantsParallelRecording(const FrameState& fs, std::initializer_list<const DrawList*> lists) const;
+    void recordParallel(FrameState& fs, rhi::PassContext& ctx, std::initializer_list<const DrawList*> lists,
+                        const rhi::PipelineHandle* pipelines, const void* push, u32 pushSize);
 };
 
 // Built-in features (features/*.cpp).

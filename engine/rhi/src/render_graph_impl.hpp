@@ -29,6 +29,7 @@ struct RGPassDecl {
     PassType type = PassType::Graphics;
     QueueType queueHint = QueueType::Graphics;
     bool sideEffect = false;
+    bool secondary = false;
     std::vector<RGAccessDecl> accesses;
     std::vector<RGAttachmentDecl> colors;
     std::optional<RGAttachmentDecl> depth;

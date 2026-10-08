@@ -40,6 +40,19 @@ struct RenderingDesc {
     u32 layerCount = 1;
     u32 viewMask = 0; // multiview
     bool setViewportAndScissor = true;
+    // The scope is filled only by executeSecondary() (VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT); viewport
+    // and scissor are then set by the secondaries (Device::secondaryCommandList).
+    bool secondaryContents = false;
+};
+
+// Attachment formats / extent a secondary command list inherits (multithreaded recording inside one rendering scope).
+struct SecondaryRenderingInfo {
+    std::vector<VkFormat> colorFormats;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkFormat stencilFormat = VK_FORMAT_UNDEFINED;
+    u32 viewMask = 0;
+    u32 samples = 1;
+    VkRect2D area{}; // viewport + scissor set at begin
 };
 
 // Thin wrapper over a VkCommandBuffer. Obtained from Device::commandList() (per-frame, recycled automatically)
@@ -87,6 +100,8 @@ public:
     void drawIndexedIndirectCount(BufferHandle args, u64 offset, BufferHandle count, u64 countOffset, u32 maxDraws,
                                   u32 stride = sizeof(VkDrawIndexedIndirectCommand));
     void drawMeshTasks(u32 x, u32 y = 1, u32 z = 1);
+    // VkDrawMeshTasksIndirectCommandEXT (3 × u32) records.
+    void drawMeshTasksIndirect(BufferHandle args, u64 offset, u32 drawCount = 1, u32 stride = 12);
 
     // --- compute / ray tracing ---
     void dispatch(u32 x, u32 y = 1, u32 z = 1);
@@ -113,8 +128,17 @@ public:
     // --- acceleration structures (require DeviceCaps::accelerationStructure) ---
     void buildTlas(AccelStructHandle tlas, std::span<const TlasInstance> instances, bool update = false);
     void refitBlas(AccelStructHandle blas); // re-builds in update mode from the original geometry buffers
+    // Update-mode rebuild from new geometry (same triangle counts/topology, e.g. ping-pong skinning output buffers).
+    void refitBlas(AccelStructHandle blas, const BlasDesc& geometry);
 
     // --- debugging & profiling ---
+    // --- secondary command lists (multithreaded recording) ---
+    // Records `lists` (ended secondaries from Device::secondaryCommandList) into this primary, in order.
+    void executeSecondary(std::span<CommandList* const> lists);
+    // Ends a secondary command list (primaries are ended by Device::submit).
+    void end();
+    [[nodiscard]] bool isSecondary() const { return m_secondary; }
+
     void beginLabel(std::string_view name, const f32 color[4] = nullptr);
     void endLabel();
     void insertLabel(std::string_view name);
@@ -134,6 +158,7 @@ private:
     QueueType m_queue;
     PipelineHandle m_boundPipeline;
     i32 m_frameSlot = -1; // frame context owning this list (timestamps); -1 for immediate submits
+    bool m_secondary = false;
     std::vector<u32> m_openTimestamps;
 };
 

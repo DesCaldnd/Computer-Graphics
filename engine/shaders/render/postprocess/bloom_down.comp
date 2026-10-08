@@ -1,0 +1,44 @@
+#version 460
+// Bloom downsample (Jimenez, "Next generation post processing in Call of Duty: Advanced Warfare"): 13 bilinear taps
+// = 36 texels, weights sum to 1 (energy conserving). The first downsample uses the Karis average (each 2×2 group
+// weighted by 1 / (1 + luma)) so single bright pixels do not flicker. No threshold: everything blooms a little,
+// physically like a lens' point spread function.
+#include <render/postprocess/pp_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    uint src;
+    uint dst;
+    uint karis;
+    uint pad;
+    vec2 srcTexel; // 1 / source size
+    vec2 dstSize;
+});
+
+vec3 s(vec2 uv, vec2 o) { return ppSanitize(OX_SAMPLE_2D_LOD(pc.src, OX_SAMPLER_LINEAR_CLAMP, uv + o * pc.srcTexel, 0.0).rgb); }
+float karisWeight(vec3 c) { return 1.0 / (1.0 + ppLuma(c)); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.dstSize)))) return;
+    vec2 uv = (vec2(p) + 0.5) / pc.dstSize;
+    vec3 a = s(uv, vec2(-2, -2)), b = s(uv, vec2(0, -2)), c = s(uv, vec2(2, -2));
+    vec3 d = s(uv, vec2(-2, 0)), e = s(uv, vec2(0, 0)), f = s(uv, vec2(2, 0));
+    vec3 g = s(uv, vec2(-2, 2)), h = s(uv, vec2(0, 2)), i = s(uv, vec2(2, 2));
+    vec3 j = s(uv, vec2(-1, -1)), k = s(uv, vec2(1, -1)), l = s(uv, vec2(-1, 1)), m = s(uv, vec2(1, 1));
+    vec3 result;
+    if (pc.karis != 0u) {
+        vec3 g0 = (j + k + l + m) * 0.25;
+        vec3 g1 = (a + b + d + e) * 0.25;
+        vec3 g2 = (b + c + e + f) * 0.25;
+        vec3 g3 = (d + e + g + h) * 0.25;
+        vec3 g4 = (e + f + h + i) * 0.25;
+        float w0 = 0.5 * karisWeight(g0), w1 = 0.125 * karisWeight(g1), w2 = 0.125 * karisWeight(g2);
+        float w3 = 0.125 * karisWeight(g3), w4 = 0.125 * karisWeight(g4);
+        result = (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);
+    } else {
+        result = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.dst, p, vec4(result, 1.0));
+}

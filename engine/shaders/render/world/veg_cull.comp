@@ -1,0 +1,84 @@
+#version 460
+// Vegetation GPU culling: one workgroup per CPU-visible cell. Each instance is frustum tested (bounding sphere),
+// thinned by density, assigned a LOD (mesh 0..2 / impostor 3, mirrors world::selectVegetationLod) and appended to its
+// (prototype, LOD) slot; inside a fade band it is also appended to the next LOD with the complementary dither.
+#include "vegetation_common.glsl"
+layout(local_size_x = 64) in;
+
+struct CullCell {
+    uint first;     // global instance index (vegetation arena)
+    uint count;
+    uint layerSlot; // CullLayer index
+    uint pad;
+};
+struct CullLayer {
+    vec4 lodEnds; // end of LOD 0, LOD 1, last mesh LOD (impostor start or cull), cull distance
+    vec4 params;  // fade range, density keep fraction, impostors (0/1), unused
+    uint protoSlot;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+struct Slot {
+    uint base;
+    uint capacity;
+    uint count;
+    uint pad;
+};
+OX_READONLY_BUFFER(CellBuffer, { CullCell c[]; });
+OX_READONLY_BUFFER(LayerBuffer, { CullLayer l[]; });
+OX_READONLY_BUFFER(PlaneBuffer, { vec4 p[6]; });
+OX_BUFFER(SlotBuffer, { Slot s[]; });
+OX_BUFFER(RecordOutBuffer, { uvec2 r[]; });
+
+OX_PUSH_CONSTANTS({ CellBuffer cells; LayerBuffer layers; VegInstanceBuffer instances; PlaneBuffer planes; SlotBuffer slots; RecordOutBuffer records; vec3 cameraPos; uint cellCount; });
+
+void emit(uint slot, uint instance, uint fadeCode) {
+    uint idx = atomicAdd(pc.slots.s[slot].count, 1u);
+    if (idx < pc.slots.s[slot].capacity) pc.records.r[pc.slots.s[slot].base + idx] = uvec2(instance, fadeCode);
+}
+
+void main() {
+    uint cellIndex = gl_WorkGroupID.x;
+    if (cellIndex >= pc.cellCount) return;
+    CullCell cell = pc.cells.c[cellIndex];
+    CullLayer layer = pc.layers.l[cell.layerSlot];
+    for (uint i = gl_LocalInvocationID.x; i < cell.count; i += 64u) {
+        uint index = cell.first + i;
+        VegInstance inst = pc.instances.i[index];
+        if (inst.random >= layer.params.y) continue; // density thinning (deterministic per instance)
+        vec3 pos = vec3(inst.t0.w, inst.t1.w, inst.t2.w);
+        float r = inst.boundingRadius;
+        bool inside = true;
+        for (int k = 0; k < 6; ++k) {
+            vec4 pl = pc.planes.p[k];
+            if (dot(pl.xyz, pos) + pl.w < -r) {
+                inside = false;
+                break;
+            }
+        }
+        if (!inside) continue;
+        float d = distance(pc.cameraPos, pos);
+        float cull = layer.lodEnds.w;
+        if (d > cull) continue;
+        bool impostors = layer.params.z > 0.5;
+        float ends[3] = float[](layer.lodEnds.x, layer.lodEnds.y, layer.lodEnds.z);
+        uint lod = impostors ? 3u : 2u;
+        float end = cull;
+        for (uint k = 0u; k < 3u; ++k) {
+            if (d <= ends[k]) {
+                lod = k;
+                end = ends[k];
+                break;
+            }
+        }
+        float fade = layer.params.x > 0.0 ? clamp((end - d) / layer.params.x, 0.0, 1.0) : 1.0;
+        uint code = uint(fade * 65535.0 + 0.5);
+        uint base = layer.protoSlot * 4u;
+        emit(base + lod, index, code);
+        if (code < 65535u) {
+            uint next = lod < 2u ? lod + 1u : (lod == 2u && impostors ? 3u : 4u);
+            if (next < 4u) emit(base + next, index, code | 0x10000u);
+        }
+    }
+}

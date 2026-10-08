@@ -1,0 +1,126 @@
+#version 460
+// Ray traced refraction (TranslucencyRT): for pixels whose nearest translucent surface in front of the opaque depth is
+// a refractive material, trace the glass properly and replace SceneColorHDR:
+//   * Fresnel (Schlick with the material IOR) splits a reflection ray (sees off-screen objects) and a refraction ray
+//   * refraction follows Snell's law through the object: internal bounces, total internal reflection, Beer-Lambert
+//     absorption over the travelled distance, exit refraction, up to `maxBounces` interface events
+//   * the ray that leaves the glass is shaded with the simple hit lighting (coloured shadows included) or the sky
+// Transparent (alpha blended) surfaces stay raster.
+#include "rt_query.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(RtSceneBuffer rt; uint depth; uint sceneColor; uint width; uint height; uint frame; uint maxBounces;
+               uint flags;);
+
+vec3 shadeEnvironmentRay(vec3 origin, vec3 dir, inout uint rng, bool colored) {
+    RtHit h = oxRtTraceClosest(pc.scene, pc.rt, origin, dir, 0.0, 1e4, OX_RT_MASK_SOLID);
+    if (!h.hit) return oxRtMissRadiance(pc.view, pc.scene, dir, true);
+    RtSurface s = oxRtFetchSurface(pc.scene, pc.rt, h.instance, h.primitive, h.bary, dir, oxRtConeLod(h.t, 0.002, 512.0));
+    return oxRtShadeHit(pc.view, pc.scene, pc.rt, s, -dir, rng, colored);
+}
+
+float fresnelDielectric(float cosI, float eta) {
+    // eta = n1 / n2; Schlick with f0 from the IOR ratio, exact TIR test.
+    float sin2T = eta * eta * (1.0 - cosI * cosI);
+    if (sin2T >= 1.0) return 1.0;
+    float f0 = (1.0 - eta) / (1.0 + eta);
+    f0 *= f0;
+    return f0 + (1.0 - f0) * oxPow5(1.0 - cosI);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.width, pc.height)))) return;
+    vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    vec3 nearP = oxWorldPositionFromDepth(pc.view, uv, 1.0);
+    vec3 dir = oxViewRay(pc.view, uv);
+    float tOpaque = d > 0.0 ? dot(oxWorldPositionFromDepth(pc.view, uv, d) - nearP, dir) : 1e4;
+    RtHit first = oxRtTraceClosest(pc.scene, pc.rt, nearP, dir, 0.0, max(tOpaque - 1e-3, 0.0), OX_RT_MASK_TRANSLUCENT);
+    if (!first.hit) return;
+    RtSurface s = oxRtFetchSurface(pc.scene, pc.rt, first.instance, first.primitive, first.bary, dir, 0.0);
+    if (s.blend != OX_BLEND_REFRACTIVE) return;
+
+    bool colored = (pc.flags & 1u) != 0u;
+    uint rng = oxRtSeed(uvec2(p), pc.frame, 0x61A5u);
+    Material m = pc.scene.s.materials.m[s.material];
+    float ior = max(m.ior, 1.0001);
+    float transmission = oxRtTransmission(m);
+    vec3 P = s.position;
+    vec3 N = s.normal; // faces the incoming ray
+    float cosI = clamp(dot(-dir, N), 0.0, 1.0);
+    float F = fresnelDielectric(cosI, 1.0 / ior);
+
+    // Reflection off the first interface.
+    vec3 R = reflect(dir, N);
+    vec3 reflected = shadeEnvironmentRay(oxRtOffsetRay(P, s.geometricNormal), R, rng, colored);
+
+    // Refraction path through the object.
+    vec3 throughput = s.baseColor.rgb * transmission;
+    vec3 transmitted = vec3(0.0);
+    vec3 rayDir = refract(dir, N, 1.0 / ior);
+    vec3 origin = oxRtOffsetRay(P, -s.geometricNormal);
+    bool inside = true;
+    bool done = false;
+    for (uint b = 0u; b < pc.maxBounces && !done; ++b) {
+        if (dot(rayDir, rayDir) < 1e-6) { // TIR on entry is impossible (n1 < n2); guard against NaNs
+            done = true;
+            break;
+        }
+        RtHit h = oxRtTraceClosest(pc.scene, pc.rt, origin, rayDir, 0.0, 1e4, OX_RT_MASK_ALL);
+        if (!h.hit) {
+            transmitted = throughput * oxRtMissRadiance(pc.view, pc.scene, rayDir, true);
+            done = true;
+            break;
+        }
+        RtSurface hs = oxRtFetchSurface(pc.scene, pc.rt, h.instance, h.primitive, h.bary, rayDir, 0.0);
+        if (inside) throughput *= oxRtBeerLambert(m.absorptionColor, m.absorptionDistance, h.t);
+        if (hs.blend != OX_BLEND_REFRACTIVE) {
+            // Opaque (or blended) surface seen through the glass.
+            transmitted = throughput * oxRtShadeHit(pc.view, pc.scene, pc.rt, hs, -rayDir, rng, colored);
+            done = true;
+            break;
+        }
+        Material hm = pc.scene.s.materials.m[hs.material];
+        float hIor = max(hm.ior, 1.0001);
+        // Leaving (back face / inside) or entering another refractive object.
+        float eta = inside ? hIor : 1.0 / hIor;
+        vec3 n = hs.normal; // faces the incoming ray
+        float c = clamp(dot(-rayDir, n), 0.0, 1.0);
+        float f = fresnelDielectric(c, eta);
+        vec3 T = refract(rayDir, n, eta);
+        bool tir = dot(T, T) < 1e-6 || f >= 1.0;
+        if (tir) {
+            // Total internal reflection.
+            rayDir = reflect(rayDir, n);
+            origin = oxRtOffsetRay(hs.position, hs.geometricNormal);
+        } else {
+            // Deterministic: follow the refracted ray, drop the partially reflected share (no noise, no denoiser).
+            throughput *= 1.0 - f;
+            if (!inside) throughput *= hs.baseColor.rgb * oxRtTransmission(hm);
+            rayDir = T;
+            origin = oxRtOffsetRay(hs.position, -hs.geometricNormal);
+            inside = !inside;
+        }
+    }
+    if (!done) transmitted = throughput * oxRtPrefilteredSpecular(pc.view, rayDir, 0.0); // out of bounces
+
+    // Direct sun highlight on the first interface.
+    vec3 highlight = vec3(0.0);
+    int sun = VIEW.sunLight;
+    if (sun >= 0) {
+        Light l = pc.scene.s.lights.l[sun];
+        vec3 L = -l.direction;
+        OxSurface os = oxRtToSurface(s, -dir);
+        os.metallic = 0.0;
+        os.diffuseColor = vec3(0.0);
+        os.f0 = vec3(((1.0 - ior) / (1.0 + ior)) * ((1.0 - ior) / (1.0 + ior)));
+        if (dot(L, s.geometricNormal) > 0.0) {
+            highlight = oxBrdfDirect(os, L, vec3(1.0)) * l.color *
+                        oxRtShadow(pc.scene, pc.rt, oxRtOffsetRay(P, s.geometricNormal), L, 1e4, colored);
+        }
+    }
+    vec3 color = F * reflected + (1.0 - F) * transmitted + highlight + oxRtEmissiveRadiance(pc.view, s.emissive);
+    OX_IMAGE_STORE_2D(rgba16f, pc.sceneColor, p, vec4(color * VIEW.preExposure, 1.0));
+}

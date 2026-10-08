@@ -103,6 +103,10 @@ struct GraphicsPipelineDesc {
     ShaderStageDesc fragment; // may be empty (depth-only)
     ShaderStageDesc task;
     ShaderStageDesc mesh;
+    // Optional tessellation (DeviceCaps::tessellationShader): both stages + topology PATCH_LIST + control points.
+    ShaderStageDesc tessControl;
+    ShaderStageDesc tessEval;
+    u32 patchControlPoints = 0;
     std::vector<VkFormat> colorFormats;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkFormat stencilFormat = VK_FORMAT_UNDEFINED;

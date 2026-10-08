@@ -127,7 +127,14 @@ void GpuResourceCache::setTextureQuality(i32 anisotropy, f32 mipBias, i32 maxTex
 // --- registration ---
 
 void GpuResourceCache::addMesh(const Uuid& id, const assets::MeshData& mesh) { applyMesh(id, mesh); }
-void GpuResourceCache::addTexture(const Uuid& id, const assets::TextureData& texture) { applyTexture(id, texture); }
+void GpuResourceCache::addTexture(const Uuid& id, const assets::TextureData& texture) {
+    if (m_streaming) {
+        auto shared = std::make_shared<const assets::TextureData>(texture); // the streamer keeps the CPU mips
+        applyTexture(id, *shared, shared);
+    } else {
+        applyTexture(id, texture);
+    }
+}
 void GpuResourceCache::addMaterial(const Uuid& id, const assets::MaterialAsset& material) { applyMaterial(id, material); }
 
 void GpuResourceCache::addExternalTexture(const Uuid& id, rhi::TextureHandle texture) {
@@ -148,6 +155,7 @@ void GpuResourceCache::remove(const Uuid& id) {
     if (auto it = m_textures.find(id); it != m_textures.end()) {
         if (!it->second.external && it->second.gpu.texture) m_device->destroy(it->second.gpu.texture);
         m_textures.erase(it);
+        if (m_streaming) m_streaming->onTextureRemoved(id);
         for (auto& [mid, m] : m_materialsById) refreshMaterial(m);
     }
     if (auto it = m_materialsById.find(id); it != m_materialsById.end()) {
@@ -258,7 +266,7 @@ void GpuResourceCache::update() {
             if (c.mesh) applyMesh(c.id, *c.mesh);
             else m_meshes[c.id].state = ResourceState::Missing;
         } else if (c.kind == 1) {
-            if (c.texture) applyTexture(c.id, *c.texture);
+            if (c.texture) applyTexture(c.id, *c.texture, c.texture);
             else {
                 m_textures[c.id].state = ResourceState::Missing;
                 for (auto& [mid, m] : m_materialsById) refreshMaterial(m);
@@ -296,7 +304,8 @@ void GpuResourceCache::applyMesh(const Uuid& id, const assets::MeshData& mesh) {
     e.state = ResourceState::Ready;
 }
 
-void GpuResourceCache::applyTexture(const Uuid& id, const assets::TextureData& texIn) {
+void GpuResourceCache::applyTexture(const Uuid& id, const assets::TextureData& texIn,
+                                    std::shared_ptr<const assets::TextureData> shared) {
     TextureEntry& e = m_textures[id];
 #if OX_RENDER_HAS_ASSETS
     // Devices without BC support: decode on the CPU (assets::decompressToRGBA8).
@@ -305,6 +314,7 @@ void GpuResourceCache::applyTexture(const Uuid& id, const assets::TextureData& t
                         texIn.format != assets::TextureFormat::BC6HUfloat;
     if (decode) decoded = assets::decompressToRGBA8(texIn);
     const assets::TextureData& tex = decode ? decoded : texIn;
+    if (decode && shared) shared = std::make_shared<const assets::TextureData>(decoded);
 #else
     const assets::TextureData& tex = texIn;
 #endif
@@ -325,6 +335,9 @@ void GpuResourceCache::applyTexture(const Uuid& id, const assets::TextureData& t
     while (first + 1 < tex.mips.size() &&
            std::max(tex.mips[first].width, tex.mips[first].height) > u32(std::max(m_maxTextureSize, 1))) {
         ++first;
+    }
+    if (m_streaming && shared && !tex.cube) {
+        first = std::clamp<usize>(m_streaming->onTextureLoaded(id, shared, u32(first)), first, tex.mips.size() - 1);
     }
     const assets::TextureMip& top = tex.mips[first];
     rhi::TextureDesc d;
@@ -390,6 +403,7 @@ void GpuResourceCache::refreshMaterial(MaterialEntry& e) {
     g.flags = u32(m.blendMode) & kMaterialBlendMask;
     if (m.doubleSided) g.flags |= kMaterialDoubleSided;
     if (m.shadingModel == assets::ShadingModel::Unlit) g.flags |= kMaterialUnlit;
+    if (m.renderQueueOffset != 0) g.flags |= kMaterialSorted;
     g.sampler = m_samplerRepeat;
     g.ior = m.ior;
     g.transmission = m.transmission;
@@ -402,6 +416,54 @@ void GpuResourceCache::refreshMaterial(MaterialEntry& e) {
     g.uvTiling = m.uvTiling;
     g.uvOffset = m.uvOffset;
     m_scene->setMaterial(e.index, g);
+}
+
+GpuTexture GpuResourceCache::createTextureFromData(const assets::TextureData& tex, u32 firstMip) {
+    const VkFormat format = toVk(tex.format);
+    if (format == VK_FORMAT_UNDEFINED || tex.mips.empty() || firstMip >= tex.mips.size()) return {};
+    if (isBlockCompressed(format) && !m_device->caps().textureCompressionBC) return {};
+    const assets::TextureMip& top = tex.mips[firstMip];
+    rhi::TextureDesc d;
+    d.name = "asset.texture.streamed";
+    d.format = format;
+    d.width = top.width;
+    d.height = top.height;
+    d.type = tex.cube ? rhi::TextureType::Cube : rhi::TextureType::Tex2D;
+    d.arrayLayers = tex.cube ? 6 * std::max(tex.layers / 6, 1u) : std::max(tex.layers, 1u);
+    d.mipLevels = u32(tex.mips.size() - firstMip);
+    d.usage = rhi::TextureUsage::Sampled | rhi::TextureUsage::TransferDst;
+    std::vector<u8> data;
+    for (usize m = firstMip; m < tex.mips.size(); ++m) {
+        const auto& md = tex.mips[m].data;
+        data.insert(data.end(), reinterpret_cast<const u8*>(md.data()), reinterpret_cast<const u8*>(md.data()) + md.size());
+    }
+    rhi::TextureHandle t = m_device->createTexture(d);
+    m_device->uploadTextureAsync(t, data, {0, ~0u, 0, ~0u, rhi::Access::SampledGraphics});
+    return {t, m_device->sampledIndex(t), tex.cube, d.width, d.height, d.mipLevels};
+}
+
+bool GpuResourceCache::replaceTexture(const Uuid& id, const GpuTexture& texture) {
+    auto it = m_textures.find(id);
+    if (it == m_textures.end() || it->second.external || it->second.state != ResourceState::Ready) return false;
+    if (it->second.gpu.texture) m_device->destroy(it->second.gpu.texture); // deferred until frames in flight retire
+    it->second.gpu = texture;
+    for (auto& [mid, m] : m_materialsById) refreshMaterial(m);
+    return true;
+}
+
+const GpuTexture* GpuResourceCache::residentTexture(const Uuid& id) const {
+    auto it = m_textures.find(id);
+    return it != m_textures.end() && it->second.state == ResourceState::Ready ? &it->second.gpu : nullptr;
+}
+
+u64 GpuResourceCache::textureBytes() const {
+    u64 bytes = 0;
+    for (const auto& [id, e] : m_textures) {
+        if (e.external || !e.gpu.texture) continue;
+        const rhi::TextureDesc& d = m_device->desc(e.gpu.texture);
+        bytes += rhi::estimateTextureSize(d);
+    }
+    return bytes;
 }
 
 } // namespace ox::render

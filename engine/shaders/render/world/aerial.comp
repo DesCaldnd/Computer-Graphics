@@ -1,0 +1,39 @@
+#version 460
+// Aerial perspective: wavelength-dependent extinction (Rayleigh + haze) along the view ray with an exponential height
+// profile, in-scattering from the sky dome in the view direction (coupled with the sky colour). Applied in place to
+// SceneColorHDR for every pixel that has geometry.
+#include "sky_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+OX_RENDER_PUSH(WorldSkyBuffer sky; uint depth; uint color;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(VIEW.renderSize.xy)))) return;
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    if (d <= 0.0) return;
+    vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+    vec3 wp = oxWorldPositionFromDepth(pc.view, uv, d);
+    vec3 cam = VIEW.cameraPosition.xyz;
+    vec3 ray = wp - cam;
+    float dist = length(ray);
+    vec4 a = pc.sky.s.aerial;
+    // Optical depth with density ρ(h) = exp(-falloff · h): ∫ρ ds = dist · (e^{-k h0} - e^{-k h1}) / (k (h1 - h0)).
+    float k = max(a.y, 1e-6);
+    float h0 = max(cam.y, 0.0), h1 = max(wp.y, 0.0);
+    float heightTerm = abs(h1 - h0) > 1e-2 ? (exp(-k * h0) - exp(-k * h1)) / (k * (h1 - h0)) : exp(-k * h0);
+    float od = dist * heightTerm;
+    const vec3 rayleigh = vec3(5.8e-6, 13.5e-6, 33.1e-6);
+    vec3 T = exp(-(rayleigh * a.x + vec3(a.z)) * od);
+    vec3 dir = ray / max(dist, 1e-4);
+    vec3 skyDir = normalize(vec3(dir.x, max(dir.y, 0.03), dir.z));
+    vec3 inscatter;
+    if (pc.sky.s.skyCube != OX_INVALID_INDEX) {
+        inscatter = textureLod(samplerCube(OX_TEXCUBE(pc.sky.s.skyCube), OX_SAMPLER(OX_SAMPLER_LINEAR_CLAMP)), skyDir, 0.0).rgb;
+    } else {
+        inscatter = oxWorldSkyDome(pc.sky, skyDir);
+    }
+    inscatter *= VIEW.skyIntensity;
+    vec4 c = OX_IMAGE_LOAD_2D(rgba16f, pc.color, p);
+    c.rgb = c.rgb * T + inscatter * VIEW.preExposure * (1.0 - T);
+    OX_IMAGE_STORE_2D(rgba16f, pc.color, p, c);
+}

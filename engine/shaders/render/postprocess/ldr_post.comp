@@ -1,0 +1,164 @@
+#version 460
+// Display-referred post (after the core tonemapper, before overlays/UI) on SceneColorLDR (sRGB encoded):
+//   FXAA 3.11 quality path (Timothy Lottes' public algorithm: luma edge detection, edge-end search along the edge,
+//   sub-pixel aliasing removal) → user LUT strip (N²×N, display referred) → film grain (mid-tone weighted, animated).
+#include <render/common/color.glsl>
+#include <render/postprocess/pp_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    uint src;
+    uint dst;
+    uint fxaaSteps;  // 0 = FXAA off
+    uint lut;        // OX_INVALID_INDEX = none
+    float lutSize;   // N (strip is N² × N)
+    float lutIntensity;
+    uint lutSrgb;    // the LUT texture is sampled through an sRGB view: re-encode
+    float grain;
+    uint frame;
+    uint pad;
+    vec2 size;
+});
+
+float lumaOf(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+vec3 tex(vec2 uv) { return OX_SAMPLE_2D_LOD(pc.src, OX_SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb; }
+float lumaAt(vec2 uv) { return lumaOf(tex(uv)); }
+float stepSize(uint i) {
+    // 1, 1.5, 2, 2, 2, 2, 4, 8, ... (FXAA_QUALITY presets 12–39 style)
+    const float s[16] = float[16](1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 4.0, 4.0, 8.0, 8.0);
+    return s[min(i, 15u)];
+}
+
+vec3 fxaa(vec2 posM, vec2 rcpFrame) {
+    vec3 rgbM = tex(posM);
+    float lumaM = lumaOf(rgbM);
+    float lumaS = lumaAt(posM + vec2(0.0, 1.0) * rcpFrame);
+    float lumaE = lumaAt(posM + vec2(1.0, 0.0) * rcpFrame);
+    float lumaN = lumaAt(posM + vec2(0.0, -1.0) * rcpFrame);
+    float lumaW = lumaAt(posM + vec2(-1.0, 0.0) * rcpFrame);
+    float rangeMax = max(max(lumaN, lumaW), max(lumaE, max(lumaS, lumaM)));
+    float rangeMin = min(min(lumaN, lumaW), min(lumaE, min(lumaS, lumaM)));
+    float range = rangeMax - rangeMin;
+    if (range < max(0.0312, rangeMax * 0.125)) return rgbM;
+
+    float lumaNW = lumaAt(posM + vec2(-1.0, -1.0) * rcpFrame);
+    float lumaSE = lumaAt(posM + vec2(1.0, 1.0) * rcpFrame);
+    float lumaNE = lumaAt(posM + vec2(1.0, -1.0) * rcpFrame);
+    float lumaSW = lumaAt(posM + vec2(-1.0, 1.0) * rcpFrame);
+    float lumaNS = lumaN + lumaS;
+    float lumaWE = lumaW + lumaE;
+    float subpixRcpRange = 1.0 / range;
+    float subpixNSWE = lumaNS + lumaWE;
+    float edgeHorz1 = -2.0 * lumaM + lumaNS;
+    float edgeVert1 = -2.0 * lumaM + lumaWE;
+    float lumaNESE = lumaNE + lumaSE;
+    float lumaNWNE = lumaNW + lumaNE;
+    float edgeHorz2 = -2.0 * lumaE + lumaNESE;
+    float edgeVert2 = -2.0 * lumaN + lumaNWNE;
+    float lumaNWSW = lumaNW + lumaSW;
+    float lumaSWSE = lumaSW + lumaSE;
+    float edgeHorz4 = abs(edgeHorz1) * 2.0 + abs(edgeHorz2);
+    float edgeVert4 = abs(edgeVert1) * 2.0 + abs(edgeVert2);
+    float edgeHorz3 = -2.0 * lumaW + lumaNWSW;
+    float edgeVert3 = -2.0 * lumaS + lumaSWSE;
+    float edgeHorz = abs(edgeHorz3) + edgeHorz4;
+    float edgeVert = abs(edgeVert3) + edgeVert4;
+    float subpixNWSWNESE = lumaNWSW + lumaNESE;
+    float lengthSign = rcpFrame.x;
+    bool horzSpan = edgeHorz >= edgeVert;
+    float subpixA = subpixNSWE * 2.0 + subpixNWSWNESE;
+    if (!horzSpan) {
+        lumaN = lumaW;
+        lumaS = lumaE;
+    } else {
+        lengthSign = rcpFrame.y;
+    }
+    float subpixB = subpixA * (1.0 / 12.0) - lumaM;
+    float gradientN = lumaN - lumaM;
+    float gradientS = lumaS - lumaM;
+    float lumaNN = lumaN + lumaM;
+    float lumaSS = lumaS + lumaM;
+    bool pairN = abs(gradientN) >= abs(gradientS);
+    float gradient = max(abs(gradientN), abs(gradientS));
+    if (pairN) lengthSign = -lengthSign;
+    float subpixC = clamp(abs(subpixB) * subpixRcpRange, 0.0, 1.0);
+
+    vec2 posB = posM;
+    vec2 offNP = horzSpan ? vec2(rcpFrame.x, 0.0) : vec2(0.0, rcpFrame.y);
+    if (!horzSpan) posB.x += lengthSign * 0.5;
+    else posB.y += lengthSign * 0.5;
+    vec2 posN = posB - offNP * stepSize(0u);
+    vec2 posP = posB + offNP * stepSize(0u);
+    float subpixD = -2.0 * subpixC + 3.0;
+    float lumaEndN = lumaAt(posN);
+    float subpixE = subpixC * subpixC;
+    float lumaEndP = lumaAt(posP);
+    if (!pairN) lumaNN = lumaSS;
+    float gradientScaled = gradient * 0.25;
+    float lumaMM = lumaM - lumaNN * 0.5;
+    float subpixF = subpixD * subpixE;
+    bool lumaMLTZero = lumaMM < 0.0;
+    lumaEndN -= lumaNN * 0.5;
+    lumaEndP -= lumaNN * 0.5;
+    bool doneN = abs(lumaEndN) >= gradientScaled;
+    bool doneP = abs(lumaEndP) >= gradientScaled;
+    if (!doneN) posN -= offNP * stepSize(1u);
+    if (!doneP) posP += offNP * stepSize(1u);
+    for (uint i = 2u; i < pc.fxaaSteps + 1u && !(doneN && doneP); ++i) {
+        if (!doneN) lumaEndN = lumaAt(posN) - lumaNN * 0.5;
+        if (!doneP) lumaEndP = lumaAt(posP) - lumaNN * 0.5;
+        doneN = doneN || abs(lumaEndN) >= gradientScaled;
+        doneP = doneP || abs(lumaEndP) >= gradientScaled;
+        if (!doneN) posN -= offNP * stepSize(i);
+        if (!doneP) posP += offNP * stepSize(i);
+    }
+    float dstN = horzSpan ? posM.x - posN.x : posM.y - posN.y;
+    float dstP = horzSpan ? posP.x - posM.x : posP.y - posM.y;
+    bool goodSpanN = (lumaEndN < 0.0) != lumaMLTZero;
+    bool goodSpanP = (lumaEndP < 0.0) != lumaMLTZero;
+    float spanLength = dstP + dstN;
+    float spanLengthRcp = 1.0 / max(spanLength, 1e-8);
+    bool directionN = dstN < dstP;
+    float dst = min(dstN, dstP);
+    bool goodSpan = directionN ? goodSpanN : goodSpanP;
+    float subpixG = subpixF * subpixF;
+    float pixelOffset = dst * (-spanLengthRcp) + 0.5;
+    float subpixH = subpixG * 0.75;
+    float pixelOffsetGood = goodSpan ? pixelOffset : 0.0;
+    float pixelOffsetSubpix = max(pixelOffsetGood, subpixH);
+    if (!horzSpan) posM.x += pixelOffsetSubpix * lengthSign;
+    else posM.y += pixelOffsetSubpix * lengthSign;
+    return tex(posM);
+}
+
+vec3 applyLut(vec3 c) {
+    float n = pc.lutSize;
+    c = clamp(c, 0.0, 1.0);
+    float slice = c.b * (n - 1.0);
+    float s0 = floor(slice);
+    float s1 = min(s0 + 1.0, n - 1.0);
+    float x = (c.r * (n - 1.0) + 0.5) / (n * n);
+    float y = (c.g * (n - 1.0) + 0.5) / n;
+    vec3 a = OX_SAMPLE_2D_LOD(pc.lut, OX_SAMPLER_LINEAR_CLAMP, vec2(x + s0 / n, y), 0.0).rgb;
+    vec3 b = OX_SAMPLE_2D_LOD(pc.lut, OX_SAMPLER_LINEAR_CLAMP, vec2(x + s1 / n, y), 0.0).rgb;
+    vec3 r = mix(a, b, slice - s0);
+    if (pc.lutSrgb != 0u) r = oxLinearToSrgb(r);
+    return mix(c, r, pc.lutIntensity);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.size)))) return;
+    vec2 rcpFrame = 1.0 / pc.size;
+    vec2 uv = (vec2(p) + 0.5) * rcpFrame;
+    vec3 c = pc.fxaaSteps > 0u ? fxaa(uv, rcpFrame) : OX_FETCH_2D(pc.src, p, 0).rgb;
+    if (pc.lut != OX_INVALID_INDEX) c = applyLut(c);
+    if (pc.grain > 0.0) {
+        float n = ppHash(uvec3(uvec2(p), pc.frame)) + ppHash(uvec3(uvec2(p) + 7919u, pc.frame * 3u + 1u)) - 1.0;
+        float l = lumaOf(c);
+        float response = 4.0 * l * (1.0 - l) * 0.75 + 0.25; // strongest in the mid-tones
+        c += n * pc.grain * 0.12 * response;
+    }
+    OX_IMAGE_STORE_2D(rgba8, pc.dst, p, vec4(clamp(c, 0.0, 1.0), 1.0));
+}

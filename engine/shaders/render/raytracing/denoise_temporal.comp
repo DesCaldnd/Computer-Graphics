@@ -1,0 +1,86 @@
+#version 460
+// SVGF temporal accumulation: reprojects the colour/moments history with Velocity, validates each bilinear tap
+// against the previous linear depth + normal (disocclusions restart the history), blends with
+// alpha = max(1 / historyLength, 1 / maxHistory). Writes the accumulated colour, moments (m1, m2, length) and the
+// current geometry (normal, linear depth) used for next frame's validation.
+#include "denoise_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint signal; uint depth; uint normals; uint velocity; uint prevColor; uint prevMoments; uint prevGeo;
+               uint outColor; uint outMoments; uint outGeo; uint width; uint height; uint scale; uint flags;
+               float maxHistory; vec4 lumaWeights;);
+
+const uint kHistoryValid = 1u;
+const uint kTemporal = 2u;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.width, pc.height);
+    if (any(greaterThanEqual(p, size))) return;
+    ivec2 renderSize = ivec2(VIEW.renderSize.xy);
+    ivec2 gp = oxDnGbufferPixel(p, pc.scale, renderSize);
+
+    vec4 c = OX_FETCH_2D(pc.signal, p, 0);
+    float l = oxDnLuma(c, pc.lumaWeights);
+    float z;
+    vec3 n;
+    oxDnGeometry(pc.view, pc.depth, pc.normals, gp, z, n);
+    OX_IMAGE_STORE_2D(rgba16f, pc.outGeo, p, vec4(n, z));
+
+    vec4 prevC = vec4(0.0);
+    vec3 prevM = vec3(0.0);
+    bool valid = false;
+    if (z > 0.0 && (pc.flags & kHistoryValid) != 0u && (pc.flags & kTemporal) != 0u) {
+        vec2 uv = (vec2(gp) + 0.5) * VIEW.renderSize.zw;
+        vec2 prevUv = uv - OX_FETCH_2D(pc.velocity, gp, 0).xy;
+        vec2 pos = prevUv * vec2(size) - 0.5;
+        ivec2 base = ivec2(floor(pos));
+        vec2 f = pos - vec2(base);
+        float wsum = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            ivec2 q = base + ivec2(i & 1, i >> 1);
+            if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+            vec4 g = OX_FETCH_2D(pc.prevGeo, q, 0);
+            if (!oxDnSimilar(z, n, g.w, g.xyz)) continue;
+            float w = ((i & 1) != 0 ? f.x : 1.0 - f.x) * ((i >> 1) != 0 ? f.y : 1.0 - f.y);
+            prevC += OX_FETCH_2D(pc.prevColor, q, 0) * w;
+            prevM += OX_FETCH_2D(pc.prevMoments, q, 0).xyz * w;
+            wsum += w;
+        }
+        if (wsum > 0.01) {
+            prevC /= wsum;
+            prevM /= wsum;
+            valid = true;
+        } else {
+            // Bilinear footprint failed (thin geometry, edges): accept any similar texel of a 3×3 neighbourhood.
+            ivec2 nearest = ivec2(floor(prevUv * vec2(size)));
+            float cnt = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    ivec2 q = nearest + ivec2(x, y);
+                    if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+                    vec4 g = OX_FETCH_2D(pc.prevGeo, q, 0);
+                    if (!oxDnSimilar(z, n, g.w, g.xyz)) continue;
+                    prevC += OX_FETCH_2D(pc.prevColor, q, 0);
+                    prevM += OX_FETCH_2D(pc.prevMoments, q, 0).xyz;
+                    cnt += 1.0;
+                }
+            }
+            if (cnt > 0.0) {
+                prevC /= cnt;
+                prevM /= cnt;
+                valid = true;
+            }
+        }
+    }
+
+    float len = valid ? min(prevM.z + 1.0, pc.maxHistory) : 1.0;
+    float alpha = valid ? max(1.0 / len, 1.0 / pc.maxHistory) : 1.0;
+    float alphaMoments = valid ? max(1.0 / len, 0.2) : 1.0;
+    vec2 m = vec2(l, l * l);
+    vec4 color = valid ? mix(prevC, c, alpha) : c;
+    vec2 moments = valid ? mix(prevM.xy, m, alphaMoments) : m;
+    OX_IMAGE_STORE_2D(rgba16f, pc.outColor, p, color);
+    OX_IMAGE_STORE_2D(rgba16f, pc.outMoments, p, vec4(moments, len, 0.0));
+}

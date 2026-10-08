@@ -1,0 +1,78 @@
+#version 460
+// Motion blur 3/3: McGuire reconstruction filter. Samples along the neighbourhood's dominant velocity; each sample
+// contributes by depth ordering (soft depth compare) and whether its own blur (or the centre's) covers the
+// distance: foreground objects blur over the background, the background is revealed behind moving edges.
+#include <render/postprocess/pp_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    ViewBuffer view;
+    uint color;
+    uint velocity;   // render res
+    uint depth;      // render res
+    uint neighborMax;
+    uint dst;
+    uint samples;
+    float shutter;
+    float maxLength;   // colour pixels
+    vec2 size;         // colour image
+    vec2 velocitySize; // render res
+    vec2 tileCount;
+});
+
+const float kSoftZ = 0.05; // metres-ish relative extent of the soft depth comparison (scaled by depth)
+
+vec2 velocityAt(vec2 uv) {
+    ivec2 q = clamp(ivec2(uv * pc.velocitySize), ivec2(0), ivec2(pc.velocitySize) - 1);
+    vec2 v = OX_FETCH_2D(pc.velocity, q, 0).rg * pc.size * pc.shutter;
+    float l = length(v);
+    return l > pc.maxLength ? v * (pc.maxLength / l) : v;
+}
+float depthAt(vec2 uv) {
+    ivec2 q = clamp(ivec2(uv * pc.velocitySize), ivec2(0), ivec2(pc.velocitySize) - 1);
+    return oxLinearDepth(pc.view, OX_FETCH_2D(pc.depth, q, 0).r);
+}
+float cone(float dist, float vlen) { return clamp(1.0 - dist / max(vlen, 1e-3), 0.0, 1.0); }
+float cylinder(float dist, float vlen) { return 1.0 - smoothstep(0.95 * vlen, 1.05 * vlen, dist); }
+// 1 when za is in front of zb.
+float softDepthCompare(float za, float zb, float scale) { return clamp(1.0 - (za - zb) / scale, 0.0, 1.0); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.size)))) return;
+    vec2 uv = (vec2(p) + 0.5) / pc.size;
+    vec3 cx = OX_FETCH_2D(pc.color, p, 0).rgb;
+    ivec2 tile = clamp(ivec2(uv * pc.tileCount), ivec2(0), ivec2(pc.tileCount) - 1);
+    vec2 vn = OX_FETCH_2D(pc.neighborMax, tile, 0).rg;
+    float vnLen = length(vn);
+    if (vnLen < 0.5) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.dst, p, vec4(cx, 1.0));
+        return;
+    }
+    vec2 vx = velocityAt(uv);
+    float vxLen = max(length(vx), 0.5);
+    float zx = depthAt(uv);
+    float softZ = max(kSoftZ * zx, 0.01);
+    float jitter = oxInterleavedGradientNoise(vec2(p)) - 0.5;
+    float weight = 1.0 / vxLen;
+    vec3 sum = cx * weight;
+    uint n = max(pc.samples, 2u);
+    for (uint i = 0u; i < n; ++i) {
+        if (i == (n - 1u) / 2u) continue; // the centre is already in
+        float t = mix(-1.0, 1.0, (float(i) + jitter + 1.0) / float(n + 1u));
+        vec2 offset = vn * (0.5 * t);
+        float dist = length(offset);
+        vec2 uvy = uv + offset / pc.size;
+        if (any(lessThan(uvy, vec2(0.0))) || any(greaterThan(uvy, vec2(1.0)))) continue;
+        vec2 vy = velocityAt(uvy);
+        float vyLen = max(length(vy), 0.5);
+        float zy = depthAt(uvy);
+        float f = softDepthCompare(zx, zy, softZ); // centre in front of the sample
+        float b = softDepthCompare(zy, zx, softZ); // sample in front of the centre
+        float a = f * cone(dist, vxLen) + b * cone(dist, vyLen) + cylinder(dist, vyLen) * cylinder(dist, vxLen) * 2.0;
+        sum += OX_SAMPLE_2D_LOD(pc.color, OX_SAMPLER_LINEAR_CLAMP, uvy, 0.0).rgb * a;
+        weight += a;
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.dst, p, vec4(ppSanitize(sum / max(weight, 1e-4)), 1.0));
+}

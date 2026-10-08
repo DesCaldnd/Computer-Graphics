@@ -1,0 +1,25 @@
+#version 460
+// Froxel fog: closest opaque view depth per froxel column (tile of the screen). The lighting pass evaluates lights
+// no deeper than this, so froxels straddling a surface do not pick up light from behind it (light leaking that
+// shows as slice-period bands on oblique walls).
+#include <render/volumetrics/fog_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+OX_RENDER_PUSH(uint depth; uint outTile; uint gridX; uint gridY;);
+
+void main() {
+    uvec2 t = gl_GlobalInvocationID.xy;
+    if (t.x >= pc.gridX || t.y >= pc.gridY) return;
+    vec2 size = VIEW.renderSize.xy;
+    ivec2 p0 = ivec2(floor(vec2(t) * size / vec2(pc.gridX, pc.gridY)));
+    ivec2 p1 = ivec2(ceil(vec2(t + 1u) * size / vec2(pc.gridX, pc.gridY)));
+    p1 = min(p1, ivec2(size));
+    // At most 16 × 16 samples per tile (strided on very large tiles).
+    ivec2 stride = max((p1 - p0 + 15) / 16, ivec2(1));
+    float closest = 0.0; // reversed-Z: larger = closer
+    for (int y = p0.y; y < p1.y; y += stride.y)
+        for (int x = p0.x; x < p1.x; x += stride.x) closest = max(closest, OX_FETCH_2D(pc.depth, ivec2(x, y), 0).r);
+    float viewDepth = closest > 0.0 ? oxLinearDepth(pc.view, closest) : OX_FOG_SKY_DEPTH;
+    OX_IMAGE_STORE_2D(r32f, pc.outTile, ivec2(t), vec4(viewDepth));
+}

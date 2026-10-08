@@ -131,6 +131,10 @@ PassBuilder& PassBuilder::sideEffect() {
     m_graph->m_impl->passes[m_pass].sideEffect = true;
     return *this;
 }
+PassBuilder& PassBuilder::secondaryCommandLists() {
+    m_graph->m_impl->passes[m_pass].secondary = true;
+    return *this;
+}
 PassBuilder& PassBuilder::execute(std::function<void(PassContext&)> fn) {
     m_graph->m_impl->passes[m_pass].fn = std::move(fn);
     return *this;
@@ -394,21 +398,54 @@ void RenderGraph::Impl::compileFull(const RGCompileOptions& o) {
         }
     }
 
-    // 2. Order (declaration order is a valid topological order) and batches.
-    for (u32 p = 0; p < passCount; ++p) {
-        if (!alive[p]) {
-            out.culledPasses.push_back(p);
-            continue;
+    // 2. Order (declaration order is a valid topological order) and batches. A batch is also split before the first
+    // pass that depends on another queue's batch the current batch does not wait for yet: semaphore waits apply to
+    // whole submissions, so the independent passes before it keep overlapping with async compute.
+    {
+        std::vector<i32> writerBatch(resCount, -1);
+        std::vector<std::vector<i32>> readerBatches(resCount);
+        std::vector<i32> batchDeps, need;
+        for (u32 p = 0; p < passCount; ++p) {
+            if (!alive[p]) {
+                out.culledPasses.push_back(p);
+                continue;
+            }
+            RGPlannedPass pp;
+            pp.pass = p;
+            pp.queue = effectiveQueue(passes[p]);
+            need.clear();
+            for (const auto& a : passes[p].accesses) {
+                const i32 wb = writerBatch[a.resource];
+                if (wb >= 0 && out.batches[u32(wb)].queue != pp.queue) need.push_back(wb);
+                if (isWrite(a.access)) {
+                    for (i32 rb : readerBatches[a.resource]) {
+                        if (out.batches[u32(rb)].queue != pp.queue) need.push_back(rb);
+                    }
+                }
+            }
+            bool split = out.batches.empty() || out.batches.back().queue != pp.queue;
+            if (!split && !out.batches.back().passes.empty()) {
+                for (i32 n : need) {
+                    if (std::find(batchDeps.begin(), batchDeps.end(), n) == batchDeps.end()) split = true;
+                }
+            }
+            if (split) {
+                out.batches.push_back({pp.queue, {}, {}});
+                batchDeps.clear();
+            }
+            batchDeps.insert(batchDeps.end(), need.begin(), need.end());
+            pp.batch = u32(out.batches.size() - 1);
+            for (const auto& a : passes[p].accesses) {
+                if (isWrite(a.access)) {
+                    writerBatch[a.resource] = i32(pp.batch);
+                    readerBatches[a.resource].clear();
+                } else {
+                    readerBatches[a.resource].push_back(i32(pp.batch));
+                }
+            }
+            out.batches.back().passes.push_back(u32(out.passes.size()));
+            out.passes.push_back(std::move(pp));
         }
-        RGPlannedPass pp;
-        pp.pass = p;
-        pp.queue = effectiveQueue(passes[p]);
-        if (out.batches.empty() || out.batches.back().queue != pp.queue) {
-            out.batches.push_back({pp.queue, {}, {}});
-        }
-        pp.batch = u32(out.batches.size() - 1);
-        out.batches.back().passes.push_back(u32(out.passes.size()));
-        out.passes.push_back(std::move(pp));
     }
 
     // 3. Lifetimes, derived usage, memory requirements.

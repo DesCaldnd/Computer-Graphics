@@ -9,6 +9,11 @@
 #include "pbr.glsl"
 #include "shadows.glsl"
 
+// Ray tracing area (ShadowsRT): view flag = ShadowMask holds coloured sun visibility in rgb (RGBA8); GpuShadow kind 2 =
+// screen-space visibility mask (bindless index in cubeLayer, channel in atlasRect.x) for ray traced local lights.
+const uint OX_VIEW_RT_SHADOW_MASK_RGB = 256u;
+const uint OX_SHADOW_KIND_SCREEN_MASK = 2u;
+
 struct OxLightingInputs {
     bool screenSpace;       // inputs below are sampled at `uv` (opaque pass); false for translucency
     vec2 uv;                // render-resolution uv of the pixel
@@ -71,15 +76,23 @@ OxLightingResult oxEvaluateLighting(ViewBuffer vb, SceneBuffer sb, OxSurface s, 
         Light l = lights.l[i];
         vec3 L = -l.direction;
         float vis = 1.0;
+        vec3 visColor = vec3(-1.0); // < 0: grey visibility (vis)
         if (int(i) == sun && inputs.receiveShadows) {
             if (inputs.screenSpace && inputs.shadowMask != OX_INVALID_INDEX) {
-                vis = OX_SAMPLE_2D_LOD(inputs.shadowMask, OX_SAMPLER_NEAREST_CLAMP, inputs.uv, 0.0).r;
+                vec4 mask = OX_SAMPLE_2D_LOD(inputs.shadowMask, OX_SAMPLER_NEAREST_CLAMP, inputs.uv, 0.0);
+                // Ray traced shadows: RGBA8 mask with coloured (transmission) sun visibility in rgb.
+                if ((vb.v.flags & OX_VIEW_RT_SHADOW_MASK_RGB) != 0u) {
+                    visColor = mask.rgb;
+                    vis = max(mask.r, max(mask.g, mask.b));
+                } else {
+                    vis = mask.r;
+                }
             } else {
                 vis = oxSunShadow(vb, s.position, s.geometricNormal, viewDepth, pixel);
             }
             r.sunShadow = vis;
         }
-        if (vis > 0.0) r.direct += oxBrdfDirect(s, L, energyComp) * l.color * vis;
+        if (vis > 0.0) r.direct += oxBrdfDirect(s, L, energyComp) * l.color * (visColor.r >= 0.0 ? visColor : vec3(vis));
     }
 
     if (vb.v.lightClusterCount > 0u) {
@@ -99,8 +112,15 @@ OxLightingResult oxEvaluateLighting(ViewBuffer vb, SceneBuffer sb, OxSurface s, 
             float vis = 1.0;
             if (l.shadowIndex >= 0 && inputs.receiveShadows) {
                 Shadow sh = shadows.s[l.shadowIndex];
-                vis = sh.kind == 1u ? oxPointShadow(vb, sh, l.position, s.position, s.geometricNormal, pixel)
-                                    : oxSpotShadow(vb, sh, s.position, s.geometricNormal, pixel);
+                if (sh.kind == OX_SHADOW_KIND_SCREEN_MASK) {
+                    // Ray traced (ShadowsRT): screen-space visibility channel atlasRect.x of texture cubeLayer.
+                    vis = inputs.screenSpace ? OX_SAMPLE_2D_LOD(sh.cubeLayer, OX_SAMPLER_NEAREST_CLAMP, inputs.uv, 0.0)[
+                                                   min(uint(sh.atlasRect.x), 3u)]
+                                             : 1.0;
+                } else {
+                    vis = sh.kind == 1u ? oxPointShadow(vb, sh, l.position, s.position, s.geometricNormal, pixel)
+                                        : oxSpotShadow(vb, sh, s.position, s.geometricNormal, pixel);
+                }
             }
             r.direct += oxBrdfDirect(s, L, energyComp) * l.color * (att * vis);
         }

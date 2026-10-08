@@ -1,0 +1,179 @@
+#version 460
+// Froxel fog, pass 2: lighting + temporal reprojection. For every froxel: sun (+ other directional lights) with
+// CSM visibility, clustered point/spot lights with atlas / cube shadows, IBL ambient, Henyey-Greenstein phase, cloud
+// shadows; optional ray traced visibility (VolumetricFogVisibility) replaces the shadow map lookups. The result is
+// blended with last frame's froxels reprojected through the previous camera (rejected outside the old frustum).
+//   out RGBA16F: rgb in-scatter source σs·L (× preExposure), a extinction σt
+#include <render/common/clusters.glsl>
+#include <render/common/pbr.glsl>
+#include <render/common/shadows.glsl>
+#include <render/volumetrics/cloud_common.glsl>
+#include <render/volumetrics/fog_common.glsl>
+#include <render/volumetrics/volumetrics_types.glsl>
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+OX_RENDER_PUSH(FogConstantsBuffer fog; uint media; uint emissive; uint history; uint outScatter; uint tileDepth;);
+// Read the constants through the buffer reference (copying the struct would also copy its 64-bit `volumes`
+// reference, which SPIRV-Cross / MoltenVK mistranslates: the copied pointer reads zeros).
+#define F (pc.fog.c)
+
+// --- shadow lookups for points in the medium (no surface normal: no normal offset, single hardware compare;
+// the per-frame jitter + temporal accumulation do the filtering). Shadow maps are read through
+// oxShadowTextures2D* (Metal shadow-sampler rule, see bindless.glsl).
+
+float fogSunShadow(vec3 P, float viewDepth) {
+    if (VIEW.cascadeTexture == OX_INVALID_INDEX || VIEW.cascadeCount == 0u) return 1.0;
+    uint cascade = oxSelectCascade(pc.view, viewDepth);
+    if (cascade >= VIEW.cascadeCount) return 1.0;
+    vec4 c = VIEW.cascadeViewProj[cascade] * vec4(P, 1.0);
+    vec3 ndc = c.xyz / c.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || ndc.z < 0.0) return 1.0;
+    return oxShadowCompareArray(VIEW.cascadeTexture, uv, float(cascade), ndc.z + VIEW.sunBias);
+}
+
+float fogSpotShadow(Shadow sh, vec3 P) {
+    uint tex = VIEW.shadowAtlas;
+    if (tex == OX_INVALID_INDEX) return 1.0;
+    vec4 c = sh.viewProj * vec4(P, 1.0);
+    if (c.w <= 0.0) return 1.0;
+    vec3 ndc = c.xyz / c.w;
+    vec2 local = ndc.xy * 0.5 + 0.5;
+    if (any(lessThan(local, vec2(0.0))) || any(greaterThan(local, vec2(1.0))) || ndc.z < 0.0) return 1.0;
+    float texel = 1.0 / float(VIEW.shadowAtlasSize);
+    vec2 uv = sh.atlasRect.xy + local * sh.atlasRect.zw;
+    uv = clamp(uv, sh.atlasRect.xy + 0.5 * texel, sh.atlasRect.xy + sh.atlasRect.zw - 0.5 * texel);
+    return oxShadowCompare2D(tex, uv, ndc.z + sh.bias);
+}
+
+float fogPointShadow(Shadow sh, vec3 lightPos, vec3 P) {
+    uint tex = VIEW.pointShadows;
+    if (tex == OX_INVALID_INDEX) return 1.0;
+    vec3 d = P - lightPos;
+    uint face = oxCubeFace(d);
+    vec3 f = OX_CUBE_FORWARD[face];
+    vec3 u = OX_CUBE_UP[face];
+    vec3 s = normalize(cross(f, u));
+    float zf = max(dot(d, f), 1e-4);
+    vec2 uv = vec2(dot(d, s), dot(d, u)) / (zf * sh.atlasRect.x) * 0.5 + 0.5;
+    float n = sh.nearPlane, fa = sh.farPlane;
+    float depth = n * (fa - zf) / (zf * (fa - n));
+    if (depth < 0.0) return 1.0;
+    return oxShadowCompareArray(tex, uv, float(sh.cubeLayer * 6u + face), depth + sh.bias);
+}
+
+// Transmittance of the cloud layer towards the sun above P (weather map coverage only: cheap and smooth).
+float fogCloudShadow(vec3 P, vec3 toSun) {
+    if ((F.flags & OX_FOG_CLOUD_SHADOWS) == 0u || toSun.y <= 0.01) return 1.0;
+    float mid = F.cloudLayer.x + 0.5 * F.cloudLayer.y;
+    vec3 Q = P + toSun * ((mid - P.y) / toSun.y);
+    float w = OX_SAMPLE_2D_LOD(F.weatherTexture, OX_SAMPLER_LINEAR_REPEAT, (Q.xz + F.cloudWeather.xy) * F.cloudWeather.z, 0.0).r;
+    float cover = oxCloudLocalCoverage(w, F.cloudLayer.z);
+    // Average density of a covered column ≈ 0.3; optical depth through half the layer along the sun ray.
+    float tau = cover * 0.3 * F.cloudWeather.w * F.cloudLayer.y * 0.5 / toSun.y;
+    return mix(1.0, exp(-tau), F.cloudLayer.w);
+}
+
+void main() {
+    uvec3 c = gl_GlobalInvocationID;
+    if (any(greaterThanEqual(c, F.grid.xyz))) return;
+    ivec3 ic = ivec3(c);
+
+    vec4 media = imageLoad(oxImages3D_rgba16f[nonuniformEXT(pc.media)], ic);
+    vec4 em = imageLoad(oxImages3D_rgba16f[nonuniformEXT(pc.emissive)], ic);
+    vec3 scattering = media.rgb;
+    float extinction = media.a;
+    float g = em.a;
+
+    float viewDepth;
+    vec3 froxel = vec3(c) + 0.5 + F.jitter.xyz;
+    vec3 P = oxFroxelWorldPosition(pc.view, froxel, viewDepth);
+    // Slice straddling the closest opaque surface of this froxel column: light only its visible part (avoids
+    // light leaking from behind walls, which shows as bands with the slice period on oblique surfaces).
+    if (pc.tileDepth != OX_INVALID_INDEX) {
+        float limit = texelFetch(oxTextures2D[nonuniformEXT(pc.tileDepth)], ivec2(c.xy), 0).r;
+        float sliceNear = oxFroxelSliceToDepth(pc.view, float(c.z) / float(F.grid.z));
+        float sliceFar = oxFroxelSliceToDepth(pc.view, float(c.z + 1u) / float(F.grid.z));
+        if (limit > sliceNear && limit < sliceFar) {
+            viewDepth = mix(sliceNear, limit, F.jitter.z + 0.5);
+            P = oxFogWorldPosition(pc.view, froxel.xy / vec2(F.grid.xy), viewDepth);
+        }
+    }
+    vec3 cam = VIEW.cameraPosition.xyz;
+    vec3 V = normalize(cam - P);
+
+    vec4 rtVis = vec4(1.0);
+    bool hasVis = (F.flags & OX_FOG_VISIBILITY) != 0u;
+    if (hasVis) rtVis = texelFetch(oxTextures3D[nonuniformEXT(F.visibilityTexture)], ic, 0);
+
+    vec3 radiance = vec3(0.0);
+    if (max(max(scattering.r, scattering.g), scattering.b) > 0.0) {
+        LightBuffer lights = SCENE.lights;
+        // Directional lights.
+        vec3 sunL = vec3(0.0);
+        int sun = VIEW.sunLight;
+        for (uint i = 0u; i < SCENE.directionalLightCount; ++i) {
+            Light l = lights.l[i];
+            float vis = 1.0;
+            if (int(i) == sun) {
+                if (hasVis) vis = rtVis.r;
+                else if ((F.flags & OX_FOG_SUN_SHADOWS) != 0u) vis = fogSunShadow(P, viewDepth);
+                vis *= fogCloudShadow(P, -l.direction);
+            }
+            if (vis > 0.0) sunL += l.color * (oxPhaseHG(dot(l.direction, V), g) * vis);
+        }
+        radiance += sunL * VIEW.volumetricFogLighting.y;
+
+        // Clustered local lights.
+        if (VIEW.lightClusterCount > 0u) {
+            vec2 uv = (vec2(c.xy) + 0.5) / vec2(F.grid.xy);
+            uint cluster = oxClusterIndex(pc.view, uv, viewDepth);
+            uint count = oxClusterLightCount(pc.view, cluster);
+            ShadowBuffer shadows = SCENE.shadows;
+            bool localShadows = !hasVis && (F.flags & OX_FOG_LOCAL_SHADOWS) != 0u;
+            vec3 local = vec3(0.0);
+            for (uint i = 0u; i < count; ++i) {
+                Light l = lights.l[oxClusterLight(pc.view, cluster, i)];
+                vec3 toLight = l.position - P;
+                float d2 = dot(toLight, toLight);
+                if (d2 > l.range * l.range) continue;
+                vec3 L = toLight * inversesqrt(max(d2, 1e-8));
+                float att = oxDistanceAttenuation(d2, l.range);
+                if (l.type == OX_LIGHT_SPOT) att *= oxSpotAttenuation(L, l.direction, l.spotScale, l.spotOffset);
+                if (att <= 0.0) continue;
+                float vis = 1.0;
+                if (localShadows && l.shadowIndex >= 0) {
+                    Shadow sh = shadows.s[l.shadowIndex];
+                    vis = sh.kind == 1u ? fogPointShadow(sh, l.position, P) : fogSpotShadow(sh, P);
+                }
+                local += l.color * (att * vis * oxPhaseHG(dot(-L, V), g));
+            }
+            radiance += local * (F.emission.w * (hasVis ? rtVis.g : 1.0));
+        }
+
+        // Sky light (isotropic).
+        radiance += oxFogAmbientRadiance(pc.view) * (VIEW.volumetricFogLighting.x * (hasVis ? rtVis.b : 1.0));
+    }
+
+    vec3 source = scattering * radiance + em.rgb / max(VIEW.exposure, 1e-12);
+    vec4 result = vec4(min(source * VIEW.preExposure, vec3(60000.0)), extinction);
+
+    // Temporal reprojection of the froxel centre into last frame's grid.
+    if (F.jitter.w > 0.0) {
+        float centreDepth;
+        vec3 Pc = oxFroxelWorldPosition(pc.view, vec3(c) + 0.5, centreDepth);
+        vec4 clip = VIEW.prevUnjitteredViewProj * vec4(Pc, 1.0);
+        float prevDepth = dot(Pc - F.prevCamera.xyz, F.prevForward.xyz);
+        if (clip.w > 0.0 && prevDepth > 0.0) {
+            vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+            float w = oxFroxelDepthToSlice(pc.view, prevDepth);
+            if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0))) && w <= 1.0) {
+                vec4 hist = OX_SAMPLE_3D(pc.history, OX_SAMPLER_LINEAR_CLAMP, vec3(uv, w));
+                hist.rgb *= F.prevCamera.w;
+                result = mix(result, hist, F.jitter.w);
+            }
+        }
+    }
+    imageStore(oxImages3D_rgba16f[nonuniformEXT(pc.outScatter)], ic, result);
+}

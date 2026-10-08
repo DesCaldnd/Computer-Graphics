@@ -1,0 +1,25 @@
+#version 460
+// HiZ of the phase-1 depth for two-phase occlusion culling, built at half resolution: mip 0 = min (farthest,
+// reversed-Z) of the 2×2 (3×3 at odd edges) depth footprint, mip n = min of the footprint of mip n-1. Pyramid level
+// L ≥ 1 of the full-resolution depth is stored in mip L-1 (oxOccludedByHiZ never needs level 0: one texel coarser
+// is still conservative). Half the cost of a full-resolution pyramid.
+#include <render/common/view.glsl>
+layout(local_size_x = 8, local_size_y = 8) in;
+OX_PUSH_CONSTANTS({ uint src; uint dst; uvec2 srcSize; uvec2 dstSize; uint fromDepth; });
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(p, pc.dstSize))) return;
+    ivec2 s = ivec2(p * 2u);
+    ivec2 maxS = ivec2(pc.srcSize) - 1;
+    float m = 1.0;
+    int ex = (pc.srcSize.x & 1u) != 0u && p.x == pc.dstSize.x - 1u ? 2 : 1;
+    int ey = (pc.srcSize.y & 1u) != 0u && p.y == pc.dstSize.y - 1u ? 2 : 1;
+    for (int y = 0; y <= ey; ++y) {
+        for (int x = 0; x <= ex; ++x) {
+            ivec2 c = min(s + ivec2(x, y), maxS);
+            float d = pc.fromDepth != 0u ? OX_FETCH_2D(pc.src, c, 0).r : OX_IMAGE_LOAD_2D(r32f, pc.src, c).r;
+            m = min(m, d);
+        }
+    }
+    OX_IMAGE_STORE_2D(r32f, pc.dst, ivec2(p), vec4(m));
+}

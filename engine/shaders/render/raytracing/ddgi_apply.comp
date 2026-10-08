@@ -1,0 +1,38 @@
+#version 460
+// DDGI → IndirectDiffuse: per pixel, irradiance / π from the 8 surrounding probes (oxDdgiIrradiance). Pixels outside
+// the volume fall back to the SH9 sky irradiance. No ray tracing here (works on any device given a volume).
+#include <render/common/pbr.glsl>
+#include <render/common/scene.glsl>
+#include "ddgi.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(DdgiVolumeRef volume; uint depth; uint normals; uint outDiffuse; uint width; uint height; uint scale;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.width, pc.height)))) return;
+    ivec2 renderSize = ivec2(VIEW.renderSize.xy);
+    ivec2 gp = clamp(p * int(pc.scale) + int(pc.scale / 2u), ivec2(0), renderSize - 1);
+    float d = OX_FETCH_2D(pc.depth, gp, 0).r;
+    if (d <= 0.0) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outDiffuse, p, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+    vec2 uv = (vec2(gp) + 0.5) * VIEW.renderSize.zw;
+    vec3 P = oxWorldPositionFromDepth(pc.view, uv, d);
+    vec3 N = normalize(OX_FETCH_2D(pc.normals, gp, 0).xyz);
+    vec3 V = normalize(VIEW.cameraPosition.xyz - P);
+    DdgiVolume v = pc.volume.v;
+    ivec3 c = ivec3(floor(P / v.spacing - 0.5));
+    vec3 irr;
+    if (v.enabled != 0u && all(greaterThanEqual(c, v.minCoord)) && all(lessThan(c + 1, v.minCoord + v.counts))) {
+        irr = oxDdgiIrradiance(v, P, N, V);
+    } else {
+        vec4 sh[9];
+        OxSHBuffer shb = VIEW.irradianceSH;
+        for (int k = 0; k < 9; ++k) sh[k] = shb.c[k];
+        irr = oxEvalSH9(sh, N) * VIEW.iblIntensity;
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.outDiffuse, p, vec4(irr, 1.0));
+}

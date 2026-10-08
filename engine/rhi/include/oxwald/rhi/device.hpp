@@ -17,6 +17,10 @@
 #include <string>
 #include <vector>
 
+namespace ox {
+class JobSystem;
+}
+
 namespace ox::rhi {
 
 class ISurfaceProvider;
@@ -45,6 +49,10 @@ struct DeviceDesc {
     u32 maxBindlessSampledImages = 16384; // clamped to DeviceCaps
     u32 maxBindlessStorageImages = 4096;
     u32 maxBindlessSamplers = 128;
+    // Extra extensions enabled when available (silently skipped otherwise), e.g. what NVIDIA NGX/DLSS needs
+    // (render::appendUpscalerVulkanExtensions fills these).
+    std::vector<std::string> optionalInstanceExtensions;
+    std::vector<std::string> optionalDeviceExtensions;
 };
 
 struct SemaphoreWait {
@@ -133,6 +141,13 @@ public:
     PipelineHandle createGraphicsPipeline(const GraphicsPipelineDesc& desc);
     PipelineHandle createComputePipeline(const ComputePipelineDesc& desc);
     PipelineHandle createRayTracingPipeline(const RayTracingPipelineDesc& desc);
+    // Background compilation (shaderc + vkCreate*Pipelines with the pipeline cache) on `jobs`: the handle is valid
+    // immediately but has no VkPipeline (draws/dispatches with it are skipped; callers use a placeholder while
+    // !isPipelineReady) and becomes ready at a later beginFrame() — never while command lists are being recorded.
+    PipelineHandle createGraphicsPipelineAsync(const GraphicsPipelineDesc& desc, JobSystem& jobs);
+    PipelineHandle createComputePipelineAsync(const ComputePipelineDesc& desc, JobSystem& jobs);
+    [[nodiscard]] bool isPipelineReady(PipelineHandle pipeline) const;
+    [[nodiscard]] u32 pendingPipelineCompiles() const;
     void destroy(PipelineHandle pipeline);
     [[nodiscard]] bool isAlive(PipelineHandle pipeline) const;
     [[nodiscard]] VkPipeline vkPipeline(PipelineHandle pipeline) const;
@@ -156,6 +171,13 @@ public:
     // Command list valid until this frame slot comes around again.
     CommandList& commandList(QueueType queue = QueueType::Graphics, std::string_view debugName = {});
     TimelinePoint submit(CommandList& cmd, const SubmitInfo& info = {});
+    // Secondary command list for multithreaded recording into a rendering scope begun with
+    // RenderingDesc::secondaryContents (or a render graph pass declared with PassBuilder::secondaryCommandLists()).
+    // `thread` selects a per-thread command pool (< kMaxRecordingThreads, e.g. JobSystem::currentThreadIndex()):
+    // calls with different slots may run concurrently, one thread per slot at a time. Valid until this frame slot
+    // comes around again; end() it, then CommandList::executeSecondary() on the primary.
+    static constexpr u32 kMaxRecordingThreads = 64;
+    CommandList& secondaryCommandList(u32 thread, const SecondaryRenderingInfo& info, QueueType queue = QueueType::Graphics);
     // Records and submits a one-off command list, then blocks until it finished. Works outside frames.
     void immediateSubmit(const std::function<void(CommandList&)>& record, QueueType queue = QueueType::Graphics);
     void wait(TimelinePoint point);

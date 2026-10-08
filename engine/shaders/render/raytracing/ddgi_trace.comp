@@ -1,0 +1,37 @@
+#version 460
+// DDGI probe update, step 1: `raysPerProbe` rays per probe (rotated spherical Fibonacci). Hit radiance = direct
+// (sun + one local light, shadowed) + emissive + albedo × previous-frame DDGI irradiance (infinite bounces);
+// back faces store a negative distance (probe inside geometry), misses the sky. Ray texture: x = ray, y = probe slot.
+#include "rt_query.glsl"
+
+layout(local_size_x = 64, local_size_y = 1) in;
+
+OX_RENDER_PUSH(RtSceneBuffer rt; uint rayTexture; uint probeCount; uint frame;);
+
+void main() {
+    uint ray = gl_GlobalInvocationID.x;
+    uint probe = gl_GlobalInvocationID.y;
+    DdgiVolume v = pc.rt.h.ddgi;
+    if (ray >= v.raysPerProbe || probe >= pc.probeCount) return;
+    ivec3 coord = oxDdgiWorldCoord(v, probe);
+    vec3 origin = oxDdgiProbePosition(v, coord);
+    vec3 dir = oxDdgiRayDirection(v, ray);
+    RtHit h = oxRtTraceClosest(pc.scene, pc.rt, origin, dir, 0.0, 1e4, OX_RT_MASK_SOLID);
+    vec4 result;
+    if (!h.hit) {
+        result = vec4(oxRtMissRadiance(pc.view, pc.scene, dir, false), 1e4);
+    } else {
+        RtSurface s = oxRtFetchSurface(pc.scene, pc.rt, h.instance, h.primitive, h.bary, dir, 4.0);
+        if (!s.frontFace && (s.blend & 7u) == OX_BLEND_OPAQUE) {
+            result = vec4(0.0, 0.0, 0.0, -h.t * 0.2);
+        } else {
+            uint rng = oxRtSeed(uvec2(ray, probe), pc.frame, 0xDD61u);
+            OxSurface surf = oxRtToSurface(s, -dir);
+            vec3 c = oxRtDirectLighting(pc.view, pc.scene, pc.rt, surf, rng, false);
+            c += oxRtEmissiveRadiance(pc.view, surf.emissive);
+            c += surf.diffuseColor * oxDdgiIrradiance(v, surf.position, surf.normal, -dir);
+            result = vec4(c, h.t);
+        }
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.rayTexture, ivec2(ray, probe), result);
+}

@@ -1,0 +1,33 @@
+#version 460
+// Froxel fog, pass 3: front-to-back integration along each froxel column (energy-conserving analytic integral of
+// a constant source over a slice, Hillaire 2015). Output texel z = in-scatter (rgb, pre-exposed) and transmittance
+// (a) from the camera to the far edge of slice z → the published VolumetricFog volume.
+#include <render/volumetrics/fog_common.glsl>
+#include <render/volumetrics/volumetrics_types.glsl>
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+OX_RENDER_PUSH(FogConstantsBuffer fog; uint scatter; uint outFog;);
+
+void main() {
+    uvec3 grid = pc.fog.c.grid.xyz;
+    uvec2 xy = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(xy, grid.xy))) return;
+    float rayScale = oxFogRayScale(pc.view, (vec2(xy) + 0.5) / vec2(grid.xy));
+
+    vec3 inscatter = vec3(0.0);
+    float transmittance = 1.0;
+    float d0 = 0.0;
+    for (uint z = 0u; z < grid.z; ++z) {
+        ivec3 c = ivec3(ivec2(xy), int(z));
+        vec4 s = texelFetch(oxTextures3D[nonuniformEXT(pc.scatter)], c, 0);
+        float d1 = oxFroxelSliceToDepth(pc.view, float(z + 1u) / float(grid.z));
+        float ds = (d1 - d0) * rayScale;
+        d0 = d1;
+        float sigmaT = max(s.a, 1e-7);
+        float sliceT = exp(-sigmaT * ds);
+        inscatter += transmittance * (s.rgb - s.rgb * sliceT) / sigmaT;
+        transmittance *= sliceT;
+        imageStore(oxImages3D_rgba16f[nonuniformEXT(pc.outFog)], c, vec4(inscatter, transmittance));
+    }
+}

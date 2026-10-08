@@ -1,0 +1,43 @@
+#version 460
+// SVGF variance estimate: temporal variance from the accumulated moments, or (history shorter than 4 frames) a 7×7
+// spatial estimate weighted by depth / normal similarity, boosted for very short histories.
+#include "denoise_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint color; uint moments; uint geo; uint outVariance; uint width; uint height; vec4 lumaWeights;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.width, pc.height);
+    if (any(greaterThanEqual(p, size))) return;
+    vec3 m = OX_FETCH_2D(pc.moments, p, 0).xyz;
+    float variance;
+    if (m.z >= 4.0) {
+        variance = max(m.y - m.x * m.x, 0.0);
+    } else {
+        float z0;
+        vec3 n0;
+        oxDnGeo(pc.geo, p, z0, n0);
+        vec2 sum = vec2(0.0);
+        float wsum = 0.0;
+        for (int y = -3; y <= 3; ++y) {
+            for (int x = -3; x <= 3; ++x) {
+                ivec2 q = p + ivec2(x, y);
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+                float z;
+                vec3 n;
+                oxDnGeo(pc.geo, q, z, n);
+                float wz = z0 > 0.0 ? exp(-abs(z - z0) / max(z0 * 0.05, 1e-3)) : 1.0;
+                float wn = pow(max(dot(n, n0), 0.0), 32.0);
+                float w = (x == 0 && y == 0) ? 1.0 : wz * wn;
+                float l = oxDnLuma(OX_FETCH_2D(pc.color, q, 0), pc.lumaWeights);
+                sum += vec2(l, l * l) * w;
+                wsum += w;
+            }
+        }
+        sum /= max(wsum, 1e-6);
+        variance = max(sum.y - sum.x * sum.x, 0.0) * (4.0 / max(m.z, 1.0));
+    }
+    OX_IMAGE_STORE_2D(r16f, pc.outVariance, p, vec4(variance));
+}

@@ -1,0 +1,51 @@
+#version 460
+// DDGI probe update, step 3: copies the 1-texel octahedral border of every tile from the interior (so bilinear
+// sampling wraps correctly across the octahedron's edges) in both atlases, then records the world coordinate each
+// probe slot now holds (probe state, used by ddgi_update to detect scrolled-in probes).
+#include <render/common/view.glsl>
+#include "ddgi.glsl"
+
+layout(local_size_x = 18, local_size_y = 18) in; // depth tile size (16 + 2); irradiance tiles use the first 10×10
+
+OX_PUSH_CONSTANTS({ DdgiVolumeRef volume; DdgiProbeStateBuffer state; uint irradiance; uint depth; uint probeCount; uint pad; });
+
+// Interior source texel (1-based interior coordinates) of a border texel of an n×n interior tile.
+ivec2 borderSource(ivec2 t, int n) {
+    int last = n + 1;
+    bool left = t.x == 0, right = t.x == last, top = t.y == 0, bottom = t.y == last;
+    if ((left || right) && (top || bottom)) return ivec2(left ? n : 1, top ? n : 1); // corners: opposite corner
+    if (top) return ivec2(n + 1 - t.x, 1);
+    if (bottom) return ivec2(n + 1 - t.x, n);
+    if (left) return ivec2(1, n + 1 - t.y);
+    return ivec2(n, n + 1 - t.y); // right
+}
+
+void main() {
+    uint probe = gl_WorkGroupID.x;
+    DdgiVolume v = pc.volume.v;
+    if (probe >= pc.probeCount) return;
+    ivec2 t = ivec2(gl_LocalInvocationID.xy);
+    // Depth atlas (16×16 interior).
+    {
+        int n = int(OX_DDGI_DEPTH_TEXELS);
+        bool border = t.x == 0 || t.y == 0 || t.x == n + 1 || t.y == n + 1;
+        if (border) {
+            ivec2 origin = ivec2(oxDdgiTileInterior(v, probe, OX_DDGI_DEPTH_TEXELS)) - 1;
+            vec4 c = imageLoad(oxImages2D_rg16f[nonuniformEXT(pc.depth)], origin + borderSource(t, n));
+            imageStore(oxImages2D_rg16f[nonuniformEXT(pc.depth)], origin + t, c);
+        }
+    }
+    // Irradiance atlas (8×8 interior).
+    {
+        int n = int(OX_DDGI_IRRADIANCE_TEXELS);
+        if (t.x <= n + 1 && t.y <= n + 1) {
+            bool border = t.x == 0 || t.y == 0 || t.x == n + 1 || t.y == n + 1;
+            if (border) {
+                ivec2 origin = ivec2(oxDdgiTileInterior(v, probe, OX_DDGI_IRRADIANCE_TEXELS)) - 1;
+                vec4 c = imageLoad(oxImages2D_rgba16f[nonuniformEXT(pc.irradiance)], origin + borderSource(t, n));
+                imageStore(oxImages2D_rgba16f[nonuniformEXT(pc.irradiance)], origin + t, c);
+            }
+        }
+    }
+    if (t == ivec2(0)) pc.state.s[probe] = ivec4(oxDdgiWorldCoord(v, probe), 1);
+}

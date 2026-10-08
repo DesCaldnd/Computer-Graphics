@@ -1,0 +1,40 @@
+#version 460
+// AO temporal accumulation at AO resolution: reprojection with the motion vectors, disocclusion test against the
+// stored linear depth, neighbourhood clamp. History (RGBA16F): x = AO, y = linear depth.
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint current; uint history; uint depth; uint velocity; uint dst; uint downscale; uint aoWidth;
+               uint aoHeight; uint historyValid; float blend;);
+
+void main() {
+    ivec2 ap = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 aoSize = ivec2(pc.aoWidth, pc.aoHeight);
+    if (ap.x >= aoSize.x || ap.y >= aoSize.y) return;
+    ivec2 size = ivec2(VIEW.renderSize.xy);
+    ivec2 p = min(ap * int(pc.downscale) + int(pc.downscale) / 2, size - 1);
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    float z = d > 0.0 ? oxLinearDepth(pc.view, d) : 1e6;
+    float cur = OX_FETCH_2D(pc.current, ap, 0).r;
+    float result = cur;
+    if (pc.historyValid != 0u && d > 0.0) {
+        float mn = cur, mx = cur;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                float c = OX_FETCH_2D(pc.current, clamp(ap + ivec2(x, y), ivec2(0), aoSize - 1), 0).r;
+                mn = min(mn, c);
+                mx = max(mx, c);
+            }
+        }
+        vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+        vec2 prevUv = uv - OX_FETCH_2D(pc.velocity, p, 0).xy;
+        if (all(greaterThanEqual(prevUv, vec2(0.0))) && all(lessThanEqual(prevUv, vec2(1.0)))) {
+            vec2 h = OX_SAMPLE_2D_LOD(pc.history, OX_SAMPLER_LINEAR_CLAMP, prevUv, 0.0).xy;
+            float depthOk = abs(h.y - z) < max(z * 0.05, 0.05) ? 1.0 : 0.0;
+            float hc = clamp(h.x, mn - 0.05, mx + 0.05);
+            result = mix(cur, mix(hc, cur, pc.blend), depthOk);
+        }
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.dst, ap, vec4(result, z, 0.0, 1.0));
+}

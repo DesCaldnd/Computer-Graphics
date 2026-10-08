@@ -16,6 +16,7 @@ layout(set = 0, binding = 1, rg16f) uniform image2D oxImages2D_rg16f[];
 layout(set = 0, binding = 1, r16f) uniform image2D oxImages2D_r16f[];
 
 layout(buffer_reference) buffer LightClusters;
+layout(buffer_reference) buffer OxPlanarReflectionBuffer; // defined in render/reflections/planar.glsl
 // Irradiance SH9 (see oxEvalSH9 in pbr.glsl); always valid (zero when there is no environment).
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer OxSHBuffer { vec4 c[9]; };
 
@@ -81,6 +82,10 @@ struct ViewConstants {
     uint blackTexture;
     uint flatNormalTexture;
     uint pad2;
+    vec4 volumetricFogGrid;     // xyz froxel grid size, w = grid far distance (0 = no froxel fog), see volumetrics/
+    vec4 volumetricFogDepth;    // x depth distribution scale, y log2(1 + far * scale), z slice jitter
+    vec4 volumetricFogLighting; // x ambient, y directional intensity, z anisotropy, w sky distance
+    OxPlanarReflectionBuffer planarReflections; // 0 = none; sample with render/reflections/planar.glsl
 };
 
 OX_READONLY_BUFFER(ViewBuffer, { ViewConstants v; });

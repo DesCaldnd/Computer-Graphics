@@ -1,0 +1,56 @@
+#version 460
+// Task shader of the mesh shader meshlet path: one workgroup per meshlet instance; frustum / backface cone /
+// HiZ (late phase) culling of the instance's LOD meshlets, then one mesh workgroup per visible meshlet.
+#include "meshlet_mesh_common.glsl"
+
+layout(local_size_x = 32) in;
+taskPayloadSharedEXT OxTaskPayload payload;
+shared uint sCount;
+
+void main() {
+    uint wi = gl_WorkGroupID.x;
+    uint instanceId = pc.drawIds.id[2u + wi * 2u];
+    uint lod = pc.drawIds.id[3u + wi * 2u];
+    Instance inst = SCENE.instances.i[instanceId];
+    MeshLod L = pc.lods.l[inst.meshIndex * OX_MAX_MESH_LODS + lod];
+    Material mat = SCENE.materials.m[inst.materialIndex];
+    uint variant = ((mat.flags & 7u) == OX_BLEND_ALPHA_TEST ? 1u : 0u) | ((mat.flags & OX_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u);
+    if (variant != pc.variant) {
+        EmitMeshTasksEXT(0u, 1u, 1u);
+        return;
+    }
+    mat4 W = inst.world;
+    float sx = length(W[0].xyz), sy = length(W[1].xyz), sz = length(W[2].xyz);
+    float maxScale = max(sx, max(sy, sz));
+    bool uniformScale = max(abs(sx - sy), abs(sx - sz)) <= 1e-3 * maxScale;
+    bool ortho = (VIEW.flags & 1u) != 0u;
+    bool coneTest = (mat.flags & OX_MATERIAL_DOUBLE_SIDED) == 0u && uniformScale && !ortho;
+    // Frustum planes from the (jittered) view-projection (Gribb-Hartmann, reversed-Z: near = row3 - row2).
+    mat4 m = transpose(VIEW.viewProj);
+    vec4 planes[5] = vec4[5](m[3] + m[0], m[3] - m[0], m[3] + m[1], m[3] - m[1], m[3] - m[2]);
+    if (gl_LocalInvocationIndex == 0u) sCount = 0u;
+    barrier();
+    for (uint base = 0u; base < L.meshletCount; base += 32u) {
+        uint k = base + gl_LocalInvocationIndex;
+        if (k >= L.meshletCount) continue;
+        OxMeshletHeader h = oxLoadMeshletHeader(L.meshletFirst + k * 16u);
+        vec3 c = (W * vec4(h.center, 1.0)).xyz;
+        float r = h.radius * maxScale;
+        bool visible = true;
+        for (uint p = 0u; p < 5u; ++p) visible = visible && dot(planes[p].xyz, c) + planes[p].w >= -r * length(planes[p].xyz);
+        if (visible && coneTest && h.coneCutoff < 1.0) {
+            vec3 apex = (W * vec4(h.coneApex, 1.0)).xyz;
+            vec3 axis = normalize(mat3(W) * h.coneAxis);
+            visible = dot(normalize(apex - VIEW.cameraPosition.xyz), axis) < h.coneCutoff;
+        }
+        if (visible && pc.late != 0u) visible = !oxOccludedByHiZ(VIEW.viewProj, c, r, pc.hiz, pc.hizMips, pc.hizSize);
+        if (visible) {
+            uint slot = atomicAdd(sCount, 1u);
+            if (slot < OX_TASK_MAX_MESHLETS) payload.meshlets[slot] = k;
+        }
+    }
+    barrier();
+    payload.instanceId = instanceId;
+    payload.lod = lod;
+    EmitMeshTasksEXT(min(sCount, OX_TASK_MAX_MESHLETS), 1u, 1u);
+}

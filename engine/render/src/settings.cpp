@@ -13,7 +13,7 @@ CVar<float> cvScreenPercentage("r.ScreenPercentage", 100.0f, "Render resolution 
                                25.0f, 200.0f, CVarFlags::Persist);
 CVar<int> cvAntiAliasing("r.AntiAliasing", 0, "Anti-aliasing method (implemented by features)",
                          S::AntiAliasing, {0, 1, 2, 2});
-CVar<int> cvUpscaler("r.Upscaler", 0, "Upscaler", CVarEnum{"Off", "FSR1", "DLSS"}, CVarFlags::Persist);
+CVar<int> cvUpscaler("r.Upscaler", 0, "Upscaler", CVarEnum{"Off", "FSR1", "DLSS", "TAAU"}, CVarFlags::Persist);
 CVar<int> cvUpscalerQuality("r.Upscaler.Quality", 3, "Upscaler quality mode",
                             CVarEnum{"UltraPerformance", "Performance", "Balanced", "Quality", "Native"},
                             CVarFlags::Persist);

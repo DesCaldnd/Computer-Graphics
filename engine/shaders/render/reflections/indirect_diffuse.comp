@@ -1,0 +1,42 @@
+#version 460
+// IndirectDiffuse from irradiance volumes: per pixel, volumes in priority order are blended by their box fade over
+// the sky SH fallback (the lighting pass's default). rgb = diffuse radiance of a white surface (irradiance / π).
+#include <render/reflections/irradiance_volume.glsl>
+#include <render/common/scene.glsl>
+#include <render/common/pbr.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint depth; uint normals; uint outDiffuse; uint pad; OxIrradianceVolumeBuffer volumes;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(VIEW.renderSize.xy);
+    if (p.x >= size.x || p.y >= size.y) return;
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    if (d <= 0.0) {
+        OX_IMAGE_STORE_2D(rgba16f, pc.outDiffuse, p, vec4(0.0));
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+    vec3 P = oxWorldPositionFromDepth(pc.view, uv, d);
+    vec3 N = normalize(OX_FETCH_2D(pc.normals, p, 0).xyz);
+    vec3 V = (VIEW.flags & OX_VIEW_ORTHOGRAPHIC) != 0u ? normalize(VIEW.invView[2].xyz) : normalize(VIEW.cameraPosition.xyz - P);
+
+    vec3 sum = vec3(0.0);
+    float remaining = 1.0;
+    uint n = pc.volumes.count;
+    for (uint i = 0u; i < n && remaining > 0.001; ++i) {
+        float w = oxIrradianceVolumeWeight(pc.volumes.v[i], P);
+        if (w <= 0.0) continue;
+        sum += oxSampleIrradianceVolume(pc.volumes, i, P, N, V) * (w * remaining);
+        remaining *= 1.0 - w;
+    }
+    if (remaining > 0.0) {
+        vec4 sh[9];
+        OxSHBuffer shb = VIEW.irradianceSH;
+        for (int k = 0; k < 9; ++k) sh[k] = shb.c[k];
+        sum += oxEvalSH9(sh, N) * VIEW.iblIntensity * remaining;
+    }
+    OX_IMAGE_STORE_2D(rgba16f, pc.outDiffuse, p, vec4(sum, 1.0));
+}

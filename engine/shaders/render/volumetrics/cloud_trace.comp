@@ -1,0 +1,182 @@
+#version 460
+// Volumetric clouds, trace pass: ray marches the cloud layer (spherical shell over a planet) for one pixel of every
+// checker × checker block of the cloud-resolution target (the block offset changes every frame → 1/16 of the
+// pixels per frame with checker 4). Density: weather map coverage/type × height gradient × Perlin-Worley base
+// shape eroded by Worley detail (Schneider 2015/2017). Lighting: sun with a short light march (Beer's law,
+// multi-scatter octaves, powder), dual-lobe Henyey-Greenstein phase, height-dependent sky ambient.
+//   outColor RGBA16F: rgb in-scatter × preExposure, a transmittance
+//   outData  RGBA16F: x mean cloud distance (m), y scene view depth at the pixel (m, 65000 = sky)
+#include <render/common/math.glsl>
+#include <render/volumetrics/cloud_common.glsl>
+#include <render/volumetrics/fog_common.glsl>
+#include <render/volumetrics/volumetrics_types.glsl>
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#define OX_SAMPLE_3D_LOD(tex, smp, uvw, lod) textureLod(sampler3D(OX_TEX3D(tex), OX_SAMPLER(smp)), (uvw), (lod))
+
+OX_RENDER_PUSH(CloudConstantsBuffer clouds; uint outColor; uint outData;);
+
+CloudConstants C;
+vec3 gPlanetCentre;
+
+// Ray / sphere: returns (near, far) distances, far < 0 when missed.
+vec2 raySphere(vec3 o, vec3 d, vec3 centre, float radius) {
+    vec3 oc = o - centre;
+    float b = dot(oc, d);
+    float c = dot(oc, oc) - radius * radius;
+    float h = b * b - c;
+    if (h < 0.0) return vec2(-1.0, -1.0);
+    h = sqrt(h);
+    return vec2(-b - h, -b + h);
+}
+
+float heightFraction(vec3 p) { return (length(p - gPlanetCentre) - (C.weather.z + C.layer.x)) / C.layer.y; }
+
+// Cloud density (0..1 before the extinction scale). `cheap` skips the detail erosion (light march).
+float cloudDensity(vec3 p, float h, bool cheap) {
+    if (h <= 0.0 || h >= 1.0) return 0.0;
+    vec2 wuv = (p.xz + C.weather.xy) * C.wind.w;
+    vec4 weather = OX_SAMPLE_2D_LOD(C.weatherTexture, OX_SAMPLER_LINEAR_REPEAT, wuv, 0.0);
+    float coverage = oxCloudLocalCoverage(weather.r, C.layer.z);
+    if (coverage <= 0.001) return 0.0;
+    float type = clamp(C.layer.w + (weather.g - 0.5) * 0.4, 0.0, 1.0);
+    float gradient = oxCloudHeightGradient(h, type);
+    if (gradient <= 0.0) return 0.0;
+    // Skew the shapes along the wind with height (anvil-like lean).
+    vec3 sp = p + C.wind.xyz + vec3(h * 300.0, 0.0, 0.0);
+    vec4 base = OX_SAMPLE_3D_LOD(C.baseNoise, OX_SAMPLER_LINEAR_REPEAT, sp * C.shape.y, 0.0);
+    float lowFbm = base.g * 0.625 + base.b * 0.25 + base.a * 0.125;
+    float shape = (base.r * 0.65 + lowFbm * 0.35) * gradient;
+    // Clouds where the shape exceeds 1 - coverage; normalised so the cores reach 1.
+    float d = clamp((shape - (1.0 - coverage)) / max(coverage, 0.05), 0.0, 1.0);
+    if (cheap || d <= 0.0) return d;
+    vec3 detail = OX_SAMPLE_3D_LOD(C.detailNoise, OX_SAMPLER_LINEAR_REPEAT, sp * C.shape.z, 0.0).rgb;
+    float hiFbm = detail.r * 0.625 + detail.g * 0.25 + detail.b * 0.125;
+    // Wispy bottoms, billowy tops (Schneider 2015).
+    float erosion = mix(hiFbm, 1.0 - hiFbm, clamp(h * 4.0, 0.0, 1.0)) * C.shape.w;
+    return clamp(oxRemap(d, erosion, 1.0, 0.0, 1.0), 0.0, 1.0);
+}
+
+float dualLobePhase(float cosTheta) {
+    return mix(oxPhaseHG(cosTheta, C.lighting.w), oxPhaseHG(cosTheta, C.lighting.z), 0.7);
+}
+
+void main() {
+    C = pc.clouds.c;
+    uvec2 t = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(t, C.size.xy))) return;
+    uvec2 q = min(t * C.march.x + C.march.yz, C.size.zw - 1u);
+    vec2 uv = (vec2(q) + 0.5) / vec2(C.size.zw);
+
+    vec3 cam = VIEW.cameraPosition.xyz;
+    vec3 dir = oxViewRay(pc.view, uv);
+    gPlanetCentre = vec3(cam.x, -C.weather.z, cam.z);
+
+    // Scene depth limit at this pixel.
+    ivec2 px = ivec2(uv * VIEW.renderSize.xy);
+    float device = OX_FETCH_2D(C.depthTexture, px, 0).r;
+    float sceneDepth = OX_FOG_SKY_DEPTH;
+    float sceneDist = 1e30;
+    if (device > 0.0) {
+        sceneDepth = oxLinearDepth(pc.view, device);
+        sceneDist = sceneDepth * oxFogRayScale(pc.view, uv);
+    }
+
+    float rBottom = C.weather.z + C.layer.x, rTop = rBottom + C.layer.y;
+    float camR = length(cam - gPlanetCentre);
+    vec2 top = raySphere(cam, dir, gPlanetCentre, rTop);
+    vec2 bottom = raySphere(cam, dir, gPlanetCentre, rBottom);
+    float t0, t1;
+    if (camR < rBottom) {
+        t0 = bottom.y;
+        t1 = top.y;
+    } else if (camR < rTop) {
+        t0 = 0.0;
+        t1 = bottom.x > 0.0 ? bottom.x : top.y;
+    } else {
+        t0 = top.x;
+        t1 = bottom.x > 0.0 ? bottom.x : top.y;
+    }
+    float maxDist = C.weather.w;
+    t1 = min(min(t1, sceneDist), maxDist);
+
+    vec3 scatter = vec3(0.0);
+    float T = 1.0;
+    float distSum = 0.0, distWeight = 0.0;
+    if (top.y > 0.0 && t0 >= 0.0 && t1 > t0) {
+        // More steps for long (horizontal) segments.
+        float segment = t1 - t0;
+        float stepsF = float(C.march.w) * mix(1.0, 2.0, clamp(segment / (C.layer.y * 4.0), 0.0, 1.0));
+        uint steps = uint(stepsF);
+        float dt = segment / stepsF;
+        float noise = oxInterleavedGradientNoise(vec2(q) + float(C.misc.z % 16u) * 5.588238);
+        float t = t0 + dt * noise;
+
+        int sun = VIEW.sunLight;
+        vec3 sunDir = vec3(0.0, 1.0, 0.0), sunColor = vec3(0.0);
+        if (sun >= 0) {
+            Light l = SCENE.lights.l[sun];
+            sunDir = -l.direction;
+            sunColor = l.color * C.lighting.y;
+        }
+        // Scattering angle between the light's travel direction (-sunDir) and the direction towards the camera.
+        float cosTheta = dot(sunDir, dir);
+        float phase = dualLobePhase(cosTheta);
+        vec3 ambient = oxFogAmbientRadiance(pc.view) * C.lighting.x;
+        float extinctionScale = C.shape.x;
+        uint lightSteps = C.misc.x;
+        float lightStep = C.layer.y * 0.5 / float(max(lightSteps, 1u));
+
+        for (uint i = 0u; i < steps; ++i, t += dt) {
+            vec3 p = cam + dir * t;
+            float h = heightFraction(p);
+            float density = cloudDensity(p, h, false);
+            if (density <= 0.0) continue;
+            float sigma = density * extinctionScale;
+
+            // Light march towards the sun (growing steps), cheap density.
+            float tauL = 0.0;
+            for (uint j = 0u; j < lightSteps; ++j) {
+                float s = lightStep * (float(j) + 0.5) * (1.0 + float(j) * 0.5);
+                vec3 lp = p + sunDir * s;
+                tauL += cloudDensity(lp, heightFraction(lp), j > 1u) * extinctionScale * lightStep * (1.0 + float(j) * 0.5);
+            }
+            // Multiple scattering approximation (Wrenninge 2013): 3 octaves of attenuated extinction / phase.
+            vec3 sunLight = vec3(0.0);
+            float a = 1.0, b = 1.0, cc = 1.0;
+            for (int o = 0; o < 3; ++o) {
+                sunLight += b * exp(-tauL * a) * mix(1.0 / (4.0 * OX_PI), phase, cc);
+                a *= 0.25;
+                b *= 0.65;
+                cc *= 0.5;
+            }
+            // Powder: dark edges facing the sun (fades out when looking towards it).
+            float powder = 1.0 - exp(-2.0 * sigma * 60.0);
+            sunLight *= mix(powder, 1.0, clamp(cosTheta * 0.5 + 0.5, 0.0, 1.0));
+            vec3 amb = ambient * mix(0.5, 1.0, clamp(h, 0.0, 1.0));
+            vec3 source = C.albedo.rgb * (sunColor * sunLight + amb) * sigma;
+            float sliceT = exp(-sigma * dt);
+            vec3 sint = (source - source * sliceT) / max(sigma, 1e-7);
+            scatter += T * sint;
+            float absorbed = T * (1.0 - sliceT);
+            distSum += t * absorbed;
+            distWeight += absorbed;
+            T *= sliceT;
+            if (T < 0.01) {
+                T = 0.0;
+                break;
+            }
+        }
+        // Fade towards the max distance (aerial perspective of the clouds is applied by the composite fog).
+        float meanDist = distWeight > 0.0 ? distSum / distWeight : t0;
+        float fade = smoothstep(maxDist * C.albedo.w, maxDist, meanDist);
+        scatter *= 1.0 - fade;
+        T = mix(T, 1.0, fade);
+    }
+    float cloudDist = distWeight > 0.0 ? distSum / distWeight : (t0 > 0.0 ? t0 : 1000.0);
+    vec4 color = vec4(min(scatter * VIEW.preExposure, vec3(60000.0)), T);
+    ivec2 o = ivec2(t);
+    imageStore(oxImages2D_rgba16f[nonuniformEXT(pc.outColor)], o, color);
+    imageStore(oxImages2D_rgba16f[nonuniformEXT(pc.outData)], o, vec4(min(cloudDist, 65000.0), sceneDepth, 0.0, 1.0));
+}

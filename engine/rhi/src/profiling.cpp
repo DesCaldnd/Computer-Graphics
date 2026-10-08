@@ -2,6 +2,7 @@
 
 #include <oxwald/core/log.hpp>
 
+#include <algorithm>
 #include <cstring>
 
 #if defined(OX_RHI_TRACY)
@@ -34,12 +35,17 @@ void readTimestamps(DeviceState& s, FrameContext& f) {
                                                  values.data(), sizeof(u64), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
         if (r == VK_SUCCESS) {
             s.lastTimings.clear();
+            u64 first = ~0ull;
+            for (const TimestampScope& sc : f.scopes) {
+                if (sc.endQuery != ~0u) first = std::min(first, values[sc.beginQuery]);
+            }
             for (const TimestampScope& sc : f.scopes) {
                 if (sc.endQuery == ~0u) continue;
                 const u64 a = values[sc.beginQuery];
                 const u64 b = values[sc.endQuery];
                 const f64 ms = b >= a ? f64(b - a) * f64(s.caps.timestampPeriodNs) * 1e-6 : 0.0;
-                s.lastTimings.push_back({sc.name, ms, sc.depth});
+                const f64 start = a >= first ? f64(a - first) * f64(s.caps.timestampPeriodNs) * 1e-6 : 0.0;
+                s.lastTimings.push_back({sc.name, ms, sc.depth, start, sc.queue});
             }
         }
         vkResetQueryPool(s.device, f.queryPool, 0, f.queryCount);

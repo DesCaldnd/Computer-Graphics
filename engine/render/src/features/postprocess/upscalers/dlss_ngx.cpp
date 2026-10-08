@@ -1,0 +1,271 @@
+// NVIDIA DLSS through the NGX Vulkan API. Compiled into ox_render only with the NGX runtime (Windows/Linux,
+// OX_ENABLE_DLSS); elsewhere the ox_dlss_syntax_check object library compiles it against the SDK headers so this file
+// stays buildable (it is never linked there).
+//
+// Flow: probe() → NVSDK_NGX_VULKAN_Init_with_ProjectID + GetCapabilityParameters + SuperSampling.Available;
+// optimalSettings() → NGX_DLSS_GET_OPTIMAL_SETTINGS; evaluate() → (re)create the per-view feature with
+// NGX_VULKAN_CREATE_DLSS_EXT1 (MVLowRes | IsHDR | DepthInverted [| AutoExposure]) and NGX_VULKAN_EVALUATE_DLSS_EXT;
+// release()/shutdown() → NVSDK_NGX_VULKAN_ReleaseFeature / DestroyParameters / Shutdown1.
+#include "dlss_backend.hpp"
+
+#include <oxwald/core/log.hpp>
+#include <oxwald/rhi/command_list.hpp>
+#include <oxwald/rhi/device.hpp>
+#include <oxwald/rhi/vulkan.hpp>
+
+// The NGX headers include <vulkan/vulkan.h>; volk (VK_NO_PROTOTYPES) was included first, so no prototypes leak.
+#include <nvsdk_ngx_helpers.h>
+#include <nvsdk_ngx_helpers_vk.h>
+#include <nvsdk_ngx_vk.h>
+
+#include <atomic>
+#include <filesystem>
+#include <format>
+#include <mutex>
+
+namespace ox::render::dlss {
+
+namespace {
+
+// NGX project id for engines without an NVIDIA application id (NVSDK_NGX_ENGINE_TYPE_CUSTOM).
+constexpr const char* kProjectId = "6f1e3b8a-5c2d-4f7e-9a10-0b5e7d0a4c21";
+constexpr const char* kEngineVersion = "0.1";
+
+struct NgxState {
+    std::mutex mutex;
+    VkDevice device = VK_NULL_HANDLE;
+    bool probed = false;
+    bool initialized = false;
+    Status status;
+    NVSDK_NGX_Parameter* params = nullptr;
+    std::wstring dataPath;
+    std::wstring featurePath;
+};
+
+NgxState& state() {
+    static NgxState s;
+    return s;
+}
+std::atomic<bool> g_unavailable{false};
+
+std::string resultText(NVSDK_NGX_Result r) {
+    const wchar_t* w = GetNGXResultAsString(r);
+    std::string s;
+    if (w) {
+        for (; *w; ++w) s += *w < 128 ? char(*w) : '?';
+    }
+    return std::format("{} (0x{:08x})", s.empty() ? "NGX error" : s, u32(r));
+}
+
+NVSDK_NGX_PerfQuality_Value perfQuality(UpscalerQuality q) {
+    switch (q) {
+    case UpscalerQuality::UltraPerformance: return NVSDK_NGX_PerfQuality_Value_UltraPerformance;
+    case UpscalerQuality::Performance: return NVSDK_NGX_PerfQuality_Value_MaxPerf;
+    case UpscalerQuality::Balanced: return NVSDK_NGX_PerfQuality_Value_Balanced;
+    case UpscalerQuality::Quality: return NVSDK_NGX_PerfQuality_Value_MaxQuality;
+    case UpscalerQuality::Native: return NVSDK_NGX_PerfQuality_Value_DLAA;
+    }
+    return NVSDK_NGX_PerfQuality_Value_MaxQuality;
+}
+
+NVSDK_NGX_Resource_VK imageResource(rhi::Device& device, rhi::TextureHandle t, bool readWrite) {
+    const rhi::TextureDesc& d = device.desc(t);
+    VkImageSubresourceRange range{};
+    const bool depth = d.format == VK_FORMAT_D32_SFLOAT || d.format == VK_FORMAT_D24_UNORM_S8_UINT ||
+                       d.format == VK_FORMAT_D32_SFLOAT_S8_UINT || d.format == VK_FORMAT_D16_UNORM;
+    range.aspectMask = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    range.levelCount = 1;
+    range.layerCount = 1;
+    return NVSDK_NGX_Create_ImageView_Resource_VK(device.view(t), device.vkImage(t), range, d.format, d.width,
+                                                  d.height, readWrite);
+}
+
+void releaseLocked(ViewFeature& f) {
+    if (f.handle) NVSDK_NGX_VULKAN_ReleaseFeature(static_cast<NVSDK_NGX_Handle*>(f.handle));
+    f = {};
+}
+
+} // namespace
+
+bool compiled() { return true; }
+std::string buildUnavailableReason() { return {}; }
+bool knownUnavailable() { return g_unavailable.load(); }
+
+void requiredExtensions(std::vector<std::string>& instanceExtensions, std::vector<std::string>& deviceExtensions) {
+    unsigned int instCount = 0, devCount = 0;
+    const char** inst = nullptr;
+    const char** dev = nullptr;
+    if (NVSDK_NGX_FAILED(NVSDK_NGX_VULKAN_RequiredExtensions(&instCount, &inst, &devCount, &dev))) return;
+    for (unsigned int i = 0; i < instCount; ++i) instanceExtensions.emplace_back(inst[i]);
+    for (unsigned int i = 0; i < devCount; ++i) deviceExtensions.emplace_back(dev[i]);
+}
+
+Status probe(rhi::Device& device) {
+    NgxState& s = state();
+    std::lock_guard lock(s.mutex);
+    if (s.probed && s.device == device.vkDevice()) return s.status;
+    s.probed = true;
+    s.device = device.vkDevice();
+    s.status = {};
+    if (device.caps().vendor != rhi::GpuVendor::Nvidia) {
+        s.status.reason = std::format("NVIDIA DLSS requires an NVIDIA RTX GPU (this GPU: {})", device.caps().gpuName);
+        g_unavailable = true;
+        return s.status;
+    }
+    std::error_code ec;
+    const std::filesystem::path data = std::filesystem::temp_directory_path(ec) / "oxwald_ngx";
+    std::filesystem::create_directories(data, ec);
+    s.dataPath = data.wstring();
+    s.featurePath = std::filesystem::current_path(ec).wstring();
+    const wchar_t* paths[] = {s.featurePath.c_str()};
+    NVSDK_NGX_FeatureCommonInfo info{};
+    info.PathListInfo.Path = paths;
+    info.PathListInfo.Length = 1;
+    info.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_OFF;
+    NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_Init_with_ProjectID(
+        kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, s.dataPath.c_str(), device.vkInstance(),
+        device.vkPhysicalDevice(), device.vkDevice(), vkGetInstanceProcAddr, vkGetDeviceProcAddr, &info);
+    if (NVSDK_NGX_FAILED(r)) {
+        s.status.reason = "NGX initialisation failed: " + resultText(r);
+        g_unavailable = true;
+        return s.status;
+    }
+    s.initialized = true;
+    r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&s.params);
+    if (NVSDK_NGX_FAILED(r) || !s.params) {
+        s.status.reason = "NGX capability parameters unavailable: " + resultText(r);
+        g_unavailable = true;
+        return s.status;
+    }
+    int needsDriver = 0;
+    unsigned int minMajor = 0, minMinor = 0;
+    if (NVSDK_NGX_SUCCEED(NVSDK_NGX_Parameter_GetI(s.params, NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver,
+                                                    &needsDriver)) &&
+        needsDriver) {
+        NVSDK_NGX_Parameter_GetUI(s.params, NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMajor, &minMajor);
+        NVSDK_NGX_Parameter_GetUI(s.params, NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMinor, &minMinor);
+        s.status.reason = std::format("NVIDIA DLSS needs a newer driver (at least {}.{})", minMajor, minMinor);
+        g_unavailable = true;
+        return s.status;
+    }
+    int available = 0;
+    r = NVSDK_NGX_Parameter_GetI(s.params, NVSDK_NGX_Parameter_SuperSampling_Available, &available);
+    if (NVSDK_NGX_FAILED(r) || !available) {
+        int initResult = 0;
+        NVSDK_NGX_Parameter_GetI(s.params, NVSDK_NGX_Parameter_SuperSampling_FeatureInitResult, &initResult);
+        s.status.reason = "NVIDIA DLSS is not supported on this GPU/driver: " +
+                          resultText(NVSDK_NGX_Result(initResult ? initResult : int(r)));
+        g_unavailable = true;
+        return s.status;
+    }
+    s.status.available = true;
+    g_unavailable = false;
+    OX_LOG_INFO("render", "NVIDIA DLSS available (NGX initialised)");
+    return s.status;
+}
+
+OptimalSettings optimalSettings(rhi::Device& device, u32 outputWidth, u32 outputHeight, UpscalerQuality quality) {
+    OptimalSettings o;
+    if (!probe(device).available) return o;
+    NgxState& s = state();
+    std::lock_guard lock(s.mutex);
+    unsigned int w = 0, h = 0, maxW = 0, maxH = 0, minW = 0, minH = 0;
+    float sharpness = 0.0f;
+    const NVSDK_NGX_Result r = NGX_DLSS_GET_OPTIMAL_SETTINGS(s.params, outputWidth, outputHeight, perfQuality(quality),
+                                                             &w, &h, &maxW, &maxH, &minW, &minH, &sharpness);
+    if (NVSDK_NGX_FAILED(r) || w == 0 || h == 0) return o;
+    o.valid = true;
+    o.renderWidth = w;
+    o.renderHeight = h;
+    o.sharpness = sharpness;
+    return o;
+}
+
+bool evaluate(rhi::Device& device, rhi::CommandList& cmd, ViewFeature& f, const EvaluateParams& p) {
+    if (!probe(device).available) return false;
+    NgxState& s = state();
+    std::lock_guard lock(s.mutex);
+    int flags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes |
+                NVSDK_NGX_DLSS_Feature_Flags_DepthInverted; // reversed-Z
+    if (!p.exposure) flags |= NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
+    const bool recreate = !f.handle || f.renderWidth != p.renderWidth || f.renderHeight != p.renderHeight ||
+                          f.outputWidth != p.outputWidth || f.outputHeight != p.outputHeight ||
+                          f.quality != i32(p.quality) || f.flags != flags;
+    if (recreate) {
+        if (f.handle) {
+            device.waitIdle(); // the previous feature may still be referenced by frames in flight
+            releaseLocked(f);
+        }
+        NVSDK_NGX_DLSS_Create_Params cp{};
+        cp.Feature.InWidth = p.renderWidth;
+        cp.Feature.InHeight = p.renderHeight;
+        cp.Feature.InTargetWidth = p.outputWidth;
+        cp.Feature.InTargetHeight = p.outputHeight;
+        cp.Feature.InPerfQualityValue = perfQuality(p.quality);
+        cp.InFeatureCreateFlags = flags;
+        NVSDK_NGX_Handle* handle = nullptr;
+        const NVSDK_NGX_Result r = NGX_VULKAN_CREATE_DLSS_EXT1(device.vkDevice(), cmd.vk(), 1, 1, &handle, s.params, &cp);
+        if (NVSDK_NGX_FAILED(r) || !handle) {
+            OX_LOG_ERROR("render", "DLSS feature creation failed: {}", resultText(r));
+            return false;
+        }
+        f.handle = handle;
+        f.renderWidth = p.renderWidth;
+        f.renderHeight = p.renderHeight;
+        f.outputWidth = p.outputWidth;
+        f.outputHeight = p.outputHeight;
+        f.quality = i32(p.quality);
+        f.flags = flags;
+    }
+    NVSDK_NGX_Resource_VK color = imageResource(device, p.color, false);
+    NVSDK_NGX_Resource_VK depth = imageResource(device, p.depth, false);
+    NVSDK_NGX_Resource_VK motion = imageResource(device, p.motion, false);
+    NVSDK_NGX_Resource_VK output = imageResource(device, p.output, true);
+    NVSDK_NGX_Resource_VK exposure{};
+    if (p.exposure) exposure = imageResource(device, p.exposure, false);
+
+    NVSDK_NGX_VK_DLSS_Eval_Params e{};
+    e.Feature.pInColor = &color;
+    e.Feature.pInOutput = &output;
+    e.Feature.InSharpness = p.sharpness;
+    e.pInDepth = &depth;
+    e.pInMotionVectors = &motion;
+    e.pInExposureTexture = p.exposure ? &exposure : nullptr;
+    e.InJitterOffsetX = p.jitterPixels.x;
+    e.InJitterOffsetY = p.jitterPixels.y;
+    e.InRenderSubrectDimensions = {p.renderWidth, p.renderHeight};
+    e.InReset = p.reset ? 1 : 0;
+    // Velocity is uvCurrent - uvPrevious; NGX wants the pixel offset from the current to the previous position.
+    e.InMVScaleX = -f32(p.renderWidth);
+    e.InMVScaleY = -f32(p.renderHeight);
+    e.InPreExposure = p.preExposure;
+    e.InExposureScale = 1.0f;
+    e.InFrameTimeDeltaInMsec = p.frameTimeMs;
+    const NVSDK_NGX_Result r =
+        NGX_VULKAN_EVALUATE_DLSS_EXT(cmd.vk(), static_cast<NVSDK_NGX_Handle*>(f.handle), s.params, &e);
+    if (NVSDK_NGX_FAILED(r)) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true)) OX_LOG_ERROR("render", "DLSS evaluation failed: {}", resultText(r));
+        return false;
+    }
+    return true;
+}
+
+void release(ViewFeature& f) {
+    std::lock_guard lock(state().mutex);
+    releaseLocked(f);
+}
+
+void shutdown(rhi::Device& device) {
+    NgxState& s = state();
+    std::lock_guard lock(s.mutex);
+    if (!s.probed || s.device != device.vkDevice()) return;
+    if (s.params) NVSDK_NGX_VULKAN_DestroyParameters(s.params);
+    s.params = nullptr;
+    if (s.initialized) NVSDK_NGX_VULKAN_Shutdown1(device.vkDevice());
+    s.initialized = false;
+    s.probed = false;
+    s.device = VK_NULL_HANDLE;
+}
+
+} // namespace ox::render::dlss

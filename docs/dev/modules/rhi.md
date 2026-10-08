@@ -215,7 +215,8 @@ Subgroups: 32; timestamps yes (1 ns); memory budget yes
 
 ## Ray tracing (compiled always, used only with caps)
 
-`createBlas` (build + compaction for static meshes, `allowUpdate` keeps scratch for `CommandList::refitBlas`),
+`createBlas` (build + compaction for static meshes, `allowUpdate` keeps scratch for `CommandList::refitBlas`;
+`refitBlas(blas, geometry)` refits from new buffers, e.g. ping-pong skinning output),
 `createTlas` + `CommandList::buildTlas(tlas, instances, update)` (per-frame instance ring), `accelStructAddress()`
 (use `accelerationStructureEXT(addr)` in GLSL ray queries), `createRayTracingPipeline` (+ automatic SBT,
 `CommandList::traceRays`). All return invalid handles and log `whyRayTracingUnavailable()` on unsupported devices.
@@ -237,7 +238,15 @@ checks the swapchain path manually.
 * Render graph: whole-resource barriers (no per-mip/layer tracking), declaration order is the execution order
   (no reordering for overlap), aliasing places every resource at offset 0 of its slot (no sub-allocation packing),
   one cached physical layout per graph.
-* No split barriers / events; no sparse resources; no secondary command buffers / multithreaded recording yet.
+* No split barriers / events; no sparse resources.
+* Multithreaded recording: `Device::secondaryCommandList(threadSlot, SecondaryRenderingInfo)` (per-thread pools per
+  frame slot, `kMaxRecordingThreads` = 64), `CommandList::end()` / `executeSecondary()`, `RenderingDesc::secondaryContents`,
+  render graph `PassBuilder::secondaryCommandLists()` + `PassContext::secondaryRendering`. MoltenVK replays secondaries
+  serially at submit, so it is slower there (docs/dev/perf.md).
+* Async pipelines: `Device::createGraphicsPipelineAsync` / `createComputePipelineAsync(desc, jobs)`, `isPipelineReady`,
+  `pendingPipelineCompiles`; results are published in `beginFrame` (never during recording).
+* `CommandList::drawMeshTasksIndirect`. `GpuTiming::startMs` / `queue` (overlap analysis). The graph splits a batch
+  before the first pass that waits on another queue (independent passes keep overlapping with async compute).
 * `ox_add_module` passes `TEST_LABELS` unescaped to `gtest_discover_tests` (a list becomes extra properties) —
   rhi registers its GPU tests itself with `LABELS "rhi\;gpu"`.
 * Modules configured before `engine/rhi` alphabetically (`render`) must `include()` `OxwaldVulkanRuntime.cmake`
