@@ -12,3 +12,5 @@
 - vcpkg: moltenvk port should keep a valid code signature (deploy step re-signs today).
 - net: replicated field set fixed at spawn, no arrays/maps replication.
 - gameplay: one script per entity; child colliders not merged into parent bodies; raycasts empty in edit mode.
+- rhi/vk-bootstrap: creating a windowed device after a headless one in the same process crashes in get_present_queue_index (editor works around it).
+- editor/vcpkg: vcpkg app-local dylib copy breaks ad-hoc code signature; editor CMake re-signs after build. Static Qt links its own MoltenVK; ICD manifest points to Qt's copy.
