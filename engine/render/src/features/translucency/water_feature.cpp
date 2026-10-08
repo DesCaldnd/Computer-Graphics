@@ -79,15 +79,24 @@ std::vector<u8> makeWaterNormalMap(u32 size) {
     struct Wave {
         f32 kx, ky, amp, phase;
     };
+    // std::mt19937 is fully specified, the std distributions are not (MSVC STL and libc++ draw different sequences):
+    // the two below spell out what libc++ does, so the texture stays the one the golden images were rendered with.
     std::mt19937 rng(1234);
-    std::uniform_int_distribution<int> freq(-9, 9);
-    std::uniform_real_distribution<f32> unit(0.0f, 1.0f);
+    auto freq = [&rng] { // uniform int in [-9, 9]: low 5 bits, rejection
+        u32 v;
+        do {
+            v = u32(rng()) & 31u;
+        } while (v >= 19u);
+        return int(v) - 9;
+    };
+    auto unit = [&rng] { return f32(u32(rng())) / 4294967296.0f; };
     std::vector<Wave> waves;
     while (waves.size() < 28) {
-        const int kx = freq(rng), ky = freq(rng);
+        const int kx = freq();
+        const int ky = freq();
         if (kx == 0 && ky == 0) continue;
         const f32 k = std::sqrt(f32(kx * kx + ky * ky));
-        waves.push_back({f32(kx), f32(ky), 1.0f / (k * k), unit(rng) * 6.2831853f});
+        waves.push_back({f32(kx), f32(ky), 1.0f / (k * k), unit() * 6.2831853f});
     }
     std::vector<u8> px(usize(size) * size * 4);
     const f32 twoPi = 6.2831853f;

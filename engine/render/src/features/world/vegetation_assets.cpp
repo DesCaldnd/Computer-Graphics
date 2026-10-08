@@ -114,7 +114,10 @@ void leafCards(MeshBuilder& b, u32 count, glm::vec3 canopyCenter, glm::vec3 cano
 void grassBlades(MeshBuilder& b, u32 count, f32 height, f32 width, f32 spread, u32 seed) {
     Random rng(seed);
     for (u32 i = 0; i < count; ++i) {
-        const glm::vec2 base = glm::vec2(rng.range(-spread, spread), rng.range(-spread, spread));
+        // Two statements: the evaluation order of function arguments is unspecified (MSVC goes right to left).
+        const f32 baseX = rng.range(-spread, spread);
+        const f32 baseZ = rng.range(-spread, spread);
+        const glm::vec2 base(baseX, baseZ);
         const f32 yaw = rng.range(0.0f, 6.2831853f);
         const glm::vec3 side(std::cos(yaw), 0.0f, std::sin(yaw));
         const glm::vec3 lean = glm::vec3(-side.z, 0.0f, side.x) * rng.range(0.1f, 0.35f);

@@ -23,7 +23,9 @@ uvec3 pcg3d(uvec3 v) {
 
 vec3 hash33(ivec3 p) { return vec3(pcg3d(uvec3(p) + uvec3(pc.seed, pc.seed * 7u, pc.seed * 13u))) * (1.0 / 4294967295.0); }
 
-ivec3 wrap(ivec3 p, int period) { return ((p % period) + period) % period; }
+// Callers pass lattice cells from -1 upwards. GLSL leaves % undefined for negative operands (on NVIDIA the cell -1
+// did not wrap to period - 1, which put seams into the weather map), so the offset is added first.
+ivec3 wrap(ivec3 p, int period) { return (p + period) % period; }
 
 // Tileable gradient noise in [-1, 1] (period in lattice cells).
 float perlin(vec3 p, int period) {
