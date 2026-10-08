@@ -1,0 +1,10 @@
+{
+  "oxmat": 1,
+  "shadingModel": "Foliage",
+  "blendMode": "AlphaTest",
+  "baseColor": [0.25, 0.5, 0.15, 1.0],
+  "alphaCutoff": 0.4,
+  "doubleSided": true,
+  "roughness": 0.7,
+  "uvTiling": [2.0, 2.0]
+}

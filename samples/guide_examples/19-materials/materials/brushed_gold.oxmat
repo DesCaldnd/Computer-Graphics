@@ -1,0 +1,8 @@
+{
+  "oxmat": 1,
+  "shadingModel": "Lit",
+  "blendMode": "Opaque",
+  "baseColor": [1.0, 0.78, 0.34, 1.0],
+  "metallic": 1.0,
+  "roughness": 0.3
+}

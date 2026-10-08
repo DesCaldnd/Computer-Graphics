@@ -1,0 +1,8 @@
+/* Стиль примеров главы 29. У RmlUi нет встроенной таблицы стилей браузера: display и шрифт задаём сами. */
+body, div, h1, p, ul, li { display: block; }
+body { font-family: Inter; font-size: 16dp; color: #e8ecf2; width: 100%; height: 100%; }
+h1 { font-size: 28dp; font-weight: bold; }
+button { display: inline-block; padding: 6dp 12dp; background-color: #223047; }
+button:hover { background-color: #2f4a73; }
+#panel { width: 320dp; padding: 16dp; background-color: #151b26; }
+.danger { color: #ff5a4f; }

@@ -92,7 +92,7 @@ build/dev/bin/OxwaldPlayer --project MyGame --quality low --cvar r.VSync=false -
 | Флаг | Значение |
 | --- | --- |
 | `--project <dir\|file.oxproj>` | проект: каталог с `.oxproj` или сам файл |
-| `--pak <file>` | собранный пакет (пока не поддерживается плеером — используйте `--project`) |
+| `--pak <file>` | собранная игра `.oxpak` (см. [31. Ассеты](31-assets.md)); без `--project` настройки проекта берутся из пакета |
 | `--scene <uri\|path>` | стартовая сцена вместо указанной в проекте |
 | `--headless` | без окна; рендерер-заглушка `NullRenderer`, звук офлайн |
 | `--server` | выделенный сервер (подразумевает `--headless`, без рендера и звука) |
@@ -108,8 +108,20 @@ build/dev/bin/OxwaldPlayer --project MyGame --quality low --cvar r.VSync=false -
 | `--user-dir <dir>` | корень `user://` (настройки, сохранения) |
 | `--help` | справка |
 
-> Сейчас плеер ещё не подключает Vulkan-рендерер к `Engine` (в коде есть TODO), поэтому даже в оконном режиме
-> работает `NullRenderer`: игровой цикл, поток рендера, ввод и звук — настоящие, картинки нет.
+Плеер рисует через Vulkan-рендерер ([18. Рендеринг](18-rendering-overview.md)) с ImGui-оверлеем (F1) и игровым
+UI на RmlUi ([29. UI](29-ui.md)). В режиме `--headless` кадр рендерится offscreen, а выделенный сервер (`--server`)
+работает с `NullRenderer` без рендера.
+
+### Запуск редактора
+
+Если сборка шла с Qt (`OX_BUILD_EDITOR=ON`, по умолчанию), рядом с плеером лежит OxwaldEditor:
+
+```sh
+build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor                      # окно выбора проекта
+build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor --project MyGame.oxproj
+```
+
+Вне macOS (без app bundle) исполняемый файл лежит прямо в `build/dev/bin/`. Тур по редактору — в главе [30. Редактор](30-editor.md).
 
 Тот же разбор аргументов доступен вашей программе: `ox::parseLaunchOptions` возвращает `LaunchOptions`, а
 `toEngineConfig()` превращает их в конфигурацию движка.

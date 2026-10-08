@@ -1,0 +1,8 @@
+{
+  "blendMode": "Refractive",
+  "baseColor": [1.0, 1.0, 1.0, 1.0],
+  "roughness": 0.02,
+  "ior": 1.5,
+  "absorptionColor": [0.45, 0.9, 0.55],
+  "absorptionDistance": 1.0
+}

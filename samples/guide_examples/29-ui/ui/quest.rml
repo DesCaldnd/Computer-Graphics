@@ -1,0 +1,15 @@
+<rml>
+<head>
+    <title>Quest</title>
+    <link type="text/rcss" href="style.rcss"/>
+</head>
+<!-- Модель "quest" создаёт Lua-скрипт scripts/quest_ui.lua через ui.createModel. -->
+<body data-model="quest">
+    <div id="panel">
+        <h1 id="title">{{title}}</h1>
+        <p id="reward">Награда: {{reward}} золотых</p>
+        <button id="accept" data-event-click="accept(reward)">Принять</button>
+        <button id="close">Закрыть</button>
+    </div>
+</body>
+</rml>

@@ -338,7 +338,7 @@ counter->loadedVersion();                    // версия кода, кото�
 
 ## Шаг 9. Скрипты на сущностях
 
-В игре скрипты к сущностям вешает модуль `gameplay`: компонент `ScriptComponent { script, asset, properties, enabled }` ([`gameplay/script.hpp`](../../engine/gameplay/include/oxwald/gameplay/script.hpp)). Переопределения свойств хранятся в компоненте и редактируются в инспекторе; экземпляры существуют только в play mode. В `self.entity` скрипт получает свою сущность (`self.entity.transform`, `entity:get("Transform")`, `scene.find(...)` и API физики, звука, ИИ и анимации) — это описано в главе о геймплейных компонентах (*скоро*).
+В игре скрипты к сущностям вешает модуль `gameplay`: компонент `ScriptComponent { script, asset, properties, enabled }` ([`gameplay/script.hpp`](../../engine/gameplay/include/oxwald/gameplay/script.hpp)). Переопределения свойств хранятся в компоненте и редактируются в инспекторе; экземпляры существуют только в play mode. В `self.entity` скрипт получает свою сущность (`self.entity.transform`, `entity:get("Transform")`, `scene.find(...)` и API физики, звука, ИИ и анимации) — это описано в главе [32. Компоненты ECS](32-gameplay-components.md).
 
 ## Типичные ошибки и подводные камни
 

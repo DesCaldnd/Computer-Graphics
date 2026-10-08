@@ -1,0 +1,49 @@
+#version 460
+// Глава 18: простой SSAO для своей render feature (docs/guide/18-rendering-overview.md).
+// Читает Depth и Normals препасса, пишет AO (R8) в разрешении рендера. ForwardOpaque умножает на него
+// непрямое освещение (IBL/SH), прямой свет AO не трогает.
+#include <render/common/math.glsl>
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Первые 16 байт — view и scene (адреса буферов), дальше — свои поля. Одна декларация на «;».
+OX_RENDER_PUSH(uint depth; uint normals; uint outAo; float radius; float intensity;);
+
+const int kSamples = 12;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(VIEW.renderSize.xy);
+    if (any(greaterThanEqual(p, size))) return;
+
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    if (d <= 0.0) { // reversed-Z: 0 = дальняя плоскость (небо)
+        OX_IMAGE_STORE_2D(r8, pc.outAo, p, vec4(1.0));
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+    vec3 P = oxWorldPositionFromDepth(pc.view, uv, d);
+    vec3 N = normalize(OX_FETCH_2D(pc.normals, p, 0).xyz);
+
+    // Радиус в метрах → в пикселях на этой глубине (proj[1][1] = ±1 / tan(fov / 2)).
+    float viewZ = oxLinearDepth(pc.view, d);
+    float radiusPx = clamp(pc.radius * abs(VIEW.proj[1][1]) * 0.5 * VIEW.renderSize.y / viewZ, 2.0, 48.0);
+
+    float angle = oxInterleavedGradientNoise(vec2(p)) * 6.2831853;
+    float occlusion = 0.0;
+    for (int i = 0; i < kSamples; ++i) {
+        float t = (float(i) + 0.5) / float(kSamples);
+        float a = angle + float(i) * 2.3999632; // золотой угол
+        ivec2 q = clamp(p + ivec2(vec2(cos(a), sin(a)) * radiusPx * sqrt(t)), ivec2(0), size - 1);
+        float dq = OX_FETCH_2D(pc.depth, q, 0).r;
+        if (dq <= 0.0) continue;
+        vec3 Q = oxWorldPositionFromDepth(pc.view, (vec2(q) + 0.5) * VIEW.renderSize.zw, dq);
+        vec3 v = Q - P;
+        float dist = length(v);
+        float falloff = 1.0 - smoothstep(0.5 * pc.radius, pc.radius, dist);
+        occlusion += max(dot(N, v / max(dist, 1e-4)) - 0.1, 0.0) * falloff;
+    }
+    float ao = clamp(1.0 - pc.intensity * occlusion / float(kSamples), 0.0, 1.0);
+    OX_IMAGE_STORE_2D(r8, pc.outAo, p, vec4(ao));
+}
