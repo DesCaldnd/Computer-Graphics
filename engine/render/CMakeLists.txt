@@ -41,11 +41,23 @@ if(OX_ENABLE_DLSS AND TARGET NVIDIA::DLSS)
     target_link_libraries(ox_render PRIVATE NVIDIA::DLSS)
     target_compile_definitions(ox_render PUBLIC OX_RENDER_HAS_DLSS=1)
     # NGX loads the DLSS feature library (nvngx_dlss.dll / libnvidia-ngx-dlss.so.*) from the executable's directory;
-    # ox_deploy_vulkan_runtime() (all apps, tests and the editor) copies these next to each executable.
-    set(OX_DLSS_RUNTIME_FILES "${NVIDIA_DLSS_RUNTIME_FILES}" CACHE INTERNAL "NGX runtime libraries to deploy next to executables")
+    # ox_deploy_vulkan_runtime() (all apps, tests and the editor) copies these next to each executable: the release
+    # libraries, or the development ones (same names) in Debug builds.
+    set(_ox_dlss_files ${NVIDIA_DLSS_RUNTIME_FILES})
+    set(_ox_dlss_files_debug ${NVIDIA_DLSS_RUNTIME_FILES_DEBUG})
+    # Only the NGX feature libraries: on Windows they share vcpkg's bin/ with every other DLL.
+    list(FILTER _ox_dlss_files INCLUDE REGEX "/(nvngx_[^/]*\\.dll|libnvidia-ngx-[^/]*)$")
+    list(FILTER _ox_dlss_files_debug INCLUDE REGEX "/(nvngx_[^/]*\\.dll|libnvidia-ngx-[^/]*)$")
+    set(OX_DLSS_RUNTIME_FILES "${_ox_dlss_files}" CACHE INTERNAL "NGX runtime libraries to deploy next to executables")
+    set(OX_DLSS_RUNTIME_FILES_DEBUG "${_ox_dlss_files_debug}" CACHE INTERNAL "NGX development runtime libraries (Debug builds)")
+    if(NOT OX_DLSS_RUNTIME_FILES)
+        message(WARNING "Oxwald render: the nvidia-dlss package has no runtime libraries (nvngx_dlss.dll / "
+                        "libnvidia-ngx-dlss.so.*); DLSS will report itself unavailable at run time")
+    endif()
     message(STATUS "Oxwald render: NVIDIA DLSS backend enabled")
 else()
     set(OX_DLSS_RUNTIME_FILES "" CACHE INTERNAL "NGX runtime libraries to deploy next to executables")
+    set(OX_DLSS_RUNTIME_FILES_DEBUG "" CACHE INTERNAL "NGX development runtime libraries (Debug builds)")
     list(APPEND _render_srcs ${_ox_dlss_dir}/dlss_stub.cpp)
     if(NOT OX_ENABLE_DLSS)
         set_source_files_properties(${_ox_dlss_dir}/dlss_stub.cpp PROPERTIES COMPILE_DEFINITIONS OX_DLSS_DISABLED_BY_OPTION=1)
@@ -72,7 +84,8 @@ if(OX_BUILD_TESTS AND TARGET ox_render_tests)
         add_executable(ox_render_gpu_tests ${_gpu_tests})
         target_link_libraries(ox_render_gpu_tests PRIVATE ox_render GTest::gtest_main)
         target_include_directories(ox_render_gpu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
-                                   ${CMAKE_CURRENT_SOURCE_DIR}/tests ${Stb_INCLUDE_DIR})
+                                   ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        target_include_directories(ox_render_gpu_tests SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
         target_compile_definitions(ox_render_gpu_tests PRIVATE
             OX_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
             OX_RENDER_SHADER_DIR="${CMAKE_SOURCE_DIR}/engine/shaders")

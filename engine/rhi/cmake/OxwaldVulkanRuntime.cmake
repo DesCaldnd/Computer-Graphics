@@ -72,23 +72,42 @@ function(ox_deploy_vulkan_runtime_to dir)
     endif()
 endfunction()
 
-function(ox_deploy_vulkan_runtime target)
-    _ox_vulkan_runtime_args(_args)
-    add_custom_command(TARGET ${target} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} ${_args} -DOX_DEST=$<TARGET_FILE_DIR:${target}>/vulkan -P ${OX_VK_RUNTIME_SCRIPT}
-        COMMENT "Deploying Vulkan runtime next to ${target}"
-        VERBATIM)
-    ox_deploy_dlss_runtime(${target})
-endfunction()
-
 # NVIDIA NGX/DLSS runtime libraries (Windows/Linux, set by engine/render when the DLSS backend is enabled) are
-# loaded by NGX from the executable's directory. No-op elsewhere.
-function(ox_deploy_dlss_runtime target)
+# loaded by NGX from the executable's directory: the release (signed, production) libraries for Release /
+# RelWithDebInfo / MinSizeRel, the development ones (same file names, on-screen debug overlay) for Debug.
+# Empty where DLSS has no runtime. The list is passed to the deploy script "::"-separated.
+function(_ox_dlss_runtime_args out target)
+    set(${out} "" PARENT_SCOPE)
     if(NOT OX_DLSS_RUNTIME_FILES)
         return()
     endif()
+    list(JOIN OX_DLSS_RUNTIME_FILES "::" _rel)
+    set(_files "${_rel}")
+    if(OX_DLSS_RUNTIME_FILES_DEBUG)
+        list(JOIN OX_DLSS_RUNTIME_FILES_DEBUG "::" _dbg)
+        set(_files "$<IF:$<CONFIG:Debug>,${_dbg},${_rel}>")
+    endif()
+    set(${out} "-DOX_NGX_FILES=${_files}" "-DOX_NGX_DEST=$<TARGET_FILE_DIR:${target}>" PARENT_SCOPE)
+endfunction()
+
+function(ox_deploy_vulkan_runtime target)
+    _ox_vulkan_runtime_args(_args)
+    _ox_dlss_runtime_args(_dlss_args ${target})
     add_custom_command(TARGET ${target} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OX_DLSS_RUNTIME_FILES} $<TARGET_FILE_DIR:${target}>
+        COMMAND ${CMAKE_COMMAND} ${_args} ${_dlss_args} -DOX_DEST=$<TARGET_FILE_DIR:${target}>/vulkan
+                -P ${OX_VK_RUNTIME_SCRIPT}
+        COMMENT "Deploying Vulkan runtime next to ${target}"
+        VERBATIM)
+endfunction()
+
+# Only the NGX/DLSS libraries (ox_deploy_vulkan_runtime() already includes them). No-op without the DLSS backend.
+function(ox_deploy_dlss_runtime target)
+    _ox_dlss_runtime_args(_dlss_args ${target})
+    if(NOT _dlss_args)
+        return()
+    endif()
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} ${_dlss_args} -P ${OX_VK_RUNTIME_SCRIPT}
         COMMENT "Deploying NVIDIA NGX (DLSS) runtime next to ${target}"
         VERBATIM)
 endfunction()

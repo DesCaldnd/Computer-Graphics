@@ -25,7 +25,7 @@ ox_add_module(assets
     PRIVATE_DEPS ${_ox_assets_private_deps}
     TEST_DEPS    Oxwald::scene)
 
-target_include_directories(ox_assets PRIVATE ${Stb_INCLUDE_DIR})
+target_include_directories(ox_assets SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
 if(TARGET ox_animation)
     target_compile_definitions(ox_assets PUBLIC OX_ASSETS_HAS_ANIMATION=1)
 endif()

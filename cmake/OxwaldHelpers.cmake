@@ -3,6 +3,28 @@ include_guard(GLOBAL)
 set(OX_ENGINE_SOURCE_DIR ${CMAKE_SOURCE_DIR} CACHE INTERNAL "")
 set(OX_SHADER_SOURCE_DIR ${CMAKE_SOURCE_DIR}/engine/shaders CACHE INTERNAL "")
 
+# --- Platform-wide compile settings (this file is included from the root CMakeLists.txt, so they reach every target).
+if(WIN32)
+    # NOMINMAX / WIN32_LEAN_AND_MEAN: <windows.h> arrives through third-party headers (enet, GLFW native, Tracy) and
+    # its min/max macros break std::min/std::max and glm. Defined empty ("NAME=") on purpose: identical to a plain
+    # `#define NOMINMAX` in a source file, so such a line is not a C4005 macro redefinition.
+    # _CRT_SECURE_NO_WARNINGS / _CRT_NONSTDC_NO_WARNINGS: portable code uses std::getenv, fopen, strncpy, ...;
+    # MSVC flags each as C4996, which is fatal with OX_WARNINGS_AS_ERRORS.
+    add_compile_definitions(NOMINMAX= WIN32_LEAN_AND_MEAN= _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
+    # gtest_discover_tests() runs the test executable. With the x64-windows triplet every executable needs its vcpkg
+    # DLLs next to it (copied by vcpkg's applocal POST_BUILD step) and a single executable that fails to start would
+    # fail the whole build, so discover when ctest runs instead of at build time.
+    if(NOT DEFINED CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE)
+        set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+    endif()
+endif()
+if(MSVC)
+    # /utf-8            sources and string literals are UTF-8 (also for targets that skip ox_set_warnings)
+    # /bigobj           sol2 / EnTT / reflection-heavy translation units exceed the default COFF section limit
+    # /Zc:preprocessor  conforming preprocessor: the engine's variadic macros use __VA_OPT__ and `, ##__VA_ARGS__`
+    add_compile_options(/utf-8 /bigobj /Zc:preprocessor)
+endif()
+
 # OX_WARNINGS_AS_ERRORS applies to engine modules, editor, apps and tools. Code under samples/ (guide examples, the
 # showcase project) still gets the warnings but they stay non-fatal: samples are written against the engine by other
 # teams and must not break an engine build over a new warning.
@@ -13,6 +35,14 @@ function(ox_set_warnings target)
     endif()
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
+        # Keep /W4 comparable to the -Wall -Wextra set used with clang/gcc (which has no -Wconversion / -Wshadow and
+        # switches unused parameters off):
+        #   C4100 unused parameter                      C4127 conditional expression is constant
+        #   C4201 nameless struct/union                 C4324 structure padded due to alignas
+        #   C4244 C4267 C4305 narrowing conversions     C4245 signed constant converted to unsigned
+        #   C4456-C4459 declaration hides an outer one
+        target_compile_options(${target} PRIVATE /wd4100 /wd4127 /wd4201 /wd4324 /wd4244 /wd4267 /wd4305 /wd4245
+                                                 /wd4456 /wd4457 /wd4458 /wd4459)
         if(_werror)
             target_compile_options(${target} PRIVATE /WX)
         endif()

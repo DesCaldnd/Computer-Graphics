@@ -7,7 +7,7 @@ find_package(tinyexr CONFIG REQUIRED)
 ox_add_module(world
     PUBLIC_DEPS  Oxwald::core
     PRIVATE_DEPS unofficial::tinyexr::tinyexr)
-target_include_directories(ox_world PRIVATE ${Stb_INCLUDE_DIR})
+target_include_directories(ox_world SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
 
 if(TARGET ox_world_tests)
     target_compile_definitions(ox_world_tests PRIVATE OX_WORLD_SHADER_DIR="${OX_SHADER_SOURCE_DIR}")

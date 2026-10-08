@@ -17,7 +17,7 @@ ox_add_module(ui
     PUBLIC_DEPS  Oxwald::render Oxwald::runtime imgui::imgui RmlUi::Core
     PRIVATE_DEPS RmlUi::Debugger)
 
-target_include_directories(ox_ui PRIVATE ${Stb_INCLUDE_DIR})
+target_include_directories(ox_ui SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
 target_compile_definitions(ox_ui PRIVATE OX_UI_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
 
 foreach(_m script async gameplay)
@@ -42,7 +42,8 @@ if(OX_BUILD_TESTS AND TARGET ox_ui_tests)
         target_link_libraries(ox_ui_gpu_tests PRIVATE ox_ui GTest::gtest_main)
         target_include_directories(ox_ui_gpu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
                                    ${CMAKE_CURRENT_SOURCE_DIR}/tests
-                                   ${OX_ENGINE_SOURCE_DIR}/engine/render/tests/gpu ${Stb_INCLUDE_DIR})
+                                   ${OX_ENGINE_SOURCE_DIR}/engine/render/tests/gpu)
+        target_include_directories(ox_ui_gpu_tests SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
         target_compile_definitions(ox_ui_gpu_tests PRIVATE
             OX_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
             OX_RENDER_SHADER_DIR="${CMAKE_SOURCE_DIR}/engine/shaders")

@@ -20,3 +20,14 @@ endif()
 set_target_properties(Jolt::Jolt PROPERTIES
     MAP_IMPORTED_CONFIG_RELWITHDEBINFO "Release"
     MAP_IMPORTED_CONFIG_MINSIZEREL "Release")
+
+# The config mapping above only selects the library file. Jolt's exported compile definitions are still keyed on
+# the consumer's configuration name, e.g. with MSVC
+#   $<$<CONFIG:Debug,Release>:JPH_FLOATING_POINT_EXCEPTIONS_ENABLED>
+# so a RelWithDebInfo build would link the Release Jolt.lib without that define and fail VerifyJoltVersionID().
+# Give RelWithDebInfo/MinSizeRel every definition the Release configuration gets.
+get_target_property(_ox_jolt_defs Jolt::Jolt INTERFACE_COMPILE_DEFINITIONS)
+if(_ox_jolt_defs AND NOT _ox_jolt_defs MATCHES "RelWithDebInfo")
+    string(REGEX REPLACE "([:,])Release([,>])" "\\1Release,RelWithDebInfo,MinSizeRel\\2" _ox_jolt_defs "${_ox_jolt_defs}")
+    set_property(TARGET Jolt::Jolt PROPERTY INTERFACE_COMPILE_DEFINITIONS "${_ox_jolt_defs}")
+endif()
