@@ -179,20 +179,24 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
         error = "vkb::SystemInfo failed: " + sysInfo.error().message();
         return false;
     }
+    auto enableInstanceExt = [&](const char* name) {
+        ib.enable_extension(name);
+        s.instanceExtensions.emplace_back(name);
+    };
     if (sysInfo->is_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
-        ib.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        enableInstanceExt(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         s.debugUtils = true;
     }
     if (desc.surface) {
         for (const char* ext : desc.surface->requiredInstanceExtensions()) {
-            ib.enable_extension(ext);
+            enableInstanceExt(ext);
         }
         if (sysInfo->is_extension_available(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME)) {
-            ib.enable_extension(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+            enableInstanceExt(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
         }
     }
     for (const std::string& ext : desc.optionalInstanceExtensions) {
-        if (sysInfo->is_extension_available(ext.c_str())) ib.enable_extension(ext.c_str());
+        if (sysInfo->is_extension_available(ext.c_str())) enableInstanceExt(ext.c_str());
     }
     auto instRet = ib.build();
     if (!instRet) {
@@ -507,6 +511,7 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
     dci.pNext = &s.enabledFeatures;
     dci.queueCreateInfoCount = u32(queueInfos.size());
     dci.pQueueCreateInfos = queueInfos.data();
+    s.deviceExtensions.assign(enableExts.begin(), enableExts.end());
     dci.enabledExtensionCount = u32(enableExts.size());
     dci.ppEnabledExtensionNames = enableExts.data();
     if (VkResult r = vkCreateDevice(s.physical, &dci, nullptr, &s.device); r != VK_SUCCESS) {
@@ -774,6 +779,11 @@ Device::~Device() {
         return;
     }
     vkDeviceWaitIdle(s.device);
+    while (!s.shutdownCallbacks.empty()) {
+        const std::function<void()> callback = std::move(s.shutdownCallbacks.back());
+        s.shutdownCallbacks.pop_back();
+        callback();
+    }
     // Background pipeline compiles reference the device state: let them finish, then drop their results.
     while (s.asyncPipelinesInFlight.load() > 0) std::this_thread::yield();
     for (auto& r : s.asyncPipelineResults) {
@@ -825,6 +835,15 @@ VkSurfaceKHR Device::surface() const { return m_s->surface; }
 ISurfaceProvider* Device::surfaceProvider() const { return m_s->surfaceProvider; }
 VkPipelineLayout Device::pipelineLayout() const { return m_s->pipelineLayout; }
 VkDescriptorSet Device::bindlessSet() const { return m_s->bindlessSet; }
+bool Device::hasInstanceExtension(std::string_view name) const {
+    return std::find(m_s->instanceExtensions.begin(), m_s->instanceExtensions.end(), name) != m_s->instanceExtensions.end();
+}
+bool Device::hasDeviceExtension(std::string_view name) const {
+    return std::find(m_s->deviceExtensions.begin(), m_s->deviceExtensions.end(), name) != m_s->deviceExtensions.end();
+}
+void Device::addShutdownCallback(std::function<void()> callback) {
+    if (callback) m_s->shutdownCallbacks.push_back(std::move(callback));
+}
 u64 Device::frameNumber() const { return m_s->frameNumber; }
 u32 Device::frameIndex() const { return u32(m_s->frameNumber % m_s->frames.size()); }
 u32 Device::framesInFlight() const { return u32(m_s->frames.size()); }

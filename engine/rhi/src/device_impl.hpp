@@ -152,6 +152,8 @@ struct DeviceState {
     VkPhysicalDeviceFeatures2 enabledFeatures{};
     VkPipelineStageFlags2 supportedStages = ~0ull;
     VkAccessFlags2 supportedAccess = ~0ull;
+    std::vector<std::string> instanceExtensions, deviceExtensions; // enabled at creation
+    std::vector<std::function<void()>> shutdownCallbacks;          // Device::addShutdownCallback
 
     // Resources
     std::recursive_mutex resourceMutex;

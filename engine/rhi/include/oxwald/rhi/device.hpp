@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ox {
@@ -96,6 +97,12 @@ public:
     [[nodiscard]] ISurfaceProvider* surfaceProvider() const;
     [[nodiscard]] VkPipelineLayout pipelineLayout() const;
     [[nodiscard]] VkDescriptorSet bindlessSet() const;
+    // Extensions this device/instance was actually created with (required, optional and DeviceDesc::optional*).
+    [[nodiscard]] bool hasInstanceExtension(std::string_view name) const;
+    [[nodiscard]] bool hasDeviceExtension(std::string_view name) const;
+    // Runs once in ~Device (GPU idle, every rhi resource still alive), last registered first. For libraries that
+    // keep their own Vulkan objects on this device and must release them before vkDestroyDevice (NVIDIA NGX).
+    void addShutdownCallback(std::function<void()> callback);
 
     // --- buffers ---
     BufferHandle createBuffer(const BufferDesc& desc, const void* initialData = nullptr);
