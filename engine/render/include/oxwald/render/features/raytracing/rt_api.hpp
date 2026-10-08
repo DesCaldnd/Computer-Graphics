@@ -29,9 +29,11 @@ public:
     static RayTracingSceneApi* find(FeatureRegistry& registry);
 
     virtual void setDeformedGeometryProvider(DeformedGeometryProvider provider) = 0;
-    // True between the TLAS pass declaration (AfterDepth) and the end of the frame when ray tracing runs.
+    // True from the TLAS pass declaration (AfterDepth) of a ray traced frame until the next frame declares its
+    // passes (so it can be queried after Device::endFrame: "was the frame that just ended ray traced?").
     [[nodiscard]] virtual bool activeThisFrame() const = 0;
-    // Per-frame RtSceneHeader (TLAS address, instance table, index arena, DDGI volume); 0 when inactive.
+    // Per-frame RtSceneHeader (TLAS address, instance table, index arena, DDGI volume); frame memory, so 0 when
+    // inactive and outside the frame that built it.
     [[nodiscard]] virtual VkDeviceAddress sceneHeaderAddress() const = 0;
     [[nodiscard]] virtual u64 tlasAddress() const = 0;
     [[nodiscard]] virtual const BlasScheduler::Stats& blasStats() const = 0;

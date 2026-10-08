@@ -35,6 +35,10 @@ protected:
         mesh(Primitive::Cylinder, grey, {1.4f, 0.75f, 0.8f}, glm::vec3(0.4f, 1.5f, 0.4f));
         environment(1.0f, 1.0f);
     }
+    // Every ray traced effect image goes to <temp>/oxwald_render_out/<name>.png for inspection.
+    static void dump(const char* name, const Image& img) {
+        writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / (std::string(name) + ".png"), img);
+    }
 };
 
 namespace {
@@ -619,7 +623,8 @@ TEST_F(RayTracingTest, RtShadowsMatchShadowMapsLoosely) {
     CVarScope on("r.RayTracing", "true");
     CVarScope off("r.RayTracing.AO", "false"), r("r.RayTracing.Reflections", "false"), g("r.RayTracing.GI", "false");
     const Image rt = render(cam, {.frames = 24});
-    writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / "rt_shadows.png", rt);
+    dump("rt_shadows_raster", raster);
+    dump("rt_shadows", rt);
     EXPECT_TRUE(rt::RayTracingSceneApi::find(renderer->features())->activeThisFrame());
     // Same lighting model; shadow edges differ (PCSS vs cone-sampled rays): loose image tolerance.
     EXPECT_LT(meanAbs(raster, rt), 10.0);
@@ -639,6 +644,8 @@ TEST_F(RayTracingTest, RtAmbientOcclusionDarkensContacts) {
         return render(cam, {.frames = 4});
     }();
     const Image ao = render(cam, {.frames = 24});
+    dump("rt_ao_off", noAo);
+    dump("rt_ao", ao);
     EXPECT_LT(meanLuminance(ao, 0, 0, ao.width, ao.height), meanLuminance(noAo, 0, 0, ao.width, ao.height));
     EXPECT_GT(meanAbs(ao, noAo), 0.5) << "AO must change the image";
 }
@@ -653,6 +660,8 @@ TEST_F(RayTracingTest, RtReflectionsSeeOffscreenObjects) {
     const Image raster = render(cam, {.frames = 4});
     CVarScope on("r.RayTracing", "true");
     const Image rt = render(cam, {.frames = 24});
+    dump("rt_reflections_raster", raster);
+    dump("rt_reflections", rt);
     const glm::vec3 floorRt = meanColor(rt, 96, 200, 160, 250), floorRaster = meanColor(raster, 96, 200, 160, 250);
     EXPECT_GT(floorRt.r - floorRt.g, floorRaster.r - floorRaster.g + 0.05f) << "red reflection of the off-screen sphere";
 }
@@ -667,6 +676,8 @@ TEST_F(RayTracingTest, RtGlobalIlluminationBleedsColour) {
     const Image raster = render(cam, {.frames = 4});
     CVarScope on("r.RayTracing", "true");
     const Image rt = render(cam, {.frames = 48});
+    dump("rt_gi_raster", raster);
+    dump("rt_gi", rt);
     // Floor next to the red wall picks up red light.
     const glm::vec3 a = meanColor(rt, 60, 170, 120, 220), b = meanColor(raster, 60, 170, 120, 220);
     EXPECT_GT(a.r / std::max(a.g, 1e-3f), b.r / std::max(b.g, 1e-3f) * 1.05f);
@@ -684,6 +695,8 @@ TEST_F(RayTracingTest, RtRefractionThroughGlass) {
     const Image raster = render(cam, {.frames = 2});
     CVarScope on("r.RayTracing", "true");
     const Image rt = render(cam, {.frames = 4});
+    dump("rt_refraction_raster", raster);
+    dump("rt_refraction", rt);
     EXPECT_GT(meanAbs(raster, rt), 0.3) << "ray traced refraction replaces the screen-space one";
     EXPECT_LT(meanAbs(raster, rt), 25.0) << "but stays in the same ballpark";
 }
@@ -699,6 +712,9 @@ TEST_F(RayTracingTest, PathTracerConvergesAndResetsOnCameraChange) {
     const Image few = render(cam, {.frames = 4});
     const Image many = render(cam, {.frames = 252});
     const Image more = render(cam, {.frames = 256});
+    dump("rt_path_tracer_raster", raster);
+    dump("rt_path_tracer_4spp", few);
+    dump("rt_path_tracer", more);
     EXPECT_LT(meanAbs(many, more), meanAbs(few, many)) << "progressive accumulation converges";
     EXPECT_LT(meanAbs(many, more), 1.5);
     EXPECT_LT(meanAbs(raster, more), 25.0) << "reference and raster agree loosely (GI, soft shadows differ)";
@@ -725,6 +741,8 @@ TEST_F(RayTracingTest, RestirShadowsManyLights) {
     CVarScope restir("r.RayTracing.Shadows.ReSTIR", "true");
     const Image a = render(cam, {.frames = 32});
     const Image b = render(cam, {.frames = 8});
+    dump("rt_restir_unshadowed", unshadowed);
+    dump("rt_restir", b);
     EXPECT_LT(meanLuminance(a, 0, 0, a.width, a.height), meanLuminance(unshadowed, 0, 0, a.width, a.height))
         << "occluders cast shadows from many lights";
     EXPECT_LT(meanAbs(a, b), 3.0) << "temporally stable after denoising";

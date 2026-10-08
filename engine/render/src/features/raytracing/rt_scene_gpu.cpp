@@ -149,8 +149,12 @@ public:
         m_provider = std::move(provider);
         if (m_backend) m_backend->provider = m_provider;
     }
-    bool activeThisFrame() const override { return m_device && m_shared->sceneReady(*m_device); }
-    VkDeviceAddress sceneHeaderAddress() const override { return activeThisFrame() ? m_shared->header : 0; }
+    // Device::endFrame advances the frame number: "this frame" also covers the frame that just ended, so callers
+    // can ask after rendering. The header lives in frame memory and is only handed out while the frame is open.
+    bool activeThisFrame() const override {
+        return m_device && m_shared->sceneActive && m_device->frameNumber() - m_shared->sceneFrame <= 1;
+    }
+    VkDeviceAddress sceneHeaderAddress() const override { return inFrame() ? m_shared->header : 0; }
     u64 tlasAddress() const override { return activeThisFrame() ? m_shared->tlasAddress : 0; }
     const BlasScheduler::Stats& blasStats() const override {
         static const BlasScheduler::Stats empty;
@@ -337,6 +341,8 @@ public:
     }
 
 private:
+    [[nodiscard]] bool inFrame() const { return m_device && m_shared->sceneReady(*m_device); }
+
     std::shared_ptr<RtShared> m_shared;
     rhi::Device* m_device = nullptr;
     std::unique_ptr<RhiBlasBackend> m_backend;
