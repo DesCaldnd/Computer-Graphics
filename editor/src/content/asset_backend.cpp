@@ -12,7 +12,55 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <functional>
+
 namespace ox::editor {
+
+bool assetTypeMatches(const QString& assetType, const QString& wanted) {
+    if (wanted.isEmpty() || assetType == wanted) return true;
+    if (wanted == QLatin1String("AudioClip")) return assetType == QLatin1String("Audio");
+    if (wanted == QLatin1String("AnimationClip")) return assetType == QLatin1String("Animation");
+    if (wanted == QLatin1String("Prefab")) return assetType == QLatin1String("Model");
+    return false;
+}
+
+QStringList IAssetBackend::importFiles(const QStringList& sources, const QString& folder, QString* error) {
+    QStringList out;
+    for (const QString& src : sources) {
+        const QFileInfo fi(src);
+        if (!fi.exists()) continue;
+        const QString dest = FileSystemAssetBackend::uniquePath(folder, fi.completeBaseName(), fi.fileName().mid(fi.completeBaseName().size()));
+        if (QFile::copy(src, dest)) out << dest;
+        else if (error) *error = QStringLiteral("Cannot copy %1").arg(fi.fileName());
+    }
+    return out;
+}
+
+QList<AssetInfo> IAssetBackend::allOfType(const QString& type) const {
+    QList<AssetInfo> out;
+    std::function<void(const QString&, int)> walk = [&](const QString& folder, int depth) {
+        if (depth > 12 || out.size() > 1000) return;
+        for (const auto& a : list(folder)) {
+            if (a.isFolder) walk(a.path, depth + 1);
+            else if (assetTypeMatches(a.type, type)) out.push_back(a);
+        }
+    };
+    walk(rootPath(), 0);
+    return out;
+}
+
+std::optional<serial::Document> IAssetBackend::loadPrefabDocument(const QString& path, QString* error) const {
+    auto doc = serial::loadDocument(path.toStdString());
+    if (!doc) {
+        if (error) *error = QString::fromStdString(doc.error().message);
+        return std::nullopt;
+    }
+    return std::move(*doc);
+}
+
+Uuid IAssetBackend::resolveReference(const Uuid& id, const QString& assetType, const QString& wantedType) const {
+    return assetTypeMatches(assetType, wantedType) ? id : Uuid{};
+}
 
 FileSystemAssetBackend::FileSystemAssetBackend(QString root) : m_root(std::move(root)) {}
 
@@ -33,6 +81,11 @@ QString FileSystemAssetBackend::typeForSuffix(const QString& fileName) {
     if (ends(".glsl") || ends(".vert") || ends(".frag") || ends(".comp")) return QStringLiteral("Shader");
     if (ends(".ttf") || ends(".otf")) return QStringLiteral("Font");
     if (ends(".oxanim") || ends(".anim")) return QStringLiteral("Animation");
+    if (ends(".oxbt")) return QStringLiteral("BehaviorTree");
+    if (ends(".oxanimctrl")) return QStringLiteral("AnimatorController");
+    if (ends(".oxcube")) return QStringLiteral("Texture");
+    if (ends(".oxnav") || ends(".navmesh")) return QStringLiteral("NavMesh");
+    if (ends(".r16") || ends(".r32") || ends(".raw")) return QStringLiteral("Heightmap");
     return QStringLiteral("Data");
 }
 
@@ -90,10 +143,11 @@ std::optional<AssetInfo> FileSystemAssetBackend::find(const Uuid& id) const {
 }
 
 QStringList FileSystemAssetBackend::creatableTypes() const {
-    return {QStringLiteral("Scene"), QStringLiteral("Prefab"), QStringLiteral("Material"), QStringLiteral("Script")};
+    return {QStringLiteral("Scene"), QStringLiteral("Prefab"), QStringLiteral("Material"), QStringLiteral("Script"),
+            QStringLiteral("BehaviorTree")};
 }
 
-QString FileSystemAssetBackend::uniquePath(const QString& folder, const QString& baseName, const QString& suffix) const {
+QString FileSystemAssetBackend::uniquePath(const QString& folder, const QString& baseName, const QString& suffix) {
     QDir dir(folder);
     QString candidate = dir.filePath(baseName + suffix);
     for (int i = 1; QFileInfo::exists(candidate); ++i) candidate = dir.filePath(QStringLiteral("%1 %2%3").arg(baseName).arg(i).arg(suffix));
@@ -109,10 +163,13 @@ QString FileSystemAssetBackend::createFolder(const QString& parent, const QStrin
     return path;
 }
 
-QString FileSystemAssetBackend::createAsset(const QString& folder, const QString& type, const QString& name, QString* error) {
-    const QString dir = folder.isEmpty() ? m_root : folder;
+QString FileSystemAssetBackend::writeNewAsset(const QString& dir, const QString& type, const QString& name, QString* error) {
     QString path;
     bool ok = false;
+    auto writeText = [&](const QByteArray& text) {
+        QFile f(path);
+        ok = f.open(QIODevice::WriteOnly) && f.write(text) == text.size();
+    };
     if (type == QLatin1String("Scene")) {
         path = uniquePath(dir, name, QStringLiteral(".oxscene"));
         World empty;
@@ -124,29 +181,56 @@ QString FileSystemAssetBackend::createAsset(const QString& folder, const QString
         auto doc = createPrefab(w, root, {.linkSource = false});
         ok = serial::saveDocument(path.toStdString(), doc, serial::Format::Binary).hasValue();
     } else if (type == QLatin1String("Material")) {
-        path = uniquePath(dir, name, QStringLiteral(".oxmat.json"));
-        QFile f(path);
-        ok = f.open(QIODevice::WriteOnly);
-        if (ok) {
-            f.write(R"({
-  "kind": "material",
-  "shadingModel": "DefaultLit",
+        // Runtime material format (assets MaterialAsset as plain JSON, see docs/dev/modules/assets.md).
+        path = uniquePath(dir, name, QStringLiteral(".oxmat"));
+        writeText(R"({
+  "oxmat": 1,
+  "shadingModel": "Lit",
+  "blendMode": "Opaque",
   "baseColor": [0.8, 0.8, 0.8, 1.0],
   "metallic": 0.0,
   "roughness": 0.5,
-  "emissive": [0.0, 0.0, 0.0]
+  "emissive": [0.0, 0.0, 0.0],
+  "emissiveStrength": 1.0
 }
 )");
-        }
     } else if (type == QLatin1String("Script")) {
         path = uniquePath(dir, name, QStringLiteral(".lua"));
-        QFile f(path);
-        ok = f.open(QIODevice::WriteOnly);
-        if (ok) {
-            f.write(QStringLiteral("-- %1.lua\nlocal M = {}\n\nfunction M:onStart()\nend\n\nfunction M:onUpdate(dt)\nend\n\nreturn M\n")
-                        .arg(name)
-                        .toUtf8());
-        }
+        writeText(QString::fromUtf8(R"LUA(-- %1.lua
+-- Declared properties show up in the inspector of the Script component and can be overridden per entity.
+properties = {
+    speed = { type = "float", default = 1.5, min = 0, max = 20, tooltip = "Turns per second (radians)" },
+    spin = { type = "bool", default = true, tooltip = "Rotate around Y while playing" },
+}
+
+function onStart(self)
+    log.info("%1 started on", self.entity.name)
+end
+
+function onUpdate(self, dt)
+    if self.spin then
+        self.entity.transform:rotate(vec3(0, 1, 0), self.speed * dt)
+    end
+end
+
+-- Other callbacks: onCreate, onFixedUpdate(self, dt), onDestroy, onTriggerEnter(self, other),
+-- onCollisionEnter(self, other, info), onEvent(self, name, payload). Coroutines: spawn(function() await(...) end)
+)LUA")
+                      .arg(name)
+                      .toUtf8());
+    } else if (type == QLatin1String("BehaviorTree")) {
+        path = uniquePath(dir, name, QStringLiteral(".oxbt"));
+        writeText(R"({
+  "root": {
+    "type": "Sequence",
+    "name": "Patrol",
+    "children": [
+      { "type": "Wait", "name": "Idle", "seconds": 1.0 },
+      { "type": "SetBlackboard", "name": "Mark", "key": "visited", "value": true }
+    ]
+  }
+}
+)");
     } else {
         if (error) *error = QStringLiteral("Unknown asset type %1").arg(type);
         return {};
@@ -156,6 +240,10 @@ QString FileSystemAssetBackend::createAsset(const QString& folder, const QString
         return {};
     }
     return path;
+}
+
+QString FileSystemAssetBackend::createAsset(const QString& folder, const QString& type, const QString& name, QString* error) {
+    return writeNewAsset(folder.isEmpty() ? m_root : folder, type, name, error);
 }
 
 QString FileSystemAssetBackend::rename(const QString& path, const QString& newName, QString* error) {

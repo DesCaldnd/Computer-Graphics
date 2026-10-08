@@ -1,5 +1,6 @@
 #include "core/editor_context.hpp"
 
+#include "integration/integrations.hpp"
 #include "settings/render_cvars.hpp"
 
 #include <oxwald/core/log.hpp>
@@ -19,15 +20,25 @@ namespace ox::editor {
 void EditorContext::registerEngineTypes() {
     reflect::registerCoreReflection();
     registerSceneTypes();
+    registerModuleTypes();
     ensureRenderingCVars();
     qRegisterMetaType<ox::Uuid>();
 }
 
-EditorContext::EditorContext(QObject* parent) : QObject(parent), m_editWorld(std::make_unique<World>()) {
+EditorContext::EditorContext(QObject* parent) : QObject(parent), m_runtime(std::make_unique<RuntimeHost>()) {
     registerEngineTypes();
     m_selection.setParent(nullptr);
-    m_play = std::make_unique<PlaySession>(*m_editWorld, m_services);
+    m_services.setRuntime(m_runtime.get());
+    installIntegrations(*this);
+    m_runtime->setQuitHandler([this] { stopPlay(); });
+    connect(m_runtime.get(), &RuntimeHost::worldReplaced, this, &EditorContext::onEngineWorldReplaced);
+    m_runtime->start(nullptr, nullptr);
+    m_play = std::make_unique<PlaySession>(*m_runtime, m_services);
     connectPlaySession();
+    connect(&m_selection, &Selection::changed, this, [this] {
+        if (!m_selection.ids().empty()) inspectAsset({});
+        if (m_tools.tool() != ViewportTool::Transform && m_selection.primary() != m_tools.target()) m_tools.reset();
+    });
     connect(&m_undo, &QUndoStack::cleanChanged, this, [this] { Q_EMIT sceneChanged(); });
     connect(&m_prefs, &EditorPreferences::changed, this, &EditorContext::updateAutosaveTimer);
     connect(&m_autosave, &QTimer::timeout, this, [this] { autosave(); });
@@ -38,6 +49,27 @@ EditorContext::EditorContext(QObject* parent) : QObject(parent), m_editWorld(std
 EditorContext::~EditorContext() {
     m_play->stop();
     m_undo.clear();
+    m_play.reset();
+    m_runtime->stop();
+    uninstallIntegrations(*this);
+}
+
+Services& EditorContext::engineServices() {
+    if (Services* s = m_runtime->services()) return *s;
+    return m_services.engine();
+}
+
+void EditorContext::onEngineWorldReplaced() {
+    // The engine swapped the edit world by itself (console "level", save game load): editor state is stale.
+    m_undo.clear();
+    m_selection.clear();
+    m_hidden.clear();
+    m_locked.clear();
+    editWorld().updateTransforms();
+    m_extraDirty = true;
+    Q_EMIT worldReset();
+    Q_EMIT structureChanged();
+    Q_EMIT sceneChanged();
 }
 
 void EditorContext::connectPlaySession() {
@@ -56,16 +88,25 @@ void EditorContext::connectPlaySession() {
 
 World& EditorContext::world() {
     if (m_play->active() && m_play->world()) return *m_play->world();
-    return *m_editWorld;
+    return editWorld();
 }
 
 void EditorContext::setProject(std::unique_ptr<Project> project) {
+    m_play->stop();
     m_project = std::move(project);
+    // The engine is recreated for the project (asset database, project settings, input mappings); the current edit
+    // world moves over as a clone (same UUIDs, so selection and undo history stay valid).
+    QString err;
+    if (RuntimeHost::compiledIn() && !m_runtime->start(m_project.get(), editWorld().clone(), &err)) {
+        Q_EMIT statusMessage(tr("Engine failed to start: %1").arg(err), 6000);
+    }
     if (m_project) {
         m_services.assets().setRootPath(m_project->contentDir());
         m_project->applyCVarSettings();
     }
     m_prefabs.clear();
+    editWorld().updateTransforms();
+    Q_EMIT worldReset();
     Q_EMIT projectChanged();
 }
 
@@ -87,18 +128,14 @@ void EditorContext::setScenePath(const QString& path) {
     Q_EMIT sceneChanged();
 }
 
-void EditorContext::resetWorld(std::unique_ptr<World> world) {
+void EditorContext::resetWorld(std::unique_ptr<World> world, const QString& level) {
     m_play->stop();
     m_undo.clear();
     m_selection.clear();
     m_hidden.clear();
     m_locked.clear();
-    // PlaySession holds a reference to the edit world: swap contents by recreating the session.
-    m_play.reset();
-    m_editWorld = std::move(world);
-    m_play = std::make_unique<PlaySession>(*m_editWorld, m_services);
-    connectPlaySession();
-    m_editWorld->updateTransforms();
+    m_runtime->setEditWorld(std::move(world), level);
+    editWorld().updateTransforms();
     m_extraDirty = false;
     Q_EMIT worldReset();
     Q_EMIT structureChanged();
@@ -119,9 +156,11 @@ bool EditorContext::openScene(const QString& path, QString* error) {
         OX_LOG_ERROR("editor", "cannot open scene {}: {}", path.toStdString(), st.error().message);
         return false;
     }
-    resetWorld(std::move(w));
+    // The level is recorded as a project:// URI when the scene lives in the project (save games, runtime loads).
+    const bool inProject = m_project && QFileInfo(path).absoluteFilePath().startsWith(QDir(m_project->contentDir()).absolutePath() + QLatin1Char('/'));
+    resetWorld(std::move(w), inProject ? m_project->uriForPath(QFileInfo(path).absoluteFilePath()) : path);
     setScenePath(path);
-    OX_LOG_INFO("editor", "Opened scene {} ({} entities)", path.toStdString(), m_editWorld->entityCount());
+    OX_LOG_INFO("editor", "Opened scene {} ({} entities)", path.toStdString(), editWorld().entityCount());
     return true;
 }
 
@@ -132,7 +171,7 @@ bool EditorContext::saveScene(const QString& path, QString* error) {
         return false;
     }
     QDir().mkpath(QFileInfo(target).absolutePath());
-    auto st = ox::saveScene(*m_editWorld, target.toStdString());
+    auto st = ox::saveScene(editWorld(), target.toStdString());
     if (!st) {
         if (error) *error = QString::fromStdString(st.error().message);
         OX_LOG_ERROR("editor", "cannot save scene {}: {}", target.toStdString(), st.error().message);
@@ -152,7 +191,7 @@ bool EditorContext::autosave() {
     QDir().mkpath(dir);
     const QString file = QDir(dir).filePath(QStringLiteral("%1-%2.oxscene")
                                                 .arg(sceneName(), QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss")));
-    if (!ox::saveScene(*m_editWorld, file.toStdString())) return false;
+    if (!ox::saveScene(editWorld(), file.toStdString())) return false;
     QFileInfoList backups = QDir(dir).entryInfoList({sceneName() + QStringLiteral("-*.oxscene")}, QDir::Files, QDir::Time);
     for (int i = std::max(1, m_prefs.values().autosaveBackups); i < backups.size(); ++i) QFile::remove(backups[i].absoluteFilePath());
     Q_EMIT statusMessage(tr("Autosaved to %1").arg(QFileInfo(file).fileName()), 2500);
@@ -390,7 +429,7 @@ UuidList EditorContext::paste(const Uuid& parent) {
 std::vector<SubtreeSnapshot> EditorContext::snapshotRoots(const UuidList& roots) {
     std::vector<SubtreeSnapshot> out;
     for (const auto& id : roots) {
-        if (Entity e = m_editWorld->find(id)) out.push_back(captureSubtree(*m_editWorld, e));
+        if (Entity e = editWorld().find(id)) out.push_back(captureSubtree(editWorld(), e));
     }
     return out;
 }
@@ -400,13 +439,13 @@ bool EditorContext::createPrefab(const Uuid& rootId, const QString& path, QStrin
         if (error) *error = tr("Stop play mode first");
         return false;
     }
-    Entity root = m_editWorld->find(rootId);
+    Entity root = editWorld().find(rootId);
     if (!root) {
         if (error) *error = tr("Nothing selected");
         return false;
     }
     auto before = snapshotRoots({rootId});
-    serial::Document doc = ox::createPrefab(*m_editWorld, root);
+    serial::Document doc = ox::createPrefab(editWorld(), root);
     QDir().mkpath(QFileInfo(path).absolutePath());
     auto st = serial::saveDocument(path.toStdString(), doc, serial::formatForPath(path.toStdString()));
     if (!st) {
@@ -424,9 +463,11 @@ const PrefabAsset* EditorContext::loadPrefab(const QString& path, QString* error
     for (const auto& [id, asset] : m_prefabs) {
         if (QFileInfo(asset.path) == QFileInfo(path)) return &asset;
     }
-    auto doc = serial::loadDocument(path.toStdString());
+    // .oxprefab files or imported models (their prefab artifact) through the asset backend.
+    QString err;
+    auto doc = m_services.assets().loadPrefabDocument(path, &err);
     if (!doc) {
-        if (error) *error = QString::fromStdString(doc.error().message);
+        if (error) *error = err;
         return nullptr;
     }
     if (doc->kind != "prefab") {
@@ -479,14 +520,14 @@ Uuid EditorContext::instantiatePrefab(const QString& path, const Uuid& parent, s
 }
 
 bool EditorContext::applyPrefab(const Uuid& instanceEntity, QString* error) {
-    Entity e = m_editWorld->find(instanceEntity);
+    Entity e = editWorld().find(instanceEntity);
     Entity root = prefabInstanceRoot(e);
     const PrefabAsset* asset = prefabOfEntity(instanceEntity);
     if (!root || !asset) {
         if (error) *error = tr("The prefab asset of this instance was not found");
         return false;
     }
-    serial::Document updated = applyInstanceToPrefab(*m_editWorld, root, asset->document);
+    serial::Document updated = applyInstanceToPrefab(editWorld(), root, asset->document);
     const QString path = asset->path;
     auto st = serial::saveDocument(path.toStdString(), updated, serial::formatForPath(path.toStdString()));
     if (!st) {
@@ -494,7 +535,7 @@ bool EditorContext::applyPrefab(const Uuid& instanceEntity, QString* error) {
         return false;
     }
     m_prefabs[prefabId(updated)] = PrefabAsset{path, updated};
-    const usize n = updatePrefabInstances(*m_editWorld, updated);
+    const usize n = updatePrefabInstances(editWorld(), updated);
     markDirty();
     onWorldEdited(EditKind::Structure);
     Q_EMIT statusMessage(tr("Applied prefab %1 (%2 instances updated)").arg(QFileInfo(path).fileName()).arg(n), 3000);
@@ -502,7 +543,7 @@ bool EditorContext::applyPrefab(const Uuid& instanceEntity, QString* error) {
 }
 
 void EditorContext::revertPrefabOverride(const Uuid& entity, const std::string& propertyPath) {
-    Entity e = m_editWorld->find(entity);
+    Entity e = editWorld().find(entity);
     const PrefabAsset* asset = prefabOfEntity(entity);
     Entity root = prefabInstanceRoot(e);
     if (!e || !asset || !root) return;
@@ -514,7 +555,7 @@ void EditorContext::revertPrefabOverride(const Uuid& entity, const std::string& 
 }
 
 void EditorContext::revertAllPrefabOverrides(const Uuid& instanceEntity) {
-    Entity root = prefabInstanceRoot(m_editWorld->find(instanceEntity));
+    Entity root = prefabInstanceRoot(editWorld().find(instanceEntity));
     const PrefabAsset* asset = prefabOfEntity(instanceEntity);
     if (!root || !asset) return;
     const Uuid rootId = root.uuid();
@@ -545,6 +586,12 @@ void EditorContext::setLocked(const Uuid& id, bool locked) {
     Q_EMIT visibilityChanged();
 }
 
+void EditorContext::inspectAsset(const QString& path) {
+    if (path == m_inspectedAsset) return;
+    m_inspectedAsset = path;
+    Q_EMIT assetInspected(path);
+}
+
 UuidList EditorContext::hiddenIds() const { return UuidList(m_hidden.begin(), m_hidden.end()); }
 
 // ---- play ---------------------------------------------------------------------------------------------------
@@ -553,7 +600,7 @@ bool EditorContext::startPlay(PlayMode mode) { return m_play->start(mode); }
 
 void EditorContext::stopPlay() {
     m_play->stop();
-    World& w = *m_editWorld;
+    World& w = editWorld();
     m_selection.prune([&](const Uuid& id) { return bool(w.find(id)); });
 }
 

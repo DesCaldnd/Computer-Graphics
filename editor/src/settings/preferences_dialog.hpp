@@ -30,6 +30,7 @@ private:
     void buildShortcuts();
     void buildTools();
     void buildPerformance();
+    void buildGameUserSettings();
 
     EditorContext* m_ctx;
     PreferenceValues m_snapshot;

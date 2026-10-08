@@ -13,7 +13,9 @@ class QToolButton;
 
 namespace ox::editor {
 
+class BehaviorTreePanel;
 class ConsolePanel;
+class CoroutinesPanel;
 class ContentBrowserPanel;
 class EditorContext;
 class InspectorPanel;
@@ -35,6 +37,10 @@ public:
     [[nodiscard]] ContentBrowserPanel* contentBrowser() const { return m_content; }
     [[nodiscard]] ConsolePanel* console() const { return m_console; }
     [[nodiscard]] StatsPanel* stats() const { return m_stats; }
+    [[nodiscard]] CoroutinesPanel* coroutines() const { return m_coroutines; }
+    [[nodiscard]] BehaviorTreePanel* behaviorTree() const { return m_behaviorTree; }
+    // Opens a source file at a line in the configured code editor (Preferences > Tools) or the system default.
+    void openSource(const QString& file, int line);
     [[nodiscard]] QDockWidget* dock(const QString& name) const;
 
     void resetLayout();
@@ -74,6 +80,8 @@ private:
     ContentBrowserPanel* m_content = nullptr;
     ConsolePanel* m_console = nullptr;
     StatsPanel* m_stats = nullptr;
+    CoroutinesPanel* m_coroutines = nullptr;
+    BehaviorTreePanel* m_behaviorTree = nullptr;
     ScalabilityWidget* m_scalability = nullptr;
     QList<QDockWidget*> m_docks;
     QByteArray m_defaultState;

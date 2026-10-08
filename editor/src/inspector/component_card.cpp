@@ -1,6 +1,7 @@
 #include "inspector/component_card.hpp"
 
 #include "core/editor_context.hpp"
+#include "inspector/component_extensions.hpp"
 #include "theme/icons.hpp"
 #include "theme/theme.hpp"
 
@@ -130,8 +131,13 @@ void ComponentCard::build() {
     m_layout->setColumnMinimumWidth(0, 112);
     m_grid = grid;
     m_shape = shapeSignature();
+    m_footer = nullptr;
     if (m_info->type) addStruct(*m_info->type, "", 0);
-    if (m_rows.empty()) {
+    if (const ComponentExtension* ext = ComponentExtensions::find(m_info->name); ext && ext->footer) {
+        m_footer = ext->footer(m_ctx, m_entities, grid);
+        if (m_footer) addSpanningRow(m_footer);
+    }
+    if (m_rows.empty() && !m_footer) {
         auto* l = new QLabel(tr("No editable properties"), grid);
         l->setProperty("role", "faint");
         addSpanningRow(l);
@@ -176,8 +182,10 @@ void ComponentCard::addSpanningRow(QWidget* w) { m_layout->addWidget(w, m_rowInd
 void ComponentCard::addStruct(const reflect::TypeInfo& type, const std::string& base, int depth) {
     std::vector<const reflect::FieldInfo*> plain;
     std::vector<std::pair<std::string, std::vector<const reflect::FieldInfo*>>> categories;
+    const ComponentExtension* ext = depth == 0 ? ComponentExtensions::find(m_info->name) : nullptr;
     for (const auto& f : type.fields) {
         if (f.attributes.hidden) continue;
+        if (ext && std::find(ext->hiddenFields.begin(), ext->hiddenFields.end(), f.name) != ext->hiddenFields.end()) continue;
         if (depth == 0 && !f.attributes.category.empty()) {
             auto it = std::find_if(categories.begin(), categories.end(), [&](const auto& c) { return c.first == f.attributes.category; });
             if (it == categories.end()) categories.push_back({f.attributes.category, {&f}});
@@ -386,6 +394,7 @@ void ComponentCard::refresh() {
     for (auto& r : m_rows) {
         if (r.editor && !r.editor->isEditing()) r.editor->setValues(readValues(r.path));
     }
+    if (m_footer) m_footer->refresh();
     updateOverrideMarkers();
 }
 

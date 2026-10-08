@@ -6,9 +6,12 @@
 
 #include <memory>
 
+#include <functional>
+
 namespace ox::rhi {
 class Device;
 class Swapchain;
+struct DeviceDesc;
 } // namespace ox::rhi
 
 namespace ox::editor {
@@ -25,6 +28,10 @@ public:
     // vk-bootstrap keeps per-process function tables and a later surface device crashes after a headless one).
     static bool pending();
     static void setPending(bool p);
+    // Applied to every DeviceDesc the editor creates (viewport, offscreen canvas, benchmark): the render module adds
+    // the Vulkan extensions its upscalers need (render::appendUpscalerVulkanExtensions, DLSS/NGX).
+    static void setDeviceDescHook(std::function<void(rhi::DeviceDesc&)> hook);
+    static void prepareDeviceDesc(rhi::DeviceDesc& desc);
 };
 
 #if OX_EDITOR_HAS_RHI

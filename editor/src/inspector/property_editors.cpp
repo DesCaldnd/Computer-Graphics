@@ -322,13 +322,6 @@ public:
 };
 
 // ---- asset reference / uuid ---------------------------------------------------------------------------------
-void collectAssets(IAssetBackend& backend, const QString& folder, const QString& type, QList<AssetInfo>& out, int depth = 0) {
-    if (depth > 12 || out.size() > 500) return;
-    for (const auto& a : backend.list(folder)) {
-        if (a.isFolder) collectAssets(backend, a.path, type, out, depth + 1);
-        else if (type.isEmpty() || a.type == type || (type == QLatin1String("Texture") && a.type == QLatin1String("Texture"))) out.push_back(a);
-    }
-}
 
 class AssetRefEditor final : public PropertyEditor {
 public:
@@ -355,7 +348,7 @@ public:
         menu.addAction(Icons::get(QStringLiteral("close")), tr("None"), this, [this] { commit(serial::Value::makeUuid(Uuid{}), EditPhase::Single); });
         menu.addSeparator();
         QList<AssetInfo> assets;
-        if (m_ctx.editor) collectAssets(m_ctx.editor->services().assets(), {}, m_type, assets);
+        if (m_ctx.editor) assets = m_ctx.editor->services().assets().allOfType(m_type);
         if (assets.isEmpty()) menu.addAction(tr("No %1 assets in the project").arg(m_type))->setEnabled(false);
         for (const auto& a : assets) {
             const Uuid id = a.uuid;
@@ -394,11 +387,14 @@ public:
         if (lines.isEmpty()) return;
         const QStringList parts = lines.first().split(QLatin1Char('|'));
         if (parts.size() < 2) return;
-        if (!m_type.isEmpty() && parts[1] != m_type) return;
-        if (auto id = Uuid::parse(parts[0].toStdString())) {
-            commit(serial::Value::makeUuid(*id), EditPhase::Single);
-            e->acceptProposedAction();
-        }
+        auto id = Uuid::parse(parts[0].toStdString());
+        if (!id) return;
+        // Exact type, or something that resolves to it (a Model dropped on a Mesh field -> its first mesh).
+        const Uuid target = m_ctx.editor ? m_ctx.editor->services().assets().resolveReference(*id, parts[1], m_type)
+                                         : (assetTypeMatches(parts[1], m_type) ? *id : Uuid{});
+        if (target.isNil()) return;
+        commit(serial::Value::makeUuid(target), EditPhase::Single);
+        e->acceptProposedAction();
     }
     QPushButton* m_button;
     QToolButton* m_clear;

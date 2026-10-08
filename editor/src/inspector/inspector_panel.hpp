@@ -20,6 +20,7 @@ class QVBoxLayout;
 
 namespace ox::editor {
 
+class AssetInspector;
 class ComponentCard;
 class EditorContext;
 class SearchField;
@@ -53,6 +54,7 @@ public:
     [[nodiscard]] const std::vector<ComponentCard*>& cards() const { return m_cards; }
     [[nodiscard]] ComponentCard* card(const QString& componentName) const;
     [[nodiscard]] QPushButton* addComponentButton() const { return m_addButton; }
+    [[nodiscard]] AssetInspector* assetPage() const { return m_assetPage; }
 
 protected:
     void changeEvent(QEvent* e) override;
@@ -65,6 +67,7 @@ private:
     QStackedWidget* m_stack;
     QWidget* m_empty;
     QWidget* m_content;
+    AssetInspector* m_assetPage = nullptr;
     QLabel* m_entityIcon;
     QLineEdit* m_nameEdit;
     QCheckBox* m_activeBox;

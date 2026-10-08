@@ -1,5 +1,7 @@
 #include "inspector/inspector_panel.hpp"
 
+#include "inspector/asset_inspector.hpp"
+
 #include "core/editor_context.hpp"
 #include "inspector/component_card.hpp"
 #include "theme/icons.hpp"
@@ -77,6 +79,7 @@ void AddComponentPopup::rebuild(const QString& filter) {
         QTreeWidgetItem*& g = groups[cat];
         if (!g) {
             g = new QTreeWidgetItem(m_tree, {cat});
+            g->setIcon(0, Icons::get(Icons::forCategory(qs(info->category)), Icons::Tint::Accent));
             QFont f = g->font(0);
             f.setWeight(QFont::DemiBold);
             g->setFont(0, f);
@@ -235,6 +238,8 @@ InspectorPanel::InspectorPanel(EditorContext* ctx, QWidget* parent) : QWidget(pa
     m_scroll->setWidget(cardsHost);
     cl->addWidget(m_scroll, 1);
     m_stack->addWidget(m_content);
+    m_assetPage = new AssetInspector(ctx, m_stack);
+    m_stack->addWidget(m_assetPage);
 
     connect(m_nameEdit, &QLineEdit::editingFinished, this, [this] {
         if (!m_nameEdit->isModified()) return;
@@ -263,6 +268,10 @@ InspectorPanel::InspectorPanel(EditorContext* ctx, QWidget* parent) : QWidget(pa
     connect(&m_refreshTimer, &QTimer::timeout, this, &InspectorPanel::refresh);
     connect(&m_rebuildTimer, &QTimer::timeout, this, &InspectorPanel::rebuild);
     connect(&ctx->selection(), &Selection::changed, &m_rebuildTimer, qOverload<>(&QTimer::start));
+    connect(ctx, &EditorContext::assetInspected, this, [this](const QString& path) {
+        if (!path.isEmpty()) m_assetPage->setAsset(path);
+        m_rebuildTimer.start();
+    });
     connect(ctx, &EditorContext::worldReset, &m_rebuildTimer, qOverload<>(&QTimer::start));
     connect(ctx, &EditorContext::structureChanged, this, [this] {
         if (componentSetSignature() != m_signature) m_rebuildTimer.start();
@@ -295,7 +304,12 @@ QString InspectorPanel::componentSetSignature() const {
 
 void InspectorPanel::rebuild() {
     m_rebuildTimer.stop();
-    for (auto* c : m_cards) c->deleteLater();
+    for (auto* c : m_cards) {
+        // Hidden + detached right away: deleteLater only runs once control returns to the event loop.
+        c->hide();
+        m_cardsLayout->removeWidget(c);
+        c->deleteLater();
+    }
     m_cards.clear();
     World& w = m_ctx->world();
     UuidList ids;
@@ -304,6 +318,10 @@ void InspectorPanel::rebuild() {
     }
     m_shown = ids;
     m_signature = componentSetSignature();
+    if (ids.empty() && !m_ctx->inspectedAsset().isEmpty()) {
+        m_stack->setCurrentWidget(m_assetPage);
+        return;
+    }
     if (ids.empty()) {
         m_stack->setCurrentWidget(m_empty);
         return;

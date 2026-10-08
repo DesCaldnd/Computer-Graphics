@@ -8,16 +8,21 @@
 namespace ox::editor {
 
 namespace builtin {
-Uuid cubeMesh() { return Uuid::fromName("engine://meshes/cube"); }
-Uuid sphereMesh() { return Uuid::fromName("engine://meshes/sphere"); }
-Uuid planeMesh() { return Uuid::fromName("engine://meshes/plane"); }
-Uuid cylinderMesh() { return Uuid::fromName("engine://meshes/cylinder"); }
-Uuid defaultMaterial() { return Uuid::fromName("engine://materials/default"); }
+// Same ids as render::primitiveUuid() (registered by the renderer's GpuResourceCache) and
+// assets::builtin::defaultMaterial(), so editor-created primitives render without assets.
+Uuid cubeMesh() { return Uuid::fromName("ox.render.primitive.Cube"); }
+Uuid sphereMesh() { return Uuid::fromName("ox.render.primitive.Sphere"); }
+Uuid planeMesh() { return Uuid::fromName("ox.render.primitive.Plane"); }
+Uuid cylinderMesh() { return Uuid::fromName("ox.render.primitive.Cylinder"); }
+Uuid defaultMaterial() { return Uuid::fromName("ox.builtin.material.default"); }
 QString primitiveName(const Uuid& mesh) {
-    if (mesh == cubeMesh()) return QStringLiteral("Cube");
-    if (mesh == sphereMesh()) return QStringLiteral("Sphere");
-    if (mesh == planeMesh()) return QStringLiteral("Plane");
-    if (mesh == cylinderMesh()) return QStringLiteral("Cylinder");
+    if (mesh == cubeMesh() || mesh == Uuid::fromName("engine://meshes/cube") || mesh == Uuid::fromName("ox.builtin.mesh.cube")) return QStringLiteral("Cube");
+    if (mesh == sphereMesh() || mesh == Uuid::fromName("engine://meshes/sphere")) return QStringLiteral("Sphere");
+    if (mesh == planeMesh() || mesh == Uuid::fromName("engine://meshes/plane")) return QStringLiteral("Plane");
+    if (mesh == cylinderMesh() || mesh == Uuid::fromName("engine://meshes/cylinder")) return QStringLiteral("Cylinder");
+    if (mesh == Uuid::fromName("ox.render.primitive.Capsule")) return QStringLiteral("Capsule");
+    if (mesh == Uuid::fromName("ox.render.primitive.Cone")) return QStringLiteral("Cone");
+    if (mesh == Uuid::fromName("ox.render.primitive.Torus")) return QStringLiteral("Torus");
     return {};
 }
 } // namespace builtin
@@ -139,6 +144,19 @@ void populateDefaultScene(World& w) {
     floor.setName("Floor");
     Entity cube = createPreset(w, CreateKind::Cube);
     cube.setName("Cube");
+}
+
+namespace {
+TemplateDecorator& showcaseDecorator() {
+    static TemplateDecorator d;
+    return d;
+}
+} // namespace
+
+void setShowcaseDecorator(TemplateDecorator decorator) { showcaseDecorator() = std::move(decorator); }
+
+void decorateShowcase(World& world, const QString& assetDir) {
+    if (showcaseDecorator()) showcaseDecorator()(world, assetDir);
 }
 
 void populateShowcaseScene(World& w) {

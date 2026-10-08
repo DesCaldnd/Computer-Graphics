@@ -41,10 +41,11 @@ bool EditorApp::openProject(const QString& projectFile, QString* error) {
 void EditorApp::openStartupScene() {
     Project* p = m_ctx->project();
     if (!p) return;
-    std::string rel = p->setting("maps.editorStartupMap", "").get<std::string>();
-    if (rel.empty()) rel = p->setting("general.startupScene", "").get<std::string>();
-    const QString path = QDir(p->contentDir()).filePath(QString::fromStdString(rel));
-    if (!rel.empty() && QFileInfo::exists(path)) m_ctx->openScene(path);
+    // Editor startup map (path inside the asset dir), else the game's startup scene (project:// URI).
+    QString rel = QString::fromStdString(p->setting("editor.maps.editorStartupMap", "").get<std::string>());
+    if (rel.isEmpty()) rel = QString::fromStdString(p->setting("startupScene", "").get<std::string>());
+    const QString path = rel.isEmpty() ? QString() : p->pathForUri(rel);
+    if (!path.isEmpty() && QFileInfo::exists(path)) m_ctx->openScene(path);
     else m_ctx->newScene(true);
 }
 

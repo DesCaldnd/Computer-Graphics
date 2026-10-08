@@ -4,7 +4,11 @@
 #include "core/log_capture.hpp"
 #include "dialogs/branding.hpp"
 #include "inspector/inspector_panel.hpp"
+#include "dialogs/save_game_inspector.hpp"
+#include "integration/gameplay_tools.hpp"
+#include "panels/behavior_tree_panel.hpp"
 #include "panels/console_panel.hpp"
+#include "panels/coroutines_panel.hpp"
 #include "panels/content_browser.hpp"
 #include "panels/outliner_panel.hpp"
 #include "panels/stats_panel.hpp"
@@ -23,6 +27,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QProcess>
 #include <QDir>
 #include <QDockWidget>
 #include <QFileDialog>
@@ -78,6 +83,8 @@ MainWindow::MainWindow(EditorContext* ctx, QWidget* parent) : QMainWindow(parent
         restoreLayout();
     });
     connect(ctx, &EditorContext::playStateChanged, this, &MainWindow::updatePlayActions);
+    connect(ctx, &EditorContext::openSourceRequested, this, &MainWindow::openSource);
+    ctx->play().setEditTicking(true);
     connect(ctx, &EditorContext::statusMessage, this, [this](const QString& t, int ms) { statusBar()->showMessage(t, ms); });
     connect(&ctx->preferences(), &EditorPreferences::changed, this, [this] {
         m_ctx->actions().applyOverrides(m_ctx->preferences().values().shortcuts);
@@ -89,7 +96,21 @@ MainWindow::MainWindow(EditorContext* ctx, QWidget* parent) : QMainWindow(parent
     ctx->actions().applyOverrides(ctx->preferences().values().shortcuts);
 }
 
-MainWindow::~MainWindow() { m_ctx->actions().clear(); }
+MainWindow::~MainWindow() {
+    m_ctx->play().setEditTicking(false);
+    m_ctx->actions().clear();
+}
+
+void MainWindow::openSource(const QString& file, int line) {
+    if (file.isEmpty()) return;
+    const auto& prefs = m_ctx->preferences().values();
+    if (!prefs.codeEditorPath.isEmpty()) {
+        QStringList args = prefs.codeEditorArgs.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        for (auto& a : args) a.replace(QLatin1String("%f"), file).replace(QLatin1String("%l"), QString::number(std::max(1, line)));
+        if (QProcess::startDetached(prefs.codeEditorPath, args)) return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(file));
+}
 
 QDockWidget* MainWindow::makeDock(const QString& objectName, const QString& title, const QString& icon, QWidget* content) {
     auto* d = new QDockWidget(title, this);
@@ -119,6 +140,8 @@ void MainWindow::createDocks() {
     m_content = new ContentBrowserPanel(m_ctx, this);
     m_console = new ConsolePanel(m_ctx, this);
     m_stats = new StatsPanel(m_ctx, m_viewport, this);
+    m_coroutines = new CoroutinesPanel(m_ctx, this);
+    m_behaviorTree = new BehaviorTreePanel(m_ctx, this);
     m_scalability = new ScalabilityWidget(m_ctx, true, this);
     auto* scalHost = new QWidget(this);
     auto* sl = new QVBoxLayout(scalHost);
@@ -132,11 +155,15 @@ void MainWindow::createDocks() {
     auto* dLog = makeDock(QStringLiteral("dock.console"), tr("Console"), QStringLiteral("console"), m_console);
     auto* dSta = makeDock(QStringLiteral("dock.stats"), tr("Stats"), QStringLiteral("stats"), m_stats);
     auto* dSca = makeDock(QStringLiteral("dock.scalability"), tr("Scalability"), QStringLiteral("speedometer"), scalHost);
+    auto* dCor = makeDock(QStringLiteral("dock.coroutines"), tr("Coroutines"), QStringLiteral("coroutine"), m_coroutines);
+    auto* dBt = makeDock(QStringLiteral("dock.behaviorTree"), tr("Behavior Tree"), QStringLiteral("sitemap"), m_behaviorTree);
     addDockWidget(Qt::RightDockWidgetArea, dOut);
     splitDockWidget(dOut, dIns, Qt::Vertical);
     addDockWidget(Qt::BottomDockWidgetArea, dCon);
     tabifyDockWidget(dCon, dLog);
     tabifyDockWidget(dLog, dSta);
+    tabifyDockWidget(dSta, dCor);
+    tabifyDockWidget(dCor, dBt);
     dCon->raise();
     addDockWidget(Qt::RightDockWidgetArea, dSca);
     tabifyDockWidget(dIns, dSca);
@@ -252,6 +279,26 @@ void MainWindow::createActions() {
         }
         m_console->input()->setFocus();
     });
+    make("tools.saveGames", T, "save-game", tr("Save Game Inspector…"), QKeySequence(), [this] {
+        SaveGameInspector dlg(m_ctx, this);
+        dlg.exec();
+    });
+    make("tools.bakeNav", T, "map", tr("Bake Navigation Mesh"), QKeySequence(), [this] {
+        const BakeResult r = bakeNavMesh(*m_ctx);
+        statusBar()->showMessage(r.message, 5000);
+    });
+    make("window.coroutines", T, "coroutine", tr("Coroutines"), QKeySequence(), [this] {
+        if (auto* d = dock(QStringLiteral("dock.coroutines"))) {
+            d->show();
+            d->raise();
+        }
+    });
+    make("window.behaviorTree", T, "sitemap", tr("Behavior Tree Debugger"), QKeySequence(), [this] {
+        if (auto* d = dock(QStringLiteral("dock.behaviorTree"))) {
+            d->show();
+            d->raise();
+        }
+    });
     make("tools.projectFolder", T, "external", tr("Show Project Folder"), QKeySequence(), [this] {
         if (m_ctx->project()) QDesktopServices::openUrl(QUrl::fromLocalFile(m_ctx->project()->rootDir()));
     });
@@ -357,6 +404,14 @@ void MainWindow::createMenus() {
     tools->addAction(r.action("tools.console"));
     tools->addAction(r.action("tools.autodetect"));
     tools->addAction(r.action("tools.projectFolder"));
+    tools->addSeparator();
+    tools->addAction(r.action("tools.saveGames"));
+    tools->addAction(r.action("window.coroutines"));
+    tools->addAction(r.action("window.behaviorTree"));
+    tools->addAction(r.action("tools.bakeNav"));
+    connect(tools, &QMenu::aboutToShow, this, [this] {
+        if (QAction* a = m_ctx->actions().action(QStringLiteral("tools.bakeNav"))) a->setEnabled(!m_ctx->isPlaying() && gameplayAvailable());
+    });
     tools->addSeparator();
     for (const char* id : {"play.play", "play.simulate", "play.pause", "play.step", "play.stop"}) tools->addAction(r.action(QString::fromLatin1(id)));
 

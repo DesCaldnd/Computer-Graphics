@@ -38,7 +38,7 @@ int ensureRenderingCVars() {
     n += make<bool>(cvars::kRtGI, false, "Ray traced global illumination", P);
     n += make<bool>(cvars::kRtTranslucency, false, "Ray traced translucency/refraction", P);
     n += make<int>(cvars::kAntiAliasing, 2, "Anti-aliasing method", CVarEnum{"None", "FXAA", "TAA"}, P);
-    n += make<int>(cvars::kUpscaler, 0, "Temporal upscaler", CVarEnum{"Off", "FSR1", "DLSS"}, P);
+    n += make<int>(cvars::kUpscaler, 0, "Temporal upscaler", CVarEnum{"Off", "FSR1", "DLSS", "TAAU"}, P);
     n += make<int>(cvars::kUpscalerQuality, 3, "Upscaler quality mode",
                    CVarEnum{"UltraPerformance", "Performance", "Balanced", "Quality", "DLAA"}, P);
     n += make<float>(cvars::kUpscalerSharpness, 0.2f, "Upscaler sharpening (RCAS / DLSS sharpness)", 0.0f, 1.0f, P);

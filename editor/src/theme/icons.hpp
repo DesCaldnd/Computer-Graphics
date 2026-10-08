@@ -22,6 +22,8 @@ public:
     [[nodiscard]] static QStringList names();
     // Maps component icon hints / asset types to icon names ("light" -> "light", unknown -> "component").
     [[nodiscard]] static QString forComponent(const QString& iconHint, const QString& componentName = {});
+    // Icon of a ComponentRegistry category ("Physics", "AI", "World", ...) for the Add Component popup.
+    [[nodiscard]] static QString forCategory(const QString& category);
     [[nodiscard]] static QString forAssetType(const QString& type);
     [[nodiscard]] static QColor tintColor(Tint tint);
     static void clearCache();

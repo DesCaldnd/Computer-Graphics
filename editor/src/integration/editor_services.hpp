@@ -13,19 +13,27 @@
 namespace ox {
 class SystemScheduler;
 class World;
+namespace rhi {
+class Device;
+}
 } // namespace ox
 
 namespace ox::editor {
 
 enum class PlayMode { Play, Simulate };
 
-// Gameplay/runtime hook for play-in-editor: adds the game's systems to the play world's scheduler.
-// PlayMode::Simulate should only add simulation (physics, animation) systems — the scheduler additionally skips
+class RuntimeHost;
+
+// Gameplay/runtime hook for play-in-editor. With the runtime module, begin() receives the Engine's play world,
+// scheduler (gameplay systems already registered) and services; without it, a fresh scheduler for the cloned world
+// to add systems to. PlayMode::Simulate should only run simulation (physics, animation): runtimes that support it
+// return simulatesPhysics() = true and disable logic systems themselves; otherwise the scheduler simply skips
 // ISystem::playModeOnly() systems in that mode.
 class IPlayRuntime {
 public:
     virtual ~IPlayRuntime() = default;
     [[nodiscard]] virtual QString name() const = 0;
+    [[nodiscard]] virtual bool simulatesPhysics() const { return false; }
     virtual void begin(World& playWorld, SystemScheduler& scheduler, Services& services, PlayMode mode) = 0;
     virtual void end(World& playWorld, Services& services) {
         (void)playWorld;
@@ -37,7 +45,8 @@ public:
 // viewport. Modules replace them as they become available (see docs/dev/modules/editor.md).
 class EditorServices {
 public:
-    using ViewportRendererFactory = std::function<std::unique_ptr<IViewportRenderer>()>;
+    // Creates the GPU viewport renderer on the editor's Vulkan device (created by the viewport).
+    using ViewportRendererFactory = std::function<std::unique_ptr<IViewportRenderer>(rhi::Device&)>;
 
     EditorServices();
     ~EditorServices();
@@ -51,15 +60,19 @@ public:
     [[nodiscard]] IThumbnailRenderer* thumbnails() { return m_thumbnails.get(); }
     void setThumbnailRenderer(std::unique_ptr<IThumbnailRenderer> t) { m_thumbnails = std::move(t); }
 
-    // Null factory = software viewport renderer.
+    // Null factory = software viewport renderer only.
     void setViewportRendererFactory(ViewportRendererFactory f) { m_viewportFactory = std::move(f); }
     [[nodiscard]] const ViewportRendererFactory& viewportRendererFactory() const { return m_viewportFactory; }
 
     void addPlayRuntime(std::shared_ptr<IPlayRuntime> r) { m_runtimes.push_back(std::move(r)); }
     [[nodiscard]] const std::vector<std::shared_ptr<IPlayRuntime>>& playRuntimes() const { return m_runtimes; }
 
-    // Engine services shared with gameplay systems (DebugDraw, JobSystem, ...).
+    // Editor-side services: the viewport overlay DebugDraw (and the gameplay services of the fallback play
+    // session when the runtime module is not linked).
     [[nodiscard]] Services& engine() { return m_engine; }
+    // The editor's Engine host (set by EditorContext).
+    [[nodiscard]] RuntimeHost* runtime() const { return m_runtime; }
+    void setRuntime(RuntimeHost* host) { m_runtime = host; }
 
 private:
     std::unique_ptr<IRenderingCapsProvider> m_caps;
@@ -69,6 +82,7 @@ private:
     ViewportRendererFactory m_viewportFactory;
     std::vector<std::shared_ptr<IPlayRuntime>> m_runtimes;
     Services m_engine;
+    RuntimeHost* m_runtime = nullptr;
 };
 
 } // namespace ox::editor

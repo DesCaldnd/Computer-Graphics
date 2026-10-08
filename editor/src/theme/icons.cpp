@@ -144,11 +144,24 @@ QString Icons::forComponent(const QString& iconHint, const QString& componentNam
         {"SaveGame", "save-game"},      {"PrefabInstance", "prefab"}, {"RigidBody", "physics"},
         {"Collider", "collision"},      {"AudioSource", "audio"},     {"AudioListener", "audio"},
         {"Script", "script"},           {"Animator", "animation"},    {"NavAgent", "map"},
-        {"Spline", "animation"},        {"CharacterController", "user"},
+        {"Spline", "bezier-curve"},     {"CharacterController", "person-walking"},
+        {"PostProcessVolume", "postprocess"}, {"FogVolume", "cloud"},  {"VolumetricFog", "cloud"},
+        {"CloudLayer", "cloud"},        {"VegetationPrototypes", "tree"}, {"TerrainRender", "mountain"},
+        {"ParticleEmitter", "particles"}, {"WaterSurface", "water"},  {"ReflectionProbe", "globe"},
     };
     if (auto it = byName.find(componentName); it != byName.end()) return *it;
     static const QHash<QString, QString> byHint = {{"cube", "cube"}, {"sound", "audio"}, {"physics", "physics"}};
     if (auto it = byHint.find(iconHint); it != byHint.end()) return *it;
+    return QStringLiteral("component");
+}
+
+QString Icons::forCategory(const QString& category) {
+    static const QHash<QString, QString> map = {
+        {"Rendering", "rendering"}, {"Effects", "sparkles"}, {"Motion", "speed"}, {"Physics", "physics"},  {"Animation", "animation"}, {"Splines", "bezier-curve"},
+        {"Audio", "audio"},         {"AI", "behavior-tree"}, {"Scripting", "script"},    {"Networking", "network"},
+        {"World", "mountain"},      {"Core", "entity"},      {"Gameplay", "gamepad"},    {"Lighting", "light"},
+    };
+    if (auto it = map.find(category); it != map.end()) return *it;
     return QStringLiteral("component");
 }
 
@@ -157,7 +170,8 @@ QString Icons::forAssetType(const QString& type) {
         {"Folder", "folder"},   {"Scene", "scene"},     {"Prefab", "prefab"},     {"Mesh", "mesh"},
         {"Model", "model"},     {"Material", "material"}, {"Texture", "texture"}, {"Audio", "audio"},
         {"Script", "script"},   {"Shader", "shader"},   {"Font", "font"},         {"Animation", "animation"},
-        {"Physics", "physics"}, {"Data", "file"},       {"SaveGame", "save-game"},
+        {"Physics", "physics"}, {"Data", "file"},       {"SaveGame", "save-game"}, {"BehaviorTree", "behavior-tree"},
+        {"AnimatorController", "animation"}, {"Skeleton", "person-running"}, {"NavMesh", "navmesh"}, {"Heightmap", "mountain"},
     };
     if (auto it = map.find(type); it != map.end()) return *it;
     return QStringLiteral("file");

@@ -1,6 +1,7 @@
 #include "settings/preferences_dialog.hpp"
 
 #include "core/editor_context.hpp"
+#include "integration/runtime_settings.hpp"
 #include "i18n/translator.hpp"
 #include "theme/icons.hpp"
 #include "theme/theme.hpp"
@@ -13,6 +14,7 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPushButton>
+#include <QStandardItemModel>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -30,6 +32,10 @@ PreferencesDialog::PreferencesDialog(EditorContext* ctx, QWidget* parent)
     buildViewport();
     buildAutosave();
     buildPerformance();
+    if (userSettingsAvailable(*ctx)) {
+        addGroup(tr("Play"));
+        buildGameUserSettings();
+    }
     showPage(QStringLiteral("appearance"));
     applyButton()->setText(tr("Save"));
 }
@@ -263,6 +269,69 @@ void PreferencesDialog::buildPerformance() {
     p->addNumber(tr("Unfocused Frame Rate"), {},
                  pref("perf.unfocusedFps", [](const auto& v) { return QVariant(v.unfocusedFps); }, [](auto& v, const QVariant& x) { v.unfocusedFps = x.toInt(); }),
                  1, 60, 1, 0, QStringLiteral(" fps"));
+    addPage(p);
+}
+
+} // namespace ox::editor
+
+namespace ox::editor {
+
+void PreferencesDialog::buildGameUserSettings() {
+    reloadUserSettings(*m_ctx);
+    auto* p = new SettingsPage(QStringLiteral("gameUser"), tr("Game User Settings"), QStringLiteral("gamepad"),
+                               tr("The runtime UserSettings of this project (%1): what the shipped game's options menu writes. "
+                                  "Editor preferences above are separate.")
+                                   .arg(userSettingsFile(*m_ctx)),
+                               this);
+    EditorContext* ctx = m_ctx;
+    auto user = [ctx](const QString& key) {
+        SettingBinding b;
+        b.key = QStringLiteral("user:") + key;
+        b.get = [ctx, key] { return userSetting(*ctx, key); };
+        b.set = [ctx, key](const QVariant& v) { setUserSetting(*ctx, key, v); };
+        return b;
+    };
+    p->addSection(tr("Display"));
+    p->addNumber(tr("Resolution Width"), tr("0 = desktop / default window size"), user(QStringLiteral("graphics.resolutionX")), 0, 16384, 1, 0, QStringLiteral(" px"));
+    p->addNumber(tr("Resolution Height"), {}, user(QStringLiteral("graphics.resolutionY")), 0, 16384, 1, 0, QStringLiteral(" px"));
+    p->addCombo(tr("Window Mode"), {}, {tr("Windowed"), tr("Borderless"), tr("Fullscreen")}, {0, 1, 2}, user(QStringLiteral("graphics.windowMode")));
+    p->addToggle(tr("VSync"), {}, user(QStringLiteral("graphics.vsync")));
+    p->addNumber(tr("Frame Rate Limit"), tr("0 = unlimited"), user(QStringLiteral("graphics.maxFps")), 0, 1000, 1, 0, QStringLiteral(" fps"));
+    p->addNumber(tr("Field of View"), {}, user(QStringLiteral("graphics.fov")), 40, 140, 1, 0, QStringLiteral("°"));
+    p->addSection(tr("Quality"));
+    p->addCombo(tr("Overall Quality"), tr("Scalability preset applied over the project default."),
+                {tr("Low"), tr("Medium"), tr("High"), tr("Ultra"), tr("Custom")},
+                {QStringLiteral("Low"), QStringLiteral("Medium"), QStringLiteral("High"), QStringLiteral("Ultra"), QStringLiteral("Custom")},
+                user(QStringLiteral("graphics.quality")));
+    ToggleSwitch* rt = p->addToggle(tr("Ray Tracing"), {}, user(QStringLiteral("graphics.rayTracing")));
+    const RenderingCaps caps = m_ctx->services().caps().caps();
+    if (!caps.rayTracingSupported) {
+        rt->setEnabled(false);
+        rt->setToolTip(caps.rayTracingUnavailableReason);
+    }
+    QComboBox* up = p->addCombo(tr("Upscaler"), {}, {tr("Off"), QStringLiteral("FSR 1"), QStringLiteral("DLSS"), QStringLiteral("TAAU")},
+                                {QStringLiteral("Off"), QStringLiteral("FSR1"), QStringLiteral("DLSS"), QStringLiteral("TAAU")},
+                                user(QStringLiteral("graphics.upscaler")));
+    if (auto* model = qobject_cast<QStandardItemModel*>(up->model())) {
+        for (usize i = 0; i < caps.upscalers.size() && int(i) < model->rowCount(); ++i) {
+            if (caps.upscalers[i].available) continue;
+            model->item(int(i))->setFlags(model->item(int(i))->flags() & ~(Qt::ItemIsEnabled | Qt::ItemIsSelectable));
+            model->item(int(i))->setToolTip(caps.upscalers[i].reason);
+        }
+    }
+    p->addSection(tr("Audio & Controls"));
+    p->addNumber(tr("Master Volume"), {}, user(QStringLiteral("audio.masterVolume")), 0, 1, 0.01, 2);
+    p->addNumber(tr("Mouse Sensitivity"), {}, user(QStringLiteral("mouseSensitivity")), 0.05, 10, 0.05, 2);
+    p->addToggle(tr("Invert Y"), {}, user(QStringLiteral("invertY")));
+    p->addCombo(tr("Game Language"), {}, {QStringLiteral("English"), QStringLiteral("Русский")}, {QStringLiteral("en"), QStringLiteral("ru")},
+                user(QStringLiteral("language")));
+    auto* applyBtn = new QPushButton(Icons::get(QStringLiteral("play")), tr("Apply to Editor Session"), p);
+    applyBtn->setToolTip(tr("Settings::apply(): push these graphics/audio settings into the editor's cvars and scalability (preview)."));
+    connect(applyBtn, &QPushButton::clicked, this, [this] {
+        applyUserSettingsToSession(*m_ctx);
+        refreshAll();
+    });
+    p->addRow(tr("Preview"), tr("Play-in-editor uses the project defaults unless applied here."), applyBtn);
     addPage(p);
 }
 

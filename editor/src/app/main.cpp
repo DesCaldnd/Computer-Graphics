@@ -1,5 +1,5 @@
 // OxwaldEditor entry point.
-//   OxwaldEditor [--project <file.oxproject>] [--browser]
+//   OxwaldEditor [--project <file.oxproj>] [--browser]
 //   QT_QPA_PLATFORM=offscreen OxwaldEditor --screenshots <dir>    (renders docs screenshots and exits)
 #include "core/editor_context.hpp"
 #include "core/log_capture.hpp"
@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     cli.setApplicationDescription(QStringLiteral("OxwaldEngine editor"));
     cli.addHelpOption();
     cli.addVersionOption();
-    QCommandLineOption projectOpt(QStringLiteral("project"), QStringLiteral("Project file to open."), QStringLiteral("file"));
+    QCommandLineOption projectOpt(QStringLiteral("project"), QStringLiteral("Project file (.oxproj) or directory to open."), QStringLiteral("file"));
     QCommandLineOption browserOpt(QStringLiteral("browser"), QStringLiteral("Always show the project browser."));
     QCommandLineOption shotsOpt(QStringLiteral("screenshots"), QStringLiteral("Render editor screenshots into <dir> and exit."), QStringLiteral("dir"));
     QCommandLineOption smokeOpt(QStringLiteral("smoke-seconds"), QStringLiteral("Quit after <s> seconds and report the viewport backend (CI smoke test)."), QStringLiteral("s"));
@@ -45,6 +45,8 @@ int main(int argc, char** argv) {
     QApplication::setWindowIcon(QIcon(logoPixmap(256)));
 
     if (cli.isSet(shotsOpt)) {
+        // Real renderer frames in the offscreen canvas when a Vulkan device can be created headless.
+        if (!qEnvironmentVariableIsSet("OX_EDITOR_OFFSCREEN_GPU")) qputenv("OX_EDITOR_OFFSCREEN_GPU", "1");
         const QStringList files = generateScreenshots(ctx, cli.value(shotsOpt));
         for (const auto& f : files) OX_LOG_INFO("editor", "wrote {}", f.toStdString());
         return files.isEmpty() ? 1 : 0;

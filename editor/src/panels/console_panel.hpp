@@ -54,6 +54,10 @@ public:
     [[nodiscard]] QLineEdit* input() const { return m_input; }
     [[nodiscard]] QListView* view() const { return m_view; }
     [[nodiscard]] const QStringList& history() const { return m_history; }
+    // Absolute path of a "file.lua" mentioned in a log line (project root, Assets, scripts/), empty if unknown.
+    [[nodiscard]] QString resolveSource(const QString& file) const;
+    // Opens the source location under a viewport position of the log view (file:line links).
+    bool openLinkAt(QPoint pos);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;

@@ -36,6 +36,7 @@ class SettingsTests : public QObject {
         c.rayTracingUnavailableReason = rt ? QString() : reason;
         c.dlssSupported = false;
         c.dlssUnavailableReason = QStringLiteral("DLSS needs an NVIDIA RTX GPU (test)");
+        c.upscalers = defaultUpscalers(c);
         ctx->services().setCapsProvider(std::make_unique<StaticCapsProvider>(c));
     }
 
@@ -69,7 +70,7 @@ private Q_SLOTS:
         // Apply writes the preset into the project settings
         sw->overallControl()->button(3)->click();
         dlg.applyButton()->click();
-        QCOMPARE(ctx->project()->setting("scalability.groups.Shadows", "").get<std::string>(), std::string("Ultra"));
+        QCOMPARE(ctx->project()->setting("defaultQuality", "").get<std::string>(), std::string("Ultra"));
         dlg.revertButton()->click();
         scalability::setOverall(QualityLevel::High);
     }
@@ -110,6 +111,8 @@ private Q_SLOTS:
             QVERIFY(!(model->item(2)->flags() & Qt::ItemIsEnabled));
             QVERIFY(model->item(2)->toolTip().contains(QStringLiteral("NVIDIA")));
             QVERIFY(model->item(1)->flags() & Qt::ItemIsEnabled); // FSR 1 always available
+            QVERIFY(model->rowCount() >= 4);                      // TAAU (r.Upscaler = 3)
+            QVERIFY(model->item(3)->flags() & Qt::ItemIsEnabled);
         }
         useCaps(true, {});
         {
@@ -129,13 +132,13 @@ private Q_SLOTS:
         ProjectSettingsDialog dlg(ctx.get());
         dlg.setSearchText(QStringLiteral("gravity"));
         QVERIFY(dlg.page(QStringLiteral("physics"))->filter(QStringLiteral("gravity")) > 0);
-        auto* port = dlg.findChild<NumberField*>(QStringLiteral("setting:project:network.port"));
+        auto* port = dlg.findChild<NumberField*>(QStringLiteral("setting:project:editor.network.port"));
         QVERIFY(port);
         Q_EMIT port->edited(9000, EditPhase::Single);
-        QCOMPARE(ctx->project()->setting("network.port").get<int>(), 9000);
+        QCOMPARE(ctx->project()->setting("editor.network.port").get<int>(), 9000);
         dlg.applyButton()->click();
         QVERIFY(ctx->project()->reloadSettings());
-        QCOMPARE(ctx->project()->setting("network.port").get<int>(), 9000);
+        QCOMPARE(ctx->project()->setting("editor.network.port").get<int>(), 9000);
     }
 
     void preferencesPersist() {
@@ -151,7 +154,7 @@ private Q_SLOTS:
                 v.language = QStringLiteral("ru");
                 v.shortcuts.insert(QStringLiteral("file.save"), QKeySequence(QStringLiteral("Ctrl+Alt+S")));
             });
-            p.addRecentProject(QStringLiteral("/tmp/x.oxproject"), QStringLiteral("X"));
+            p.addRecentProject(QStringLiteral("/tmp/x.oxproj"), QStringLiteral("X"));
             QVERIFY(p.save());
         }
         EditorPreferences q;

@@ -5,6 +5,7 @@
 #include <oxwald/core/uuid.hpp>
 
 #include <QImage>
+#include <QSize>
 #include <QString>
 
 #include <memory>
@@ -58,6 +59,13 @@ struct ShowFlags {
     bool shadows = true;
     bool postProcess = true;
     bool stats = false;
+    // gameplay debug draw (applied to the gameplay runtimes, drawn through frame.lines)
+    bool physicsColliders = true;
+    bool physicsContacts = false;
+    bool navigation = true;
+    bool splines = true;
+    bool skeletons = false;
+    bool audio = false;
 };
 
 struct ViewportCamera {
@@ -98,6 +106,7 @@ struct ViewportFrame {
     glm::vec4 selectionColor{1.0f, 0.62f, 0.1f, 1.0f};
     glm::vec4 clearColor{0.08f, 0.09f, 0.11f, 1.0f};
     bool playMode = false;
+    f32 ev100 = 15.0f; // exposure of the editor view (primary camera's EV100 by default, see the view mode menu)
     f64 time = 0.0;
     f32 dt = 0.0f;
 };
@@ -133,6 +142,13 @@ public:
     }
     // Per-pass GPU times of the last finished frame (Stats panel).
     [[nodiscard]] virtual std::vector<GpuPassTiming> passTimings() const { return {}; }
+    // Offscreen frame (own device frame + readback) for screenshots, thumbnails and the headless GPU canvas.
+    // Null image = unsupported. Call outside the viewport's device frame.
+    [[nodiscard]] virtual QImage renderOffscreen(const ViewportFrame& frame, QSize sizePx) {
+        (void)frame;
+        (void)sizePx;
+        return {};
+    }
 };
 
 // Content browser thumbnails (materials, meshes, prefabs). Called on the UI thread; results are cached.

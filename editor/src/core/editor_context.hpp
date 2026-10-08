@@ -8,7 +8,9 @@
 #include "core/project.hpp"
 #include "core/scene_templates.hpp"
 #include "core/selection.hpp"
+#include "core/tool_state.hpp"
 #include "integration/editor_services.hpp"
+#include "integration/runtime_host.hpp"
 
 #include <oxwald/core/debug_draw.hpp>
 #include <oxwald/core/serial/value.hpp>
@@ -22,6 +24,10 @@
 #include <map>
 #include <memory>
 #include <optional>
+
+namespace ox {
+class Engine;
+}
 
 namespace ox::editor {
 
@@ -42,8 +48,18 @@ public:
     // Reflection + component registration of every linked module. Idempotent.
     static void registerEngineTypes();
 
+    // ---- engine ----
+    // The editor's ox::Engine (editor mode) and its services; engine() is null without the runtime module.
+    [[nodiscard]] RuntimeHost& runtime() { return *m_runtime; }
+    [[nodiscard]] Engine* engine() const { return m_runtime->engine(); }
+    // Engine services (AssetRegistry, PhysicsWorld, ScriptVM, CoroutineScheduler, gameplay runtimes, ...), or the
+    // editor-side services without the runtime module.
+    [[nodiscard]] Services& engineServices();
+    // Gameplay debug draw of the last engine frame (null without the runtime module).
+    [[nodiscard]] DebugDraw* gameDebugDraw() const { return m_runtime->gameDebugDraw(); }
+
     // ---- worlds ----
-    [[nodiscard]] World& editWorld() { return *m_editWorld; }
+    [[nodiscard]] World& editWorld() { return m_runtime->editWorld(); }
     // The world the viewport/outliner/inspector show: the play world while playing.
     [[nodiscard]] World& world();
     [[nodiscard]] bool isPlaying() const { return m_play->active(); }
@@ -54,6 +70,11 @@ public:
     [[nodiscard]] EditorServices& services() { return m_services; }
     [[nodiscard]] EditorPreferences& preferences() { return m_prefs; }
     [[nodiscard]] ActionRegistry& actions() { return m_actions; }
+    [[nodiscard]] ToolState& tools() { return m_tools; }
+
+    // ---- asset inspection (content browser selection shown in the Inspector) ----
+    void inspectAsset(const QString& path);
+    [[nodiscard]] const QString& inspectedAsset() const { return m_inspectedAsset; }
     [[nodiscard]] DebugDraw& debugDraw() { return m_services.engine().get<DebugDraw>(); }
 
     // ---- project ----
@@ -122,7 +143,7 @@ public:
     void stopPlay();
 
     // ICommandHost
-    World& commandWorld() override { return *m_editWorld; }
+    World& commandWorld() override { return editWorld(); }
     void onWorldEdited(EditKind kind) override;
 
 Q_SIGNALS:
@@ -134,21 +155,27 @@ Q_SIGNALS:
     void visibilityChanged();
     void playStateChanged();
     void statusMessage(const QString& text, int timeoutMs);
+    void assetInspected(const QString& path); // empty = back to the entity selection
+    // Ask the UI to open a source file at a line (console links, script errors).
+    void openSourceRequested(const QString& file, int line);
 
 private:
     void setScenePath(const QString& path);
     void connectPlaySession();
-    void resetWorld(std::unique_ptr<World> world);
+    void resetWorld(std::unique_ptr<World> world, const QString& level = {});
+    void onEngineWorldReplaced();
     void updateAutosaveTimer();
     std::vector<SubtreeSnapshot> snapshotRoots(const UuidList& roots);
 
     EditorPreferences m_prefs;
     ActionRegistry m_actions;
     EditorServices m_services;
-    std::unique_ptr<World> m_editWorld;
+    std::unique_ptr<RuntimeHost> m_runtime;
     std::unique_ptr<PlaySession> m_play;
     QUndoStack m_undo;
     Selection m_selection;
+    ToolState m_tools;
+    QString m_inspectedAsset;
     std::unique_ptr<Project> m_project;
     QString m_scenePath;
     bool m_extraDirty = false;

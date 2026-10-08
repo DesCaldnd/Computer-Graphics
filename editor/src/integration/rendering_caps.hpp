@@ -5,9 +5,18 @@
 #include <QString>
 
 #include <array>
+#include <vector>
 #include <memory>
 
 namespace ox::editor {
+
+// One entry of r.Upscaler (index = cvar value: Off, FSR1, DLSS, TAAU).
+struct UpscalerInfo {
+    QString name;
+    bool available = true;
+    bool temporal = false;
+    QString reason; // why it is unavailable
+};
 
 // What the settings UI needs to know about the GPU/platform. Filled from rhi::DeviceCaps when the rhi module
 // is integrated (see RhiCapsProvider), otherwise from a platform heuristic.
@@ -25,6 +34,8 @@ struct RenderingCaps {
     bool dlssSupported = false;
     QString dlssUnavailableReason; // empty when supported
     bool fsr1Supported = true;
+    // Availability per upscaler (render::upscalerAvailability when the render module is linked, else host facts).
+    std::vector<UpscalerInfo> upscalers;
     bool meshShaders = false;
     int cpuCores = 1;
     quint64 systemMemoryBytes = 0;
@@ -53,6 +64,8 @@ private:
 // Why DLSS cannot run (empty when it can): needs Windows/Linux, an NVIDIA RTX GPU and the NGX runtime.
 [[nodiscard]] QString dlssUnavailableReason(const QString& vendor, bool rayTracing, bool deviceAvailable);
 [[nodiscard]] std::unique_ptr<IRenderingCapsProvider> createDefaultCapsProvider();
+// Host-side upscaler list (Off, FSR 1, DLSS with the DLSS reason, TAAU).
+[[nodiscard]] std::vector<UpscalerInfo> defaultUpscalers(const RenderingCaps& caps);
 
 // ---- quality auto-detect (UE "Auto Detect" / Scalability benchmark) ------------------------------------------
 
@@ -61,6 +74,10 @@ struct BenchmarkResult {
     float gpuIndex = 100.0f;
     std::array<QualityLevel, kScalabilityGroupCount> levels{};
     QString details;
+    // Recommended anti-aliasing / upscaler (render::recommendedSettings); -1 = leave unchanged.
+    int antiAliasing = -1;
+    int upscaler = -1;
+    int upscalerQuality = -1;
 };
 
 // The renderer replaces the heuristic with a real GPU benchmark (render::benchmark) by registering its own

@@ -258,6 +258,14 @@ QString ScalabilityWidget::autoDetect() {
     const BenchmarkResult res = m_ctx->services().benchmark().run(caps);
     QApplication::restoreOverrideCursor();
     for (usize gi = 0; gi < kScalabilityGroupCount; ++gi) apply(int(gi), res.levels[gi]);
+    // Recommended AA / upscaler of the renderer's Auto quality (render::recommendedSettings).
+    auto setCVar = [](const char* name, int v) {
+        if (v < 0) return;
+        if (ICVar* c = CVarRegistry::instance().find(name)) c->setFromJson(nlohmann::json(v), CVarSource::Config);
+    };
+    setCVar("r.AntiAliasing", res.antiAliasing);
+    setCVar("r.Upscaler", res.upscaler);
+    setCVar("r.Upscaler.Quality", res.upscalerQuality);
     QStringList summary;
     for (usize gi = 0; gi < kScalabilityGroupCount; ++gi) summary << groupDisplayName(Scalability(gi)) + QStringLiteral(" ") + levelDisplayName(res.levels[gi]);
     const QString text = tr("Detected with %1: %2").arg(m_ctx->services().benchmark().name(), res.details);

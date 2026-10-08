@@ -51,7 +51,7 @@ if(APPLE)
 endif()
 
 # ---- optional module integration ----------------------------------------------------------------------------
-foreach(_mod rhi assets gameplay runtime async render physics)
+foreach(_mod rhi assets gameplay runtime async render physics script ai world spline audio animation)
     string(TOUPPER ${_mod} _MOD)
     if(TARGET ox_${_mod})
         target_link_libraries(ox_editor PUBLIC ox_${_mod})
@@ -124,11 +124,11 @@ if(OX_BUILD_TESTS)
                 COMMAND codesign --force -s - $<TARGET_FILE:ox_editor_tests> VERBATIM)
         endif()
         # one ctest entry per QtTest class (the executable takes the class name as first argument)
-        foreach(_cls InspectorTests CommandTests SettingsTests)
+        foreach(_cls InspectorTests CommandTests SettingsTests IntegrationTests)
             add_test(NAME editor.${_cls} COMMAND ox_editor_tests ${_cls})
             set_tests_properties(editor.${_cls} PROPERTIES
                 LABELS "editor"
-                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR};OX_EDITOR_TEST_TMP=${CMAKE_CURRENT_BINARY_DIR}/test_tmp/${_cls}"
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR};OX_EDITOR_TEST_TMP=${CMAKE_CURRENT_BINARY_DIR}/test_tmp/${_cls};OX_EDITOR_USER_DIR=${CMAKE_CURRENT_BINARY_DIR}/test_tmp/${_cls}/user;OX_EDITOR_HEADLESS=1"
                 TIMEOUT 300)
         endforeach()
     endif()

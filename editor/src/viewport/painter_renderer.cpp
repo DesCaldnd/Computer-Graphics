@@ -24,9 +24,10 @@ namespace {
 enum class Prim { Cube, Sphere, Cylinder, Plane };
 
 Prim primitiveOf(const Uuid& mesh) {
-    if (mesh == builtin::sphereMesh()) return Prim::Sphere;
-    if (mesh == builtin::cylinderMesh()) return Prim::Cylinder;
-    if (mesh == builtin::planeMesh()) return Prim::Plane;
+    const QString name = builtin::primitiveName(mesh); // also legacy ids of older scenes
+    if (name == QLatin1String("Sphere")) return Prim::Sphere;
+    if (name == QLatin1String("Cylinder") || name == QLatin1String("Capsule")) return Prim::Cylinder;
+    if (name == QLatin1String("Plane")) return Prim::Plane;
     return Prim::Cube;
 }
 

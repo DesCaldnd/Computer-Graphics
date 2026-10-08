@@ -97,7 +97,17 @@ RenderingCaps detectHostCaps() {
     c.dlssSupported = false;
     c.dlssUnavailableReason = dlssUnavailableReason(c.vendor, false, false);
     c.fsr1Supported = true;
+    c.upscalers = defaultUpscalers(c);
     return c;
+}
+
+std::vector<UpscalerInfo> defaultUpscalers(const RenderingCaps& caps) {
+    std::vector<UpscalerInfo> u(4);
+    u[0] = {QStringLiteral("Off"), true, false, {}};
+    u[1] = {QStringLiteral("AMD FSR 1.0"), true, false, {}};
+    u[2] = {QStringLiteral("NVIDIA DLSS"), caps.dlssSupported, true, caps.dlssUnavailableReason};
+    u[3] = {QStringLiteral("Temporal upscaling (TAAU)"), true, true, {}};
+    return u;
 }
 
 #if OX_EDITOR_HAS_RHI

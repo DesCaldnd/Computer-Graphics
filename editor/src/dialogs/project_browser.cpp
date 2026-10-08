@@ -177,7 +177,7 @@ ProjectBrowser::ProjectBrowser(EditorContext* ctx, QWidget* parent) : QDialog(pa
     });
     connect(createBtn, &QPushButton::clicked, this, &ProjectBrowser::create);
     connect(openOther, &QPushButton::clicked, this, [this] {
-        const QString f = QFileDialog::getOpenFileName(this, tr("Open Project"), m_location->text(), tr("OxwaldEngine project (*.oxproject)"));
+        const QString f = QFileDialog::getOpenFileName(this, tr("Open Project"), m_location->text(), tr("OxwaldEngine project (*.oxproj *.oxproject)"));
         if (!f.isEmpty()) openPath(f);
     });
     connect(m_recent, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* it) { openPath(it->data(Qt::UserRole).toString()); });

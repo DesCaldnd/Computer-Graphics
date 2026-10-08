@@ -14,6 +14,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
+#include <QFileInfo>
 #include <QMimeData>
 #include <QPainter>
 #include <QStyledItemDelegate>
@@ -201,7 +202,10 @@ QMimeData* OutlinerModel::mimeData(const QModelIndexList& indexes) const {
 
 bool OutlinerModel::canDropMimeData(const QMimeData* data, Qt::DropAction, int, int, const QModelIndex&) const {
     if (data->hasFormat(kMimeEntities)) return true;
-    if (data->hasFormat(kMimeAsset)) return QString::fromUtf8(data->data(kMimeAsset)).contains(QLatin1String("|Prefab|"));
+    if (data->hasFormat(kMimeAsset)) {
+        const QString text = QString::fromUtf8(data->data(kMimeAsset));
+        return text.contains(QLatin1String("|Prefab|")) || text.contains(QLatin1String("|Model|")) || text.contains(QLatin1String("|Mesh|"));
+    }
     return false;
 }
 
@@ -212,7 +216,25 @@ bool OutlinerModel::dropMimeData(const QMimeData* data, Qt::DropAction action, i
     if (data->hasFormat(kMimeAsset)) {
         for (const QString& line : QString::fromUtf8(data->data(kMimeAsset)).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
             const QStringList parts = line.split(QLatin1Char('|'));
-            if (parts.size() >= 3 && parts[1] == QLatin1String("Prefab")) m_ctx->instantiatePrefab(parts[2], parentId);
+            if (parts.size() < 3) continue;
+            if (parts[1] == QLatin1String("Prefab") || parts[1] == QLatin1String("Model")) {
+                m_ctx->instantiatePrefab(parts[2], parentId);
+            } else if (parts[1] == QLatin1String("Mesh")) {
+                // A mesh entity (MeshRenderer) under the drop target.
+                auto id = Uuid::parse(parts[0].toStdString());
+                if (!id) continue;
+                const Uuid meshId = *id;
+                const std::string name = QFileInfo(parts[2]).completeBaseName().toStdString();
+                auto ids = m_ctx->createEntities(tr("Place Mesh"), [meshId, name, parentId](World& w) {
+                    Entity p = parentId.isNil() ? Entity{} : w.find(parentId);
+                    Entity e = w.create(name, p);
+                    auto& mr = e.add<MeshRendererComponent>();
+                    mr.mesh = meshId;
+                    mr.materials = {builtin::defaultMaterial()};
+                    return std::vector<Entity>{e};
+                });
+                if (!ids.empty()) m_ctx->selection().select(ids.front());
+            }
         }
         return false;
     }

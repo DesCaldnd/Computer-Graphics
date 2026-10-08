@@ -6,6 +6,7 @@
 #include <QFileSystemWatcher>
 #include <QHash>
 #include <QPixmap>
+#include <QTimer>
 #include <QWidget>
 
 class QFileSystemModel;
@@ -45,6 +46,8 @@ public:
     bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) override;
 
     static QColor typeColor(const QString& type);
+    // Copies + imports external files into `folder` (Finder drops, Import…). Returns the new paths.
+    QStringList importFiles(const QStringList& files, const QString& folder);
 
 private:
     QPixmap thumbnail(const AssetInfo& a) const;
@@ -54,7 +57,6 @@ private:
     QString m_type;
     QList<AssetInfo> m_all;
     QList<AssetInfo> m_items;
-    mutable QHash<QString, QPixmap> m_thumbs;
 };
 
 class ContentBrowserPanel : public QWidget {
@@ -68,6 +70,8 @@ public:
     [[nodiscard]] QListView* view() const { return m_list; }
     void setTileMode(bool tiles);
     void deleteSelected();
+    // Tests: delete without the confirmation dialog.
+    void setConfirmDelete(bool confirm) { m_confirmDelete = confirm; }
 
 Q_SIGNALS:
     void openSceneRequested(const QString& path);
@@ -91,7 +95,9 @@ private:
     QToolButton* m_gridButton;
     QToolButton* m_listButton;
     QFileSystemWatcher m_watcher;
+    QTimer m_rescanTimer;
     QString m_root;
+    bool m_confirmDelete = true;
 };
 
 } // namespace ox::editor

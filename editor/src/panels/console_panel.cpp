@@ -8,8 +8,17 @@
 
 #include <oxwald/core/cvar.hpp>
 
+#if OX_EDITOR_HAS_RUNTIME
+#include <oxwald/runtime/engine.hpp>
+#endif
+
 #include <QAbstractItemView>
 #include <QComboBox>
+#include <QDir>
+#include <QDirIterator>
+#include <QFileInfo>
+#include <QMouseEvent>
+#include <QRegularExpression>
 #include <QCompleter>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -48,6 +57,44 @@ QString levelIcon(int level) {
     case log::Level::Warn: return QStringLiteral("warning");
     default: return QStringLiteral("error");
     }
+}
+
+// "path/to/file.lua:42" inside a log message (Lua errors and tracebacks).
+const QRegularExpression& sourceLinkPattern() {
+    static const QRegularExpression re(QStringLiteral(R"(([A-Za-z0-9_\-./]+\.(?:lua|glsl|vert|frag|comp|oxbt|cpp|hpp)):(\d+))"));
+    return re;
+}
+
+// x of the message column inside a row (shared by painting and hit testing).
+int messageX(const QModelIndex& i, const QRect& r, const QFontMetrics& fm) {
+    int x = r.left() + 8;
+    x += fm.horizontalAdvance(i.data(LogListModel::TimeRole).toString()) + 10;
+    x += 20;
+    const QString cat = i.data(LogListModel::CategoryRole).toString();
+    if (!cat.isEmpty()) x += fm.horizontalAdvance(cat) + 12 + 8;
+    return x;
+}
+
+// Link rectangles of the message (line by line) with their match.
+struct LinkHit {
+    QRect rect;
+    QString file;
+    int line = 0;
+};
+std::vector<LinkHit> messageLinks(const QModelIndex& i, const QRect& r, const QFontMetrics& fm) {
+    std::vector<LinkHit> out;
+    const QStringList lines = i.data().toString().split(QLatin1Char('\n'));
+    const int x0 = messageX(i, r, fm);
+    for (int ln = 0; ln < lines.size(); ++ln) {
+        auto it = sourceLinkPattern().globalMatch(lines[ln]);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const int x = x0 + fm.horizontalAdvance(lines[ln].left(m.capturedStart(0)));
+            const int w = fm.horizontalAdvance(m.captured(0));
+            out.push_back({QRect(x, r.top() + 4 + ln * fm.height(), w, fm.height()), m.captured(1), m.captured(2).toInt()});
+        }
+    }
+    return out;
 }
 
 class LogDelegate : public QStyledItemDelegate {
@@ -91,8 +138,34 @@ public:
             p->drawText(QRect(x, y, cw, fm.height()), Qt::AlignCenter, cat);
             x += cw + 8;
         }
-        p->setPen(level >= int(log::Level::Warn) ? levelColor(level) : c.text);
-        p->drawText(QRect(x, y, r.right() - x - 6, r.height() - 6), Qt::AlignLeft | Qt::AlignTop, i.data().toString());
+        // Message line by line; source locations (file.lua:42) are drawn as links (accent + underline).
+        const QColor textColor = level >= int(log::Level::Warn) ? levelColor(level) : c.text;
+        QFont linkFont = mono;
+        linkFont.setUnderline(true);
+        p->setClipRect(QRect(x, r.top(), r.right() - x - 6, r.height()));
+        const QStringList lines = i.data().toString().split(QLatin1Char('\n'));
+        for (int ln = 0; ln < lines.size(); ++ln) {
+            const QString& line = lines[ln];
+            const int ly = y + ln * fm.height();
+            int lx = x;
+            int pos = 0;
+            auto drawPart = [&](const QString& t, bool link) {
+                if (t.isEmpty()) return;
+                p->setFont(link ? linkFont : mono);
+                p->setPen(link ? c.accentText : textColor);
+                p->drawText(QPoint(lx, ly + fm.ascent()), t);
+                lx += fm.horizontalAdvance(t);
+            };
+            auto it = sourceLinkPattern().globalMatch(line);
+            while (it.hasNext()) {
+                const auto m = it.next();
+                drawPart(line.mid(pos, m.capturedStart(0) - pos), false);
+                drawPart(m.captured(0), true);
+                pos = int(m.capturedEnd(0));
+            }
+            drawPart(line.mid(pos), false);
+        }
+        p->setClipping(false);
         p->restore();
     }
 };
@@ -209,6 +282,8 @@ ConsolePanel::ConsolePanel(EditorContext* ctx, QWidget* parent) : QWidget(parent
     m_view->setUniformItemSizes(false);
     m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_view->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_view->setMouseTracking(true);
+    m_view->viewport()->installEventFilter(this);
     lay->addWidget(m_view, 1);
 
     auto* inputRow = new QFrame(this);
@@ -257,6 +332,11 @@ ConsolePanel::ConsolePanel(EditorContext* ctx, QWidget* parent) : QWidget(parent
 
 void ConsolePanel::refreshCompletions() {
     QStringList items;
+#if OX_EDITOR_HAS_RUNTIME
+    if (Engine* engine = m_ctx->engine()) {
+        for (const auto& c : engine->console().complete("")) items << QString::fromStdString(c).trimmed();
+    }
+#endif
     for (ICVar* c : CVarRegistry::instance().all()) items << QString::fromStdString(c->name());
     for (const auto& s : CVarRegistry::instance().complete("")) {
         const QString q = QString::fromStdString(s);
@@ -300,6 +380,21 @@ QString ConsolePanel::execute(const QString& line) {
         LogCapture::instance().append(log::Level::Info, QStringLiteral("console"), out);
         return out;
     }
+#if OX_EDITOR_HAS_RUNTIME
+    if (Engine* engine = m_ctx->engine()) {
+        // The engine console: its commands (pause, step, timescale, level, save, load, stats, find, ...) + cvars.
+        auto r = engine->console().execute(line.toStdString());
+        if (r) {
+            out = QString::fromStdString(*r);
+            if (!out.isEmpty()) LogCapture::instance().append(log::Level::Info, QStringLiteral("console"), out);
+        } else {
+            out = QString::fromStdString(r.error().message);
+            LogCapture::instance().append(log::Level::Error, QStringLiteral("console"), out);
+        }
+        refreshCompletions();
+        return out;
+    }
+#endif
     auto r = CVarRegistry::instance().execute(line.toStdString());
     if (r) {
         out = QString::fromStdString(*r);
@@ -312,7 +407,57 @@ QString ConsolePanel::execute(const QString& line) {
     return out;
 }
 
+QString ConsolePanel::resolveSource(const QString& file) const {
+    if (QFileInfo(file).isAbsolute()) return QFileInfo::exists(file) ? file : QString();
+    QStringList bases;
+    if (Project* p = m_ctx->project()) bases << p->contentDir() << p->rootDir() << QDir(p->rootDir()).filePath(QStringLiteral("scripts"));
+    bases << QDir::currentPath();
+    for (const QString& b : bases) {
+        const QString candidate = QDir(b).filePath(file);
+        if (QFileInfo::exists(candidate)) return QFileInfo(candidate).absoluteFilePath();
+    }
+    // Last resort: a file with that name anywhere in the asset tree.
+    if (Project* p = m_ctx->project()) {
+        QDirIterator it(p->contentDir(), {QFileInfo(file).fileName()}, QDir::Files, QDirIterator::Subdirectories);
+        if (it.hasNext()) return it.next();
+    }
+    return {};
+}
+
+bool ConsolePanel::openLinkAt(QPoint pos) {
+    const QModelIndex i = m_view->indexAt(pos);
+    if (!i.isValid()) return false;
+    const QFontMetrics fm(Theme::monoFont());
+    for (const LinkHit& link : messageLinks(i, m_view->visualRect(i), fm)) {
+        if (!link.rect.contains(pos)) continue;
+        const QString path = resolveSource(link.file);
+        if (path.isEmpty()) {
+            Q_EMIT m_ctx->statusMessage(tr("Cannot find %1 in the project").arg(link.file), 3000);
+            return true;
+        }
+        Q_EMIT m_ctx->openSourceRequested(path, link.line);
+        return true;
+    }
+    return false;
+}
+
 bool ConsolePanel::eventFilter(QObject* obj, QEvent* ev) {
+    if (obj == m_view->viewport()) {
+        if (ev->type() == QEvent::MouseButtonRelease) {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            if (me->button() == Qt::LeftButton && openLinkAt(me->position().toPoint())) return true;
+        } else if (ev->type() == QEvent::MouseMove) {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            const QModelIndex i = m_view->indexAt(me->position().toPoint());
+            bool over = false;
+            if (i.isValid()) {
+                const QFontMetrics fm(Theme::monoFont());
+                for (const LinkHit& link : messageLinks(i, m_view->visualRect(i), fm)) over |= link.rect.contains(me->position().toPoint());
+            }
+            m_view->viewport()->setCursor(over ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        }
+        return QWidget::eventFilter(obj, ev);
+    }
     if (obj == m_input && ev->type() == QEvent::KeyPress) {
         auto* ke = static_cast<QKeyEvent*>(ev);
         if (m_completer->popup()->isVisible()) return QWidget::eventFilter(obj, ev);

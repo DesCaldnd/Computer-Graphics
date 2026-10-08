@@ -7,6 +7,14 @@ namespace ox::editor {
 namespace {
 rhi::Device* g_device = nullptr;
 bool g_pending = false;
+std::function<void(rhi::DeviceDesc&)>& deviceDescHook() {
+    static std::function<void(rhi::DeviceDesc&)> hook;
+    return hook;
+}
+}
+void VulkanViewportHub::setDeviceDescHook(std::function<void(rhi::DeviceDesc&)> hook) { deviceDescHook() = std::move(hook); }
+void VulkanViewportHub::prepareDeviceDesc(rhi::DeviceDesc& desc) {
+    if (deviceDescHook()) deviceDescHook()(desc);
 }
 bool VulkanViewportHub::pending() { return g_pending; }
 void VulkanViewportHub::setPending(bool p) { g_pending = p; }
@@ -27,7 +35,11 @@ void VulkanViewportHub::setDevice(rhi::Device* d) { g_device = d; }
 #include <vulkan/vulkan_metal.h>
 #endif
 
+#include "inspector/property_editors.hpp"
+
+#include <QDropEvent>
 #include <QExposeEvent>
+#include <QMimeData>
 #include <QPainter>
 
 #include <cstring>
@@ -78,6 +90,7 @@ public:
         desc.surface = this;
         desc.framesInFlight = 2;
         desc.shaderHotReload = true;
+        VulkanViewportHub::prepareDeviceDesc(desc);
         std::string err;
         device = rhi::Device::create(desc, &err);
         if (!device) {
@@ -153,6 +166,7 @@ void VulkanViewportWindow::renderFrame() {
             Q_EMIT failed(err);
             return;
         }
+        m_panel->onDeviceReady(*m_bridge->device);
     }
     rhi::Device& dev = *m_bridge->device;
     rhi::Swapchain& sc = *m_bridge->swapchain;
@@ -163,7 +177,7 @@ void VulkanViewportWindow::renderFrame() {
     }
     const VkExtent2D ext = sc.extent();
     const qreal dpr = devicePixelRatio();
-    IViewportRenderer* gpu = m_panel->renderer();
+    IViewportRenderer* gpu = m_panel->gpuRenderer();
     rhi::CommandList& cmd = dev.commandList(rhi::QueueType::Graphics, "editor.viewport");
     const rhi::TextureHandle backbuffer = sc.currentTexture();
     if (gpu && !gpu->usesPainter()) {
@@ -229,6 +243,21 @@ void VulkanViewportWindow::focusOutEvent(QFocusEvent* e) {
 bool VulkanViewportWindow::event(QEvent* e) {
     if (e->type() == QEvent::ShortcutOverride && m_panel->isFlying()) {
         e->accept();
+        return true;
+    }
+    // Content browser drops (QWindow has no drag handlers; the platform still delivers the events).
+    if (e->type() == QEvent::DragEnter || e->type() == QEvent::DragMove) {
+        auto* de = static_cast<QDragMoveEvent*>(e);
+        if (de->mimeData()->hasFormat(kMimeAsset)) {
+            de->acceptProposedAction();
+            return true;
+        }
+    } else if (e->type() == QEvent::Drop) {
+        auto* de = static_cast<QDropEvent*>(e);
+        for (const QString& line : QString::fromUtf8(de->mimeData()->data(kMimeAsset)).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+            m_panel->dropAsset(line, de->position());
+        }
+        de->acceptProposedAction();
         return true;
     }
     return QWindow::event(e);

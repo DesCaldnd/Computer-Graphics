@@ -1,5 +1,6 @@
 #include "panels/content_browser.hpp"
 
+#include "content/thumbnails.hpp"
 #include "core/editor_context.hpp"
 #include "inspector/property_editors.hpp"
 #include "theme/icons.hpp"
@@ -43,6 +44,8 @@ QColor AssetListModel::typeColor(const QString& type) {
         {"Folder", QColor("#C9A35F")},   {"Scene", QColor("#8B6DFF")},    {"Prefab", QColor("#4EA8FF")},
         {"Mesh", QColor("#3DD68C")},     {"Material", QColor("#F5B642")}, {"Texture", QColor("#FF7A59")},
         {"Audio", QColor("#E86AF0")},    {"Script", QColor("#5FD0E6")},   {"Shader", QColor("#B39DFF")},
+        {"Model", QColor("#2FBF7F")},    {"BehaviorTree", QColor("#E0835A")}, {"AnimatorController", QColor("#9BCB6B")},
+        {"Skeleton", QColor("#B8D47A")}, {"NavMesh", QColor("#6FA8DC")},  {"Heightmap", QColor("#A08060")},
         {"Font", QColor("#9AA5B8")},     {"Animation", QColor("#7FD48B")}, {"SaveGame", QColor("#C0C4D0")},
     };
     return map.value(type, QColor("#8A90A2"));
@@ -86,25 +89,7 @@ QModelIndex AssetListModel::indexOfPath(const QString& path) const {
 
 int AssetListModel::rowCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : int(m_items.size()); }
 
-QPixmap AssetListModel::thumbnail(const AssetInfo& a) const {
-    if (auto it = m_thumbs.find(a.path); it != m_thumbs.end()) return *it;
-    QPixmap pm;
-    if (auto* tr = m_ctx->services().thumbnails()) {
-        QImage img = tr->render({a.uuid, a.path, a.type, 128});
-        if (!img.isNull()) pm = QPixmap::fromImage(img);
-    }
-    if (pm.isNull() && a.type == QLatin1String("Texture")) {
-        QImageReader reader(a.path);
-        const QSize s = reader.size();
-        if (s.isValid()) {
-            reader.setScaledSize(s.scaled(QSize(160, 160), Qt::KeepAspectRatio));
-            const QImage img = reader.read();
-            if (!img.isNull()) pm = QPixmap::fromImage(img);
-        }
-    }
-    m_thumbs.insert(a.path, pm);
-    return pm;
-}
+QPixmap AssetListModel::thumbnail(const AssetInfo& a) const { return ThumbnailCache::instance().get(*m_ctx, a, 160); }
 
 QVariant AssetListModel::data(const QModelIndex& index, int role) const {
     const AssetInfo* a = at(index);
@@ -165,13 +150,21 @@ QMimeData* AssetListModel::mimeData(const QModelIndexList& indexes) const {
 }
 
 bool AssetListModel::canDropMimeData(const QMimeData* data, Qt::DropAction, int, int, const QModelIndex& parent) const {
-    if (!data->hasFormat(kMimeAsset)) return false;
     const AssetInfo* a = at(parent);
+    if (!data->hasFormat(kMimeAsset)) return data->hasUrls() && (!a || a->isFolder); // files from Finder: import
     return a && a->isFolder;
 }
 
 bool AssetListModel::dropMimeData(const QMimeData* data, Qt::DropAction, int, int, const QModelIndex& parent) {
     const AssetInfo* target = at(parent);
+    if (!data->hasFormat(kMimeAsset) && data->hasUrls()) {
+        QStringList files;
+        for (const QUrl& u : data->urls()) {
+            if (u.isLocalFile()) files << u.toLocalFile();
+        }
+        importFiles(files, target && target->isFolder ? target->path : m_folder);
+        return false;
+    }
     if (!target || !target->isFolder) return false;
     const QString dest = target->path;
     for (const QString& line : QString::fromUtf8(data->data(kMimeAsset)).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
@@ -182,6 +175,18 @@ bool AssetListModel::dropMimeData(const QMimeData* data, Qt::DropAction, int, in
     }
     refresh();
     return false;
+}
+
+QStringList AssetListModel::importFiles(const QStringList& files, const QString& folder) {
+    if (files.isEmpty()) return {};
+    QString err;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const QStringList imported = m_ctx->services().assets().importFiles(files, folder, &err);
+    QApplication::restoreOverrideCursor();
+    refresh();
+    if (!err.isEmpty()) Q_EMIT m_ctx->statusMessage(tr("Import problems: %1").arg(err), 8000);
+    else if (!imported.isEmpty()) Q_EMIT m_ctx->statusMessage(tr("Imported %n file(s)", nullptr, int(imported.size())), 3000);
+    return imported;
 }
 
 namespace {
@@ -310,6 +315,7 @@ ContentBrowserPanel::ContentBrowserPanel(EditorContext* ctx, QWidget* parent) : 
     addMenu->addAction(Icons::get(QStringLiteral("prefab")), tr("Prefab"), this, [this] { createAsset(QStringLiteral("Prefab")); });
     addMenu->addAction(Icons::get(QStringLiteral("material")), tr("Material"), this, [this] { createAsset(QStringLiteral("Material")); });
     addMenu->addAction(Icons::get(QStringLiteral("script")), tr("Lua Script"), this, [this] { createAsset(QStringLiteral("Script")); });
+    addMenu->addAction(Icons::get(QStringLiteral("sitemap")), tr("Behavior Tree"), this, [this] { createAsset(QStringLiteral("BehaviorTree")); });
     addMenu->addSeparator();
     addMenu->addAction(Icons::get(QStringLiteral("import")), tr("Import…"), this, &ContentBrowserPanel::importFiles);
     addBtn->setMenu(addMenu);
@@ -330,7 +336,7 @@ ContentBrowserPanel::ContentBrowserPanel(EditorContext* ctx, QWidget* parent) : 
     hl->addWidget(m_breadcrumb, 1);
     m_typeFilter = new QComboBox(header);
     m_typeFilter->addItem(Icons::get(QStringLiteral("filter")), tr("All types"), QString());
-    for (const char* t : {"Scene", "Prefab", "Mesh", "Material", "Texture", "Audio", "Script", "Shader", "Data"}) {
+    for (const char* t : {"Scene", "Prefab", "Model", "Mesh", "Material", "Texture", "Audio", "Script", "BehaviorTree", "Shader", "Data"}) {
         m_typeFilter->addItem(Icons::fixed(Icons::forAssetType(QString::fromLatin1(t)), AssetListModel::typeColor(QString::fromLatin1(t))),
                               QString::fromLatin1(t), QString::fromLatin1(t));
     }
@@ -394,7 +400,22 @@ ContentBrowserPanel::ContentBrowserPanel(EditorContext* ctx, QWidget* parent) : 
     connect(m_typeFilter, &QComboBox::currentIndexChanged, this, [this] { m_model->setFilter(m_search->text(), m_typeFilter->currentData().toString()); });
     connect(m_gridButton, &QToolButton::clicked, this, [this] { setTileMode(true); });
     connect(m_listButton, &QToolButton::clicked, this, [this] { setTileMode(false); });
-    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, [this] { m_model->refresh(); });
+    m_rescanTimer.setSingleShot(true);
+    m_rescanTimer.setInterval(300);
+    connect(&m_rescanTimer, &QTimer::timeout, this, [this] {
+        m_ctx->services().assets().rescan(); // new/moved/deleted files from outside the editor
+        m_model->refresh();
+    });
+    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, &m_rescanTimer, qOverload<>(&QTimer::start));
+    connect(m_list->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& i) {
+        const AssetInfo* a = m_model->at(i);
+        if (!a || a->isFolder) return;
+        m_ctx->selection().clear();
+        m_ctx->inspectAsset(a->path);
+    });
+    connect(&m_ctx->runtime(), &RuntimeHost::started, this, [this] {
+        if (m_ctx->project()) setRoot(m_ctx->project()->contentDir());
+    });
     connect(ctx, &EditorContext::projectChanged, this, [this] {
         if (m_ctx->project()) setRoot(m_ctx->project()->contentDir());
     });
@@ -445,7 +466,7 @@ void ContentBrowserPanel::rebuildBreadcrumb() {
         delete it;
     }
     const QString rel = QDir(m_root).relativeFilePath(m_model->folder());
-    QStringList parts{QStringLiteral("Content")};
+    QStringList parts{m_ctx->project() ? m_ctx->project()->assetDirName() : QStringLiteral("Content")};
     if (rel != QLatin1String(".") && !rel.isEmpty()) parts += rel.split(QLatin1Char('/'), Qt::SkipEmptyParts);
     QString path = m_root;
     for (int i = 0; i < parts.size(); ++i) {
@@ -481,8 +502,10 @@ void ContentBrowserPanel::activate(const QModelIndex& index) {
         navigate(a->path);
     } else if (a->type == QLatin1String("Scene")) {
         Q_EMIT openSceneRequested(a->path);
-    } else if (a->type == QLatin1String("Prefab")) {
+    } else if (a->type == QLatin1String("Prefab") || a->type == QLatin1String("Model")) {
         m_ctx->instantiatePrefab(a->path, {});
+    } else if (a->type == QLatin1String("Script") || a->type == QLatin1String("Shader") || a->type == QLatin1String("BehaviorTree")) {
+        Q_EMIT m_ctx->openSourceRequested(a->path, 1);
     } else {
         const QString editor = m_ctx->preferences().values().codeEditorPath;
         if (!editor.isEmpty() && (a->type == QLatin1String("Script") || a->type == QLatin1String("Shader"))) {
@@ -515,14 +538,8 @@ void ContentBrowserPanel::createAsset(const QString& type) {
 
 void ContentBrowserPanel::importFiles() {
     const QStringList files = QFileDialog::getOpenFileNames(this, tr("Import Assets"), QString(),
-                                                            tr("Assets (*.gltf *.glb *.fbx *.obj *.png *.jpg *.jpeg *.tga *.ktx2 *.exr *.hdr *.wav *.ogg *.mp3 *.lua);;All files (*)"));
-    int n = 0;
-    for (const QString& f : files) {
-        const QString dest = QDir(m_model->folder()).filePath(QFileInfo(f).fileName());
-        if (QFile::copy(f, dest)) ++n;
-    }
-    m_model->refresh();
-    if (n) Q_EMIT m_ctx->statusMessage(tr("Imported %n file(s)", nullptr, n), 3000);
+                                                            tr("Assets (*.gltf *.glb *.bin *.fbx *.obj *.mtl *.png *.jpg *.jpeg *.tga *.bmp *.psd *.ktx2 *.exr *.hdr *.wav *.ogg *.mp3 *.flac *.lua *.ttf *.otf);;All files (*)"));
+    m_model->importFiles(files, m_model->folder());
 }
 
 void ContentBrowserPanel::deleteSelected() {
@@ -531,7 +548,23 @@ void ContentBrowserPanel::deleteSelected() {
         if (const AssetInfo* a = m_model->at(i)) paths << a->path;
     }
     if (paths.isEmpty()) return;
-    if (QMessageBox::question(this, tr("Delete Assets"), tr("Delete %n item(s)? This cannot be undone.", nullptr, int(paths.size()))) != QMessageBox::Yes) return;
+    // Dependency-aware warning: assets still referenced by other assets (materials, prefabs, scenes, ...).
+    QStringList users;
+    for (const QString& p : paths) {
+        for (const AssetInfo& d : m_ctx->services().assets().dependents(p)) {
+            if (!paths.contains(d.path)) users << QStringLiteral("%1  ←  %2").arg(QFileInfo(p).fileName(), d.relativePath);
+        }
+    }
+    QString text = tr("Delete %n item(s)? This cannot be undone.", nullptr, int(paths.size()));
+    if (!users.isEmpty()) {
+        users.removeDuplicates();
+        text = tr("<b>%n reference(s) will break:</b><br>", nullptr, int(users.size())) + users.mid(0, 12).join(QStringLiteral("<br>")) +
+               (users.size() > 12 ? QStringLiteral("<br>…") : QString()) + QStringLiteral("<br><br>") + text;
+    }
+    QMessageBox box(users.isEmpty() ? QMessageBox::Question : QMessageBox::Warning, tr("Delete Assets"), text, QMessageBox::Yes | QMessageBox::No, this);
+    box.setTextFormat(Qt::RichText);
+    box.setObjectName(QStringLiteral("DeleteAssetsBox"));
+    if (m_confirmDelete && box.exec() != QMessageBox::Yes) return;
     for (const QString& p : paths) {
         QString err;
         if (!m_ctx->services().assets().remove(p, &err)) Q_EMIT m_ctx->statusMessage(err, 4000);
@@ -546,6 +579,26 @@ void ContentBrowserPanel::showContextMenu(const QPoint& pos) {
     if (a) {
         menu.addAction(Icons::get(QStringLiteral("open")), a->isFolder ? tr("Open Folder") : tr("Open"), this, [this, i] { activate(i); });
         menu.addAction(Icons::get(QStringLiteral("rename")), tr("Rename"), QKeySequence(Qt::Key_F2), this, [this, i] { m_list->edit(i); });
+        if (!a->isFolder && m_ctx->services().assets().isDatabase() && !a->importer.isEmpty()) {
+            const QString p = a->path;
+            menu.addAction(Icons::get(QStringLiteral("refresh")), tr("Reimport"), this, [this, p] {
+                QString err;
+                if (!m_ctx->services().assets().reimport(p, &err)) Q_EMIT m_ctx->statusMessage(tr("Reimport failed: %1").arg(err), 6000);
+                else Q_EMIT m_ctx->statusMessage(tr("Reimported %1").arg(QFileInfo(p).fileName()), 3000);
+                m_model->refresh();
+            });
+        }
+        if (!a->isFolder) {
+            const QString p = a->path;
+            menu.addAction(Icons::get(QStringLiteral("inspector")), tr("Inspect"), this, [this, p] {
+                m_ctx->selection().clear();
+                m_ctx->inspectAsset(p);
+            });
+        }
+        if (a->type == QLatin1String("Model") || a->type == QLatin1String("Prefab")) {
+            const QString p = a->path;
+            menu.addAction(Icons::get(QStringLiteral("prefab")), tr("Place in Scene"), this, [this, p] { m_ctx->instantiatePrefab(p); });
+        }
         menu.addAction(Icons::get(QStringLiteral("trash"), Icons::Tint::Error), tr("Delete"), QKeySequence::Delete, this, &ContentBrowserPanel::deleteSelected);
         menu.addSeparator();
         const QString path = a->path;
@@ -559,8 +612,12 @@ void ContentBrowserPanel::showContextMenu(const QPoint& pos) {
         create->addAction(Icons::get(QStringLiteral("prefab")), tr("Prefab"), this, [this] { createAsset(QStringLiteral("Prefab")); });
         create->addAction(Icons::get(QStringLiteral("material")), tr("Material"), this, [this] { createAsset(QStringLiteral("Material")); });
         create->addAction(Icons::get(QStringLiteral("script")), tr("Lua Script"), this, [this] { createAsset(QStringLiteral("Script")); });
+        create->addAction(Icons::get(QStringLiteral("sitemap")), tr("Behavior Tree"), this, [this] { createAsset(QStringLiteral("BehaviorTree")); });
         menu.addAction(Icons::get(QStringLiteral("import")), tr("Import…"), this, &ContentBrowserPanel::importFiles);
-        menu.addAction(Icons::get(QStringLiteral("refresh")), tr("Refresh"), this, [this] { m_model->refresh(); });
+        menu.addAction(Icons::get(QStringLiteral("refresh")), tr("Refresh"), this, [this] {
+            m_ctx->services().assets().rescan();
+            m_model->refresh();
+        });
     }
     menu.exec(m_list->viewport()->mapToGlobal(pos));
 }

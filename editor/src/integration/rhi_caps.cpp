@@ -29,6 +29,7 @@ RenderingCaps fromDevice(const rhi::DeviceCaps& d) {
     c.meshShaders = d.meshShader;
     c.dlssUnavailableReason = dlssUnavailableReason(c.vendor, c.rayTracingSupported, true);
     c.dlssSupported = c.dlssUnavailableReason.isEmpty();
+    c.upscalers = defaultUpscalers(c);
     return c;
 }
 

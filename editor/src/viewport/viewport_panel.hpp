@@ -13,10 +13,15 @@
 #include <QWidget>
 
 #include <memory>
+#include <optional>
 
 class QLabel;
 class QToolButton;
 class QMenu;
+
+namespace ox::rhi {
+class Device;
+}
 
 namespace ox::editor {
 
@@ -70,14 +75,20 @@ public:
     [[nodiscard]] double fps() const { return m_fps; }
     [[nodiscard]] double frameMs() const { return m_frameMs; }
     [[nodiscard]] QString rendererName() const;
-    [[nodiscard]] IViewportRenderer* renderer() const { return m_renderer.get(); }
+    // The active renderer: the GPU one (render module) when a device exists, else the software renderer.
+    [[nodiscard]] IViewportRenderer* renderer() const;
+    [[nodiscard]] IViewportRenderer* gpuRenderer() const { return m_gpuRenderer.get(); }
+    // The Vulkan device of the viewport exists: create the GPU renderer through EditorServices' factory.
+    void onDeviceReady(rhi::Device& device);
+    // The device is about to be destroyed.
+    void releaseGpuRenderer();
     void requestRedraw() { m_dirty = true; }
     [[nodiscard]] bool usingVulkan() const { return m_vkWindow != nullptr; }
-    [[nodiscard]] bool isFlying() const { return m_flying; }
-    void clearInputState() {
-        m_keys.clear();
-        m_flying = false;
-    }
+    [[nodiscard]] bool isFlying() const { return m_flying || m_captured; }
+    void clearInputState();
+    // Play-in-editor input capture (mouse locked to the viewport, keys/mouse forwarded to the InputSystem).
+    [[nodiscard]] bool inputCaptured() const { return m_captured; }
+    void setInputCaptured(bool captured);
     // GPU renderer path (render module): fills the frame description and calls IViewportRenderer::render.
     void renderGpuFrame(const ViewportTarget& target, QSize sizePx);
 
@@ -102,7 +113,12 @@ private:
     void pickAt(QPointF pos, Qt::KeyboardModifiers mods);
     glm::vec3 pivotPoint() const;
     void dropAsset(const QString& line, QPointF pos);
-
+    void submitOverlayLines(DebugDraw& dd, bool gpuFrame, QSize size);
+    bool handleToolPress(QMouseEvent* e);
+    void updateSculptBrush(QPointF pos);
+    void tickTools(double dt);
+    [[nodiscard]] Uuid entityUnder(QPointF pos);
+    void maybeCreateOffscreenGpu();
     // input
     void onMousePress(QMouseEvent* e);
     void onMouseMove(QMouseEvent* e);
@@ -121,12 +137,15 @@ private:
     QToolButton* m_viewModeButton = nullptr;
     QToolButton* m_cameraButton = nullptr;
     QLabel* m_speedLabel = nullptr;
-    std::unique_ptr<IViewportRenderer> m_renderer;
-    PainterViewportRenderer* m_painterRenderer = nullptr;
-    std::unique_ptr<PainterViewportRenderer> m_painterOwned; // fallback when the main renderer is a GPU one
+    std::unique_ptr<PainterViewportRenderer> m_painterRenderer; // software renderer (always available)
+    std::unique_ptr<IViewportRenderer> m_gpuRenderer;           // render module, on the viewport's device
+    std::shared_ptr<void> m_headlessDevice;                     // offscreen GPU canvas (screenshots, headless)
     ViewportCamera m_camera;
     TransformGizmo m_gizmo;
     ViewMode m_viewMode = ViewMode::Lit;
+    bool m_gameExposure = true; // EV100 of the primary camera (else m_manualEv)
+    float m_manualEv = 15.0f;
+    [[nodiscard]] float viewEv100() const;
     ShowFlags m_flags;
     QTimer m_timer;
     QElapsedTimer m_clock;
@@ -155,6 +174,15 @@ private:
     };
     std::vector<DragStart> m_dragStart;
     bool m_gizmoDragging = false;
+    glm::vec3 m_splineDragStart{0.0f};
+    // play input
+    bool m_captured = false;
+    QPointF m_captureCenter;
+    bool m_ignoreNextMove = false;
+    // terrain sculpt
+    std::optional<glm::vec3> m_brushPos;
+    Uuid m_brushTerrain;
+    bool m_sculpting = false;
 };
 
 } // namespace ox::editor

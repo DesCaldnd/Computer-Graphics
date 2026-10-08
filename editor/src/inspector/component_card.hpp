@@ -16,6 +16,7 @@ struct ComponentInfo;
 
 namespace ox::editor {
 
+class ComponentExtensionWidget;
 class EditorContext;
 
 // One component of the selected entities as a collapsible card with a reflection-generated property grid.
@@ -32,6 +33,7 @@ public:
     [[nodiscard]] const ComponentInfo* info() const { return m_info; }
     [[nodiscard]] PropertyEditor* editorForPath(const std::string& path) const;
     [[nodiscard]] int rowCount() const { return int(m_rows.size()); }
+    [[nodiscard]] ComponentExtensionWidget* footer() const { return m_footer; }
 
 private:
     struct Row {
@@ -69,6 +71,7 @@ private:
     std::vector<Row> m_rows;
     std::string m_shape;
     QString m_filter;
+    ComponentExtensionWidget* m_footer = nullptr;
 };
 
 } // namespace ox::editor

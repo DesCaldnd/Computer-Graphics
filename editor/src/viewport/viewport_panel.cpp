@@ -1,12 +1,15 @@
 #include "viewport/viewport_panel.hpp"
 
 #include "core/editor_context.hpp"
+#include "integration/gameplay_tools.hpp"
+#include "integration/input_bridge.hpp"
 #include "inspector/property_editors.hpp"
 #include "theme/icons.hpp"
 #include "theme/theme.hpp"
 #include "widgets/widgets.hpp"
 
 #include <oxwald/core/serial/convert.hpp>
+#include <oxwald/scene/component_registry.hpp>
 #include <oxwald/scene/components.hpp>
 
 #include <QActionGroup>
@@ -28,6 +31,13 @@
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QWidgetAction>
+
+#include <QCursor>
+#include <QMessageBox>
+
+#if OX_EDITOR_HAS_RHI
+#include <oxwald/rhi/device.hpp>
+#endif
 
 #include <cmath>
 
@@ -58,8 +68,7 @@ void ViewportCanvas::keyPressEvent(QKeyEvent* e) {
 }
 void ViewportCanvas::keyReleaseEvent(QKeyEvent* e) { m_panel->onKey(e, false); }
 void ViewportCanvas::focusOutEvent(QFocusEvent* e) {
-    m_panel->m_keys.clear();
-    m_panel->m_flying = false;
+    m_panel->clearInputState();
     QWidget::focusOutEvent(e);
 }
 void ViewportCanvas::resizeEvent(QResizeEvent* e) {
@@ -67,8 +76,8 @@ void ViewportCanvas::resizeEvent(QResizeEvent* e) {
     QWidget::resizeEvent(e);
 }
 bool ViewportCanvas::event(QEvent* e) {
-    // While flying, WASD/QE drive the camera instead of triggering tool shortcuts.
-    if (e->type() == QEvent::ShortcutOverride && m_panel->m_flying) {
+    // While flying (or playing with captured input), keys drive the camera/game instead of tool shortcuts.
+    if (e->type() == QEvent::ShortcutOverride && m_panel->isFlying()) {
         e->accept();
         return true;
     }
@@ -92,17 +101,9 @@ ViewportPanel::ViewportPanel(EditorContext* ctx, QWidget* parent) : QWidget(pare
     auto* lay = new QVBoxLayout(this);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(0);
-    if (const auto& factory = ctx->services().viewportRendererFactory()) m_renderer = factory();
-    if (!m_renderer || !m_renderer->usesPainter()) {
-        // GPU renderers draw through the Vulkan surface path (see rhi integration); the canvas keeps the
-        // software renderer as fallback/overlay.
-        auto painter = std::make_unique<PainterViewportRenderer>();
-        m_painterRenderer = painter.get();
-        if (!m_renderer) m_renderer = std::move(painter);
-        else m_painterOwned = std::move(painter);
-    } else {
-        m_painterRenderer = dynamic_cast<PainterViewportRenderer*>(m_renderer.get());
-    }
+    // The software renderer always exists (fallback, headless); the GPU renderer is created once the viewport's
+    // Vulkan device exists (onDeviceReady).
+    m_painterRenderer = std::make_unique<PainterViewportRenderer>();
     buildToolbar();
     lay->addWidget(m_toolbar);
 #if OX_EDITOR_HAS_RHI
@@ -121,6 +122,7 @@ ViewportPanel::ViewportPanel(EditorContext* ctx, QWidget* parent) : QWidget(pare
     if (!m_surface) {
         m_canvas = new ViewportCanvas(this);
         m_surface = m_canvas;
+        maybeCreateOffscreenGpu();
     }
     lay->addWidget(m_surface, 1);
 
@@ -146,6 +148,11 @@ ViewportPanel::ViewportPanel(EditorContext* ctx, QWidget* parent) : QWidget(pare
     connect(ctx, &EditorContext::visibilityChanged, this, redraw);
     connect(ctx, &EditorContext::playStateChanged, this, redraw);
     connect(&ctx->selection(), &Selection::changed, this, redraw);
+    connect(&ctx->tools(), &ToolState::changed, this, redraw);
+    connect(&ctx->runtime(), &RuntimeHost::ticked, this, redraw);
+    connect(ctx, &EditorContext::playStateChanged, this, [this] {
+        if (!m_ctx->isPlaying()) setInputCaptured(false);
+    });
     connect(&Theme::instance(), &Theme::changed, this, redraw);
     connect(&ctx->preferences(), &EditorPreferences::changed, this, [this] {
         const auto& v = m_ctx->preferences().values();
@@ -161,7 +168,93 @@ ViewportPanel::ViewportPanel(EditorContext* ctx, QWidget* parent) : QWidget(pare
     });
 }
 
-ViewportPanel::~ViewportPanel() = default;
+ViewportPanel::~ViewportPanel() { releaseGpuRenderer(); }
+
+float ViewportPanel::viewEv100() const {
+    if (m_gameExposure) {
+        World& w = m_ctx->world();
+        for (auto [h, cam] : w.view<CameraComponent>().each()) {
+            if (cam.primary) return cam.ev100();
+        }
+    }
+    return m_manualEv;
+}
+
+IViewportRenderer* ViewportPanel::renderer() const {
+    if (m_gpuRenderer) return m_gpuRenderer.get();
+    return m_painterRenderer.get();
+}
+
+void ViewportPanel::onDeviceReady(rhi::Device& device) {
+    if (m_gpuRenderer) return;
+    if (const auto& factory = m_ctx->services().viewportRendererFactory()) {
+        m_gpuRenderer = factory(device);
+        if (m_gpuRenderer) OX_LOG_INFO("editor", "Viewport renderer: {}", m_gpuRenderer->name().toStdString());
+    }
+    m_dirty = true;
+}
+
+void ViewportPanel::releaseGpuRenderer() {
+#if OX_EDITOR_HAS_RHI
+    if (m_gpuRenderer) {
+        if (rhi::Device* d = VulkanViewportHub::device()) d->waitIdle();
+    }
+    m_gpuRenderer.reset();
+    if (m_headlessDevice) {
+        VulkanViewportHub::setDevice(nullptr);
+        m_headlessDevice.reset();
+    }
+#else
+    m_gpuRenderer.reset();
+#endif
+}
+
+// Headless GPU canvas: with OX_EDITOR_OFFSCREEN_GPU=1 (screenshots) a surface-less device renders every frame
+// offscreen and the canvas paints the image + overlays.
+void ViewportPanel::maybeCreateOffscreenGpu() {
+#if OX_EDITOR_HAS_RHI
+    if (!qEnvironmentVariableIsSet("OX_EDITOR_OFFSCREEN_GPU") || qEnvironmentVariableIsSet("OX_EDITOR_NO_VULKAN")) return;
+    if (!m_ctx->services().viewportRendererFactory() || VulkanViewportHub::device()) return;
+    rhi::DeviceDesc desc;
+    desc.appName = "OxwaldEditor offscreen";
+    desc.framesInFlight = 2;
+    desc.validation = false;
+    VulkanViewportHub::prepareDeviceDesc(desc);
+    std::string err;
+    std::unique_ptr<rhi::Device> device = rhi::Device::create(desc, &err);
+    if (!device) {
+        OX_LOG_WARN("editor", "offscreen GPU canvas unavailable: {}", err);
+        return;
+    }
+    rhi::Device* raw = device.get();
+    m_headlessDevice = std::shared_ptr<void>(device.release(), [](void* d) { delete static_cast<rhi::Device*>(d); });
+    VulkanViewportHub::setDevice(raw);
+    onDeviceReady(*raw);
+#endif
+}
+
+void ViewportPanel::clearInputState() {
+    m_keys.clear();
+    m_flying = false;
+    m_sculpting = false;
+    setInputCaptured(false);
+}
+
+void ViewportPanel::setInputCaptured(bool captured) {
+    if (captured == m_captured) return;
+    m_captured = captured;
+    if (captured) {
+        setSurfaceCursor(Qt::BlankCursor);
+        m_captureCenter = QPointF(m_surface->width() / 2.0, m_surface->height() / 2.0);
+        m_ignoreNextMove = true;
+        QCursor::setPos(m_surface->mapToGlobal(m_captureCenter.toPoint()));
+        Q_EMIT m_ctx->statusMessage(tr("Game input captured — Shift+F1 releases the mouse, Esc stops playing"), 4000);
+    } else {
+        unsetSurfaceCursor();
+        forwardFocusLost(m_ctx->engine());
+    }
+    m_dirty = true;
+}
 
 void ViewportPanel::setSurfaceCursor(Qt::CursorShape c) {
 #if OX_EDITOR_HAS_RHI
@@ -185,6 +278,7 @@ void ViewportPanel::unsetSurfaceCursor() {
 
 void ViewportPanel::switchToSoftware(const QString& reason) {
     OX_LOG_WARN("editor", "Vulkan viewport unavailable ({}), using the software preview", reason.toStdString());
+    releaseGpuRenderer();
     VulkanViewportHub::setPending(false);
     if (!m_vkWindow) return;
     auto* lay = static_cast<QVBoxLayout*>(layout());
@@ -199,24 +293,102 @@ void ViewportPanel::switchToSoftware(const QString& reason) {
 }
 
 void ViewportPanel::renderGpuFrame(const ViewportTarget& target, QSize sizePx) {
+    QElapsedTimer t;
+    t.start();
     World& world = m_ctx->world();
     world.updateTransforms();
     DebugDraw& dd = m_ctx->debugDraw();
     updateGizmoTarget();
-    // gizmo, grid and selection go to the renderer as overlay lines
-    const GizmoView gv = GizmoView::from(m_camera, glm::vec2(sizePx.width(), sizePx.height()));
+    // gizmo, grid, light/camera shapes and gameplay debug draw go to the renderer as lines
+    const qreal dpr = devicePixelRatioF();
+    const QSize logical(int(sizePx.width() / dpr), int(sizePx.height() / dpr));
+    const GizmoView gv = GizmoView::from(m_camera, glm::vec2(logical.width(), logical.height()));
     if (!m_ctx->isPlaying()) m_gizmo.emitLines(dd, gv);
-    if (m_flags.grid) dd.grid(glm::vec3(0), float(m_ctx->preferences().values().gridSize), 100, glm::vec4(1, 1, 1, 0.15f));
+    submitOverlayLines(dd, true, logical);
     dd.flush(0.016f);
     ViewportFrame frame = makeFrame(sizePx);
     const UuidList hidden = m_ctx->hiddenIds();
     frame.hidden = hidden;
     frame.lines = &dd;
     frame.time = m_clock.elapsed() / 1000.0;
-    m_renderer->render(frame, target);
+    m_gpuRenderer->render(frame, target);
+    m_frameMs = double(t.nsecsElapsed()) / 1e6;
+    ++m_fpsFrames;
+    if (m_fpsClock.elapsed() >= 500) {
+        m_fps = m_fpsFrames * 1000.0 / double(m_fpsClock.restart());
+        m_fpsFrames = 0;
+    }
+    Q_EMIT frameRendered(m_frameMs);
 }
 
-QString ViewportPanel::rendererName() const { return m_renderer ? m_renderer->name() : QString(); }
+QString ViewportPanel::rendererName() const { return renderer() ? renderer()->name() : QString(); }
+
+void ViewportPanel::submitOverlayLines(DebugDraw& dd, bool gpuFrame, QSize size) {
+    (void)size;
+    World& world = m_ctx->world();
+    applyGameplayDebugFlags(m_ctx->engineServices(), m_flags);
+    if (m_flags.bounds) {
+        world.forEachInHierarchy([&](entt::entity h) {
+            Entity e = world.wrap(h);
+            if (e.has<MeshRendererComponent>()) dd.aabb(entityBounds(world, e), glm::vec4(0.3f, 0.9f, 0.9f, 0.6f));
+        });
+    }
+    if (gpuFrame) {
+        // The grid is drawn by the renderer (EditorViewportFrame::grid). Light and camera shapes (the software renderer draws them itself, with icons).
+        const UuidList sel = m_ctx->selection().ids();
+        auto selected = [&](Entity e) { return std::find(sel.begin(), sel.end(), e.uuid()) != sel.end(); };
+        if (m_flags.lights) {
+            for (auto [h, l] : world.view<LightComponent>().each()) {
+                Entity e = world.wrap(h);
+                const glm::vec3 p = e.worldPosition();
+                const glm::vec3 fwd = e.worldRotation() * glm::vec3(0, 0, -1);
+                const DebugColor c = selected(e) ? DebugColor(debug_color::kOrange) : DebugColor(glm::vec4(1.0f, 0.9f, 0.6f, 0.8f));
+                switch (l.type) {
+                case LightType::Directional: dd.arrow(p, p + fwd * 1.5f, 0.25f, c, 0.0f, false); break;
+                case LightType::Spot:
+                    dd.cone(p, fwd, selected(e) ? l.range : 1.0f, glm::radians(l.outerConeAngle), c, 0.0f, true, 16);
+                    break;
+                case LightType::Point:
+                    dd.sphere(p, selected(e) ? l.range : 0.25f, c, 0.0f, true, selected(e) ? 32 : 12);
+                    break;
+                default: dd.box(p, glm::vec3(l.areaSize * 0.5f, 0.01f), e.worldRotation(), c); break;
+                }
+            }
+        }
+        if (m_flags.cameras) {
+            for (auto [h, cam] : world.view<CameraComponent>().each()) {
+                Entity e = world.wrap(h);
+                const glm::mat4 m = e.worldMatrix();
+                const DebugColor c = selected(e) ? DebugColor(debug_color::kOrange) : DebugColor(glm::vec4(0.85f, 0.88f, 0.95f, 0.8f));
+                const glm::vec3 o = glm::vec3(m[3]);
+                const float s = 0.35f;
+                const glm::vec3 corners[4] = {glm::vec3(m * glm::vec4(-s, -s * 0.6f, -s * 1.4f, 1)), glm::vec3(m * glm::vec4(s, -s * 0.6f, -s * 1.4f, 1)),
+                                              glm::vec3(m * glm::vec4(s, s * 0.6f, -s * 1.4f, 1)), glm::vec3(m * glm::vec4(-s, s * 0.6f, -s * 1.4f, 1))};
+                for (int i = 0; i < 4; ++i) {
+                    dd.line(o, corners[i], c);
+                    dd.line(corners[i], corners[(i + 1) % 4], c);
+                }
+            }
+        }
+    }
+    // Gameplay debug draw of the last engine frame (colliders, splines, navmesh, contacts, ...).
+    if (m_flags.debugDraw) {
+        if (const DebugDraw* game = m_ctx->gameDebugDraw()) {
+            const auto copy = [&](std::span<const DebugVertex> v, bool depth) {
+                for (usize i = 0; i + 1 < v.size(); i += 2) dd.line(v[i].position, v[i + 1].position, DebugColor(v[i].color), 0.0f, depth);
+            };
+            copy(game->depthTestedLines(), true);
+            copy(game->overlayLines(), false);
+        }
+    }
+    // Tool overlays.
+    ToolState& tools = m_ctx->tools();
+    if (tools.tool() == ViewportTool::SplinePoints) {
+        drawSplineHandles(dd, world, tools.target(), tools.splinePoint, m_camera.position);
+    } else if (tools.tool() == ViewportTool::TerrainSculpt) {
+        drawTerrainWire(dd, m_ctx->engineServices(), world, tools.target(), m_brushPos, tools.sculpt.radius);
+    }
+}
 
 void ViewportPanel::buildToolbar() {
     m_toolbar = new QFrame(this);
@@ -254,6 +426,31 @@ void ViewportPanel::buildToolbar() {
         addAction(a);
         connect(a, &QAction::triggered, this, [this, mode] { setViewMode(mode); });
     }
+    vm->addSection(tr("Exposure"));
+    auto* gameEv = vm->addAction(tr("Game Camera Exposure"));
+    gameEv->setCheckable(true);
+    gameEv->setChecked(m_gameExposure);
+    gameEv->setToolTip(tr("Use the EV100 of the scene's primary camera (aperture / shutter / ISO)"));
+    connect(gameEv, &QAction::toggled, this, [this](bool on) {
+        m_gameExposure = on;
+        m_dirty = true;
+    });
+    auto* evAction = new QWidgetAction(vm);
+    auto* ev = new NumberField(vm);
+    ev->setRange(-6, 24);
+    ev->setStep(0.1);
+    ev->setDecimals(1);
+    ev->setAxis(QStringLiteral("EV"), colors().warning);
+    ev->setValue(m_manualEv);
+    ev->setMinimumWidth(160);
+    ev->setToolTip(tr("Manual exposure (EV100) of the editor view"));
+    connect(ev, &NumberField::edited, this, [this, gameEv](double v, EditPhase) {
+        m_manualEv = float(v);
+        gameEv->setChecked(false);
+        m_dirty = true;
+    });
+    evAction->setDefaultWidget(ev);
+    vm->addAction(evAction);
     m_viewModeButton->setMenu(vm);
     l->addWidget(m_viewModeButton);
 
@@ -347,6 +544,28 @@ void ViewportPanel::buildToolbar() {
                 m_dirty = true;
             });
         }
+        if (!gameplayAvailable()) return;
+        sm->addSection(tr("Gameplay Debug"));
+        for (const F& f : {F{tr("Physics Colliders"), &ShowFlags::physicsColliders}, F{tr("Physics Contacts"), &ShowFlags::physicsContacts},
+                           F{tr("Navigation Mesh"), &ShowFlags::navigation}, F{tr("Splines"), &ShowFlags::splines},
+                           F{tr("Skeletons"), &ShowFlags::skeletons}, F{tr("Audio Sources"), &ShowFlags::audio}}) {
+            QAction* a = sm->addAction(f.name);
+            a->setCheckable(true);
+            a->setChecked(m_flags.*(f.flag));
+            a->setObjectName(QStringLiteral("show:") + f.name);
+            auto member = f.flag;
+            connect(a, &QAction::toggled, this, [this, member](bool on) {
+                m_flags.*member = on;
+                m_dirty = true;
+            });
+        }
+        sm->addSeparator();
+        sm->addAction(Icons::get(QStringLiteral("map")), tr("Bake Navigation Mesh"), this, [this] {
+            const BakeResult r = bakeNavMesh(*m_ctx);
+            Q_EMIT m_ctx->statusMessage(r.message, 5000);
+            m_flags.navigation = true;
+            m_dirty = true;
+        })->setEnabled(!m_ctx->isPlaying());
     });
     showButton->setMenu(sm);
     l->addWidget(showButton);
@@ -452,6 +671,21 @@ GizmoView ViewportPanel::gizmoView() const {
 
 void ViewportPanel::updateGizmoTarget() {
     World& w = m_ctx->world();
+    ToolState& tools = m_ctx->tools();
+    if (tools.tool() == ViewportTool::TerrainSculpt) {
+        m_gizmo.setVisible(false);
+        return;
+    }
+    if (tools.tool() == ViewportTool::SplinePoints) {
+        const auto pts = splinePointsWorld(w, tools.target());
+        const bool visible = tools.splinePoint >= 0 && tools.splinePoint < int(pts.size()) && m_flags.gizmos;
+        m_gizmo.setVisible(visible);
+        if (visible && !m_gizmo.active()) {
+            if (m_gizmo.mode() != GizmoMode::Translate) m_gizmo.setMode(GizmoMode::Translate);
+            m_gizmo.setTarget(pts[usize(tools.splinePoint)], glm::quat(1, 0, 0, 0));
+        }
+        return;
+    }
     Entity primary = w.find(m_ctx->selection().primary());
     const bool visible = primary && !m_ctx->isLocked(primary.uuid()) && m_flags.gizmos;
     m_gizmo.setVisible(visible);
@@ -472,6 +706,7 @@ ViewportFrame ViewportPanel::makeFrame(QSize size) {
     f.showFlags = m_flags;
     f.selection = m_ctx->selection().ids();
     f.playMode = m_ctx->isPlaying();
+    f.ev100 = viewEv100();
     const QColor sc = m_ctx->preferences().values().selectionColor;
     f.selectionColor = {sc.redF(), sc.greenF(), sc.blueF(), 1.0f};
     return f;
@@ -483,19 +718,27 @@ void ViewportPanel::paintCanvas(QPainter& p, QSize size, bool forScreenshot) {
     World& world = m_ctx->world();
     world.updateTransforms();
     DebugDraw& dd = m_ctx->debugDraw();
-    if (m_flags.bounds) {
-        world.forEachInHierarchy([&](entt::entity h) {
-            Entity e = world.wrap(h);
-            if (e.has<MeshRendererComponent>()) dd.aabb(entityBounds(world, e), glm::vec4(0.3f, 0.9f, 0.9f, 0.6f));
-        });
-    }
+    const bool gpu = m_gpuRenderer != nullptr; // headless GPU canvas: offscreen frame + painter overlays
+    submitOverlayLines(dd, gpu, size);
     dd.flush(0.016f);
     ViewportFrame frame = makeFrame(size);
     const UuidList hidden = m_ctx->hiddenIds();
     frame.hidden = hidden;
     frame.lines = &dd;
     frame.time = m_clock.elapsed() / 1000.0;
-    if (m_painterRenderer) {
+    QImage gpuImage;
+    if (gpu) {
+        const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
+        const QSize px(int(size.width() * dpr), int(size.height() * dpr));
+        ViewportFrame f = frame;
+        f.sizePx = glm::uvec2(std::max(1, px.width()), std::max(1, px.height()));
+        f.projection = m_camera.projection(float(f.sizePx.x) / float(f.sizePx.y));
+        f.viewProjection = f.projection * f.view;
+        gpuImage = m_gpuRenderer->renderOffscreen(f, px);
+    }
+    if (!gpuImage.isNull()) {
+        p.drawImage(QRectF(0, 0, size.width(), size.height()), gpuImage);
+    } else if (m_painterRenderer) {
         const auto& prefs = m_ctx->preferences().values();
         m_painterRenderer->setGridColor(prefs.gridColor);
         m_painterRenderer->setGridSize(float(prefs.gridSize));
@@ -622,6 +865,26 @@ QImage ViewportPanel::renderToImage(QSize size) {
     QImage img(size, QImage::Format_ARGB32_Premultiplied);
     img.fill(Qt::black);
     QPainter p(&img);
+    if (m_gpuRenderer && !m_canvas) {
+        // Vulkan window: render the same view offscreen (outside the viewport's device frame) + painter overlays.
+        World& world = m_ctx->world();
+        world.updateTransforms();
+        DebugDraw& dd = m_ctx->debugDraw();
+        submitOverlayLines(dd, true, size);
+        dd.flush(0.0f);
+        ViewportFrame frame = makeFrame(size);
+        const UuidList hidden = m_ctx->hiddenIds();
+        frame.hidden = hidden;
+        frame.lines = &dd;
+        const QImage gpu = m_gpuRenderer->renderOffscreen(frame, size);
+        if (!gpu.isNull()) {
+            p.drawImage(QPoint(0, 0), gpu);
+            updateGizmoTarget();
+            m_gizmo.draw(p, GizmoView::from(m_camera, glm::vec2(size.width(), size.height())));
+            paintOverlay(p, size);
+            return img;
+        }
+    }
     paintCanvas(p, size, true);
     return img;
 }
@@ -635,7 +898,7 @@ void ViewportPanel::tick() {
     const int interval = std::max(1, 1000 / fps);
     if (m_timer.interval() != interval) m_timer.setInterval(interval);
 
-    if (m_flying && !m_keys.isEmpty()) {
+    if (m_flying && !m_captured && !m_keys.isEmpty()) {
         glm::vec3 move(0.0f);
         if (m_keys.contains(Qt::Key_W)) move += m_camera.forward();
         if (m_keys.contains(Qt::Key_S)) move -= m_camera.forward();
@@ -653,6 +916,7 @@ void ViewportPanel::tick() {
     } else {
         m_velocityBoost = 1.0f;
     }
+    tickTools(dt);
     if (m_ctx->isPlaying()) m_dirty = true;
     if (m_dirty && isVisible()) {
         m_dirty = false;
@@ -670,6 +934,16 @@ void ViewportPanel::onMousePress(QMouseEvent* e) {
     m_surface->setFocus(Qt::MouseFocusReason);
     m_pressPos = m_lastPos = e->position();
     const bool alt = e->modifiers() & Qt::AltModifier;
+    if (m_captured) {
+        forwardMouseButton(m_ctx->engine(), e->button(), true);
+        return;
+    }
+    // Play-in-editor: clicking into the viewport possesses the game (input capture) like UE.
+    if (m_ctx->isPlaying() && m_ctx->play().mode() == PlayMode::Play && m_ctx->engine() && e->button() == Qt::LeftButton && !alt) {
+        setInputCaptured(true);
+        forwardMouseButton(m_ctx->engine(), e->button(), true);
+        return;
+    }
     if (e->button() == Qt::RightButton) {
         if (alt) m_dollying = true;
         else {
@@ -689,12 +963,22 @@ void ViewportPanel::onMousePress(QMouseEvent* e) {
         m_orbitPivot = pivotPoint();
         return;
     }
+    if (handleToolPress(e)) return;
     if (!m_ctx->isPlaying() || true) {
         const GizmoAxis axis = m_gizmo.hitTest(gizmoView(), e->position());
         if (axis != AxisNone && !m_ctx->isLocked(m_ctx->selection().primary())) {
             m_gizmo.begin(gizmoView(), e->position(), axis);
             m_gizmoDragging = true;
             m_dragStart.clear();
+            if (m_ctx->tools().tool() == ViewportTool::SplinePoints && m_ctx->tools().splinePoint >= 0) {
+                const auto pts = splinePointsWorld(m_ctx->world(), m_ctx->tools().target());
+                if (m_ctx->tools().splinePoint < int(pts.size())) m_splineDragStart = pts[usize(m_ctx->tools().splinePoint)];
+                DragStart s;
+                s.id = m_ctx->tools().target();
+                m_dragStart.push_back(s);
+                applyGizmoDelta(TransformGizmo::Delta{}, EditPhase::Begin);
+                return;
+            }
             World& w = m_ctx->world();
             for (const auto& id : topLevelOnly(w, m_ctx->selection().ids())) {
                 Entity ent = w.find(id);
@@ -716,8 +1000,23 @@ void ViewportPanel::onMousePress(QMouseEvent* e) {
 
 void ViewportPanel::onMouseMove(QMouseEvent* e) {
     const QPointF pos = e->position();
+    if (m_captured) {
+        const QPointF delta = pos - m_captureCenter;
+        if (m_ignoreNextMove || (std::abs(delta.x()) < 0.5 && std::abs(delta.y()) < 0.5)) {
+            m_ignoreNextMove = false;
+            return;
+        }
+        forwardMouseMove(m_ctx->engine(), pos, delta);
+        m_ignoreNextMove = true;
+        QCursor::setPos(m_surface->mapToGlobal(m_captureCenter.toPoint()));
+        return;
+    }
     const QPointF d = pos - m_lastPos;
     m_lastPos = pos;
+    if (m_ctx->tools().tool() == ViewportTool::TerrainSculpt && !m_flying && !m_orbiting && !m_panning) {
+        updateSculptBrush(pos);
+        m_dirty = true;
+    }
     const auto& prefs = m_ctx->preferences().values();
     const float sens = float(prefs.mouseSensitivity) * 0.0175f;
     const float invert = prefs.invertY ? -1.0f : 1.0f;
@@ -769,6 +1068,15 @@ void ViewportPanel::onMouseMove(QMouseEvent* e) {
 }
 
 void ViewportPanel::onMouseRelease(QMouseEvent* e) {
+    if (m_captured) {
+        forwardMouseButton(m_ctx->engine(), e->button(), false);
+        return;
+    }
+    if (m_sculpting && e->button() == Qt::LeftButton) {
+        m_sculpting = false;
+        m_ctx->markDirty();
+        return;
+    }
     if (e->button() == Qt::RightButton) {
         m_flying = false;
         m_dollying = false;
@@ -830,7 +1138,15 @@ void ViewportPanel::pickAt(QPointF pos, Qt::KeyboardModifiers mods) {
     });
     Uuid hit;
     const ViewportFrame frame = makeFrame(m_surface->size());
-    if (!m_renderer || !m_renderer->pick(frame, glm::ivec2(int(pos.x()), int(pos.y())), hit)) {
+    IViewportRenderer* r = renderer();
+    const qreal dpr = devicePixelRatioF();
+    ViewportFrame pf = frame;
+    if (m_gpuRenderer) {
+        // ID-buffer pick in device pixels.
+        pf = makeFrame(QSize(int(m_surface->width() * dpr), int(m_surface->height() * dpr)));
+    }
+    const glm::ivec2 px = m_gpuRenderer ? glm::ivec2(int(pos.x() * dpr), int(pos.y() * dpr)) : glm::ivec2(int(pos.x()), int(pos.y()));
+    if (!r || !r->pick(pf, px, hit)) {
         if (auto h = pickEntity(w, gizmoView(), pos, m_ctx->hiddenIds(), locked)) hit = h->id;
     }
     if (mods & (Qt::ControlModifier | Qt::MetaModifier)) {
@@ -844,6 +1160,10 @@ void ViewportPanel::pickAt(QPointF pos, Qt::KeyboardModifiers mods) {
 
 void ViewportPanel::applyGizmoDelta(const TransformGizmo::Delta& d, EditPhase phase) {
     if (m_dragStart.empty()) return;
+    if (m_ctx->tools().tool() == ViewportTool::SplinePoints && m_ctx->tools().splinePoint >= 0) {
+        setSplinePointWorld(*m_ctx, m_ctx->tools().target(), m_ctx->tools().splinePoint, m_splineDragStart + d.translation, phase);
+        return;
+    }
     const glm::vec3 pivot0 = m_dragStart.back().world.position;
     UuidList ids;
     std::vector<serial::Value> values;
@@ -871,6 +1191,16 @@ void ViewportPanel::applyGizmoDelta(const TransformGizmo::Delta& d, EditPhase ph
 }
 
 void ViewportPanel::onWheel(QWheelEvent* e) {
+    if (m_captured) {
+        forwardWheel(m_ctx->engine(), QPointF(e->angleDelta()) / 8.0);
+        return;
+    }
+    if (m_ctx->tools().tool() == ViewportTool::TerrainSculpt && (e->modifiers() & Qt::ControlModifier)) {
+        auto& r = m_ctx->tools().sculpt.radius;
+        r = std::clamp(r * float(std::pow(1.15, e->angleDelta().y() / 120.0)), 0.5f, 200.0f);
+        m_dirty = true;
+        return;
+    }
     const double steps = e->angleDelta().y() / 120.0;
     if (m_flying) {
         const double speed = std::clamp(m_ctx->preferences().values().cameraSpeed * std::pow(1.2, steps), 0.1, 200.0);
@@ -888,11 +1218,40 @@ void ViewportPanel::onWheel(QWheelEvent* e) {
 }
 
 void ViewportPanel::onKey(QKeyEvent* e, bool down) {
+    const int key = e->key();
+    if (m_ctx->isPlaying() && down) {
+        // UE conventions: Shift+F1 releases the mouse, Esc stops play-in-editor.
+        if (key == Qt::Key_F1 && (e->modifiers() & Qt::ShiftModifier)) {
+            setInputCaptured(false);
+            e->accept();
+            return;
+        }
+        if (key == Qt::Key_Escape) {
+            setInputCaptured(false);
+            m_ctx->stopPlay();
+            e->accept();
+            return;
+        }
+    }
+    if (m_captured) {
+        forwardKey(m_ctx->engine(), e, down);
+        e->accept();
+        return;
+    }
     if (e->isAutoRepeat()) {
         e->accept();
         return;
     }
-    const int key = e->key();
+    if (down && m_ctx->tools().tool() == ViewportTool::SplinePoints && (key == Qt::Key_Delete || key == Qt::Key_Backspace)) {
+        ToolState& t = m_ctx->tools();
+        if (t.splinePoint >= 0) {
+            removeSplinePoint(*m_ctx, t.target(), t.splinePoint);
+            t.splinePoint = std::min(t.splinePoint, int(splinePointsWorld(m_ctx->world(), t.target()).size()) - 1);
+            m_dirty = true;
+        }
+        e->accept();
+        return;
+    }
     if (m_flying) {
         if (down) m_keys.insert(key);
         else m_keys.remove(key);
@@ -914,7 +1273,9 @@ void ViewportPanel::onKey(QKeyEvent* e, bool down) {
     case Qt::Key_R: setGizmoMode(GizmoMode::Scale); break;
     case Qt::Key_F: focusSelection(); break;
     case Qt::Key_Escape:
-        if (m_gizmoDragging) {
+        if (m_ctx->tools().tool() != ViewportTool::Transform) {
+            m_ctx->tools().reset();
+        } else if (m_gizmoDragging) {
             m_gizmo.end();
             m_gizmoDragging = false;
             applyGizmoDelta(TransformGizmo::Delta{}, EditPhase::End);
@@ -937,8 +1298,30 @@ void ViewportPanel::dropAsset(const QString& line, QPointF pos) {
     glm::vec3 at = r.origin + r.direction * 8.0f;
     if (auto t = intersectRayPlane(r, Plane{{0, 1, 0}, 0.0f}); t && *t > 0 && *t < 500) at = r.at(*t);
     const QString type = parts[1];
-    if (type == QLatin1String("Prefab")) {
+    if (type == QLatin1String("Prefab") || type == QLatin1String("Model")) {
         m_ctx->instantiatePrefab(parts[2], {}, at);
+    } else if (type == QLatin1String("Material") || type == QLatin1String("Script")) {
+        // Applied to the entity under the cursor.
+        auto id = Uuid::parse(parts[0].toStdString());
+        const Uuid target = entityUnder(pos);
+        Entity e = m_ctx->world().find(target);
+        if (!id || !e) {
+            Q_EMIT m_ctx->statusMessage(tr("Drop the %1 onto an object").arg(type.toLower()), 3000);
+            return;
+        }
+        if (type == QLatin1String("Material")) {
+            if (!e.has<MeshRendererComponent>()) return;
+            auto mats = e.get<MeshRendererComponent>().materials;
+            if (mats.empty()) mats.push_back(*id);
+            else mats[0] = *id;
+            m_ctx->setProperty({target}, "MeshRenderer", "materials", serial::toValue(mats));
+        } else {
+            const ComponentInfo* script = ComponentRegistry::instance().find("Script");
+            if (!script) return;
+            if (!script->has(m_ctx->world(), e.handle())) m_ctx->addComponent({target}, "Script");
+            m_ctx->setProperty({target}, "Script", "asset", serial::Value::makeUuid(*id));
+        }
+        m_ctx->selection().select(target);
     } else if (type == QLatin1String("Mesh")) {
         auto id = Uuid::parse(parts[0].toStdString());
         if (!id) return;
@@ -955,6 +1338,82 @@ void ViewportPanel::dropAsset(const QString& line, QPointF pos) {
     } else if (type == QLatin1String("Scene")) {
         Q_EMIT m_ctx->statusMessage(tr("Open scenes from the Content Browser (double-click)"), 3000);
     }
+}
+
+} // namespace ox::editor
+
+namespace ox::editor {
+
+bool ViewportPanel::handleToolPress(QMouseEvent* e) {
+    ToolState& t = m_ctx->tools();
+    if (e->button() != Qt::LeftButton || t.tool() == ViewportTool::Transform) return false;
+    World& w = m_ctx->world();
+    const GizmoView gv = gizmoView();
+    const QPointF pos = e->position();
+    if (t.tool() == ViewportTool::SplinePoints) {
+        if (t.splinePoint >= 0 && m_gizmo.hitTest(gv, pos) != AxisNone) return false; // gizmo drag
+        const auto pts = splinePointsWorld(w, t.target());
+        int best = -1;
+        double bestD = 12.0;
+        for (usize i = 0; i < pts.size(); ++i) {
+            QPointF sp;
+            if (!gv.project(pts[i], sp)) continue;
+            const double d = std::hypot(sp.x() - pos.x(), sp.y() - pos.y());
+            if (d < bestD) {
+                bestD = d;
+                best = int(i);
+            }
+        }
+        if (best < 0 && (e->modifiers() & (Qt::ControlModifier | Qt::MetaModifier))) {
+            // Ctrl+click adds a point on the plane through the selected (or last) point.
+            const Ray r = gv.ray(pos);
+            const float planeY = pts.empty() ? 0.0f : pts[usize(t.splinePoint >= 0 ? t.splinePoint : int(pts.size()) - 1)].y;
+            glm::vec3 at = r.origin + r.direction * 8.0f;
+            if (auto hit = intersectRayPlane(r, Plane{{0, 1, 0}, -planeY}); hit && *hit > 0 && *hit < 2000) at = r.at(*hit);
+            best = insertSplinePoint(*m_ctx, t.target(), t.splinePoint >= 0 ? t.splinePoint : int(pts.size()) - 1, at);
+        }
+        t.splinePoint = best;
+        m_dirty = true;
+        return true;
+    }
+    if (t.tool() == ViewportTool::TerrainSculpt) {
+        updateSculptBrush(pos);
+        m_sculpting = m_brushPos.has_value();
+        m_dirty = true;
+        return true;
+    }
+    return false;
+}
+
+void ViewportPanel::updateSculptBrush(QPointF pos) {
+    Uuid terrain;
+    m_brushPos = raycastTerrain(m_ctx->engineServices(), m_ctx->world(), gizmoView().ray(pos), &terrain);
+    m_brushTerrain = terrain;
+}
+
+void ViewportPanel::tickTools(double dt) {
+    ToolState& t = m_ctx->tools();
+    if (t.tool() != ViewportTool::TerrainSculpt || !m_sculpting) return;
+    updateSculptBrush(m_lastPos);
+    if (!m_brushPos) return;
+    SculptSettings s = t.sculpt;
+    if (QApplication::keyboardModifiers() & Qt::ShiftModifier) s.op = SculptOp::Smooth;
+    else if ((QApplication::keyboardModifiers() & Qt::ControlModifier) && s.op == SculptOp::Raise) s.op = SculptOp::Lower;
+    const Uuid terrain = m_brushTerrain.isNil() ? t.target() : m_brushTerrain;
+    if (sculptTerrain(m_ctx->engineServices(), m_ctx->world(), terrain, {m_brushPos->x, m_brushPos->z}, s, float(dt))) m_dirty = true;
+}
+
+Uuid ViewportPanel::entityUnder(QPointF pos) {
+    World& w = m_ctx->world();
+    Uuid hit;
+    IViewportRenderer* r = renderer();
+    const qreal dpr = devicePixelRatioF();
+    if (m_gpuRenderer) {
+        const ViewportFrame f = makeFrame(QSize(int(m_surface->width() * dpr), int(m_surface->height() * dpr)));
+        if (r->pick(f, glm::ivec2(int(pos.x() * dpr), int(pos.y() * dpr)), hit)) return hit;
+    }
+    if (auto h = pickEntity(w, gizmoView(), pos, m_ctx->hiddenIds(), {})) hit = h->id;
+    return hit;
 }
 
 } // namespace ox::editor
