@@ -217,7 +217,11 @@ AboutDialog::AboutDialog(EditorContext* ctx, QWidget* parent) : QDialog(parent) 
         gl->addLayout(h);
     };
     row(tr("Qt"), QString::fromLatin1(qVersion()));
+#if defined(_MSC_VER) && !defined(__clang__)
+    row(tr("Compiler"), QStringLiteral("MSVC %1").arg(_MSC_FULL_VER));
+#else
     row(tr("Compiler"), QStringLiteral(__VERSION__).left(40));
+#endif
     row(tr("Integrated modules"), integratedModules().join(QStringLiteral(", ")));
     row(tr("Pending modules"), pendingModules().isEmpty() ? tr("none") : pendingModules().join(QStringLiteral(", ")));
     l->addWidget(grid);

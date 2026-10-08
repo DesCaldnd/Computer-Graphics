@@ -9,3 +9,4 @@ cmake-*/
 imgui.ini
 /samples/**/Saved/
 /samples/**/.oxcache/
+.claude/
