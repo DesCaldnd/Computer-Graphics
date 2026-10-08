@@ -1,5 +1,7 @@
 #include "render_fixture.hpp"
 
+#include <oxwald/render/features/postprocess/postprocess.hpp>
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -85,6 +87,7 @@ void RenderTest::SetUp() {
     desc.appName = "ox_render_gpu_tests";
     desc.validation = true;
     desc.shaderOptions.cacheDirectory = fs::temp_directory_path() / "oxwald_render_test_shader_cache";
+    appendUpscalerVulkanExtensions(desc); // NGX (DLSS) extensions where DLSS can run, like the runtime renderer
     std::string error;
     device = rhi::Device::create(desc, &error);
     if (!device) GTEST_SKIP() << "no Vulkan device: " << error;

@@ -58,7 +58,8 @@ public:
         }
         m_states.clear();
         d.destroy(m_fallback);
-        dlss::shutdown(d);
+        m_optimal.clear();
+        m_device = nullptr; // NGX itself stays up until the device is destroyed (dlss::probe)
     }
     void forget(DlssViewState* s) { std::erase(m_states, s); }
 

@@ -2,10 +2,12 @@
 // OX_ENABLE_DLSS); elsewhere the ox_dlss_syntax_check object library compiles it against the SDK headers so this file
 // stays buildable (it is never linked there).
 //
-// Flow: probe() → NVSDK_NGX_VULKAN_Init_with_ProjectID + GetCapabilityParameters + SuperSampling.Available;
-// optimalSettings() → NGX_DLSS_GET_OPTIMAL_SETTINGS; evaluate() → (re)create the per-view feature with
-// NGX_VULKAN_CREATE_DLSS_EXT1 (MVLowRes | IsHDR | DepthInverted [| AutoExposure]) and NGX_VULKAN_EVALUATE_DLSS_EXT;
-// release()/shutdown() → NVSDK_NGX_VULKAN_ReleaseFeature / DestroyParameters / Shutdown1.
+// Flow: probe() → (device created with the NGX extensions?) NVSDK_NGX_VULKAN_Init_with_ProjectID +
+// GetCapabilityParameters + SuperSampling.Available; optimalSettings() → NGX_DLSS_GET_OPTIMAL_SETTINGS; evaluate() →
+// (re)create the per-view feature with NGX_VULKAN_CREATE_DLSS_EXT1 (MVLowRes | IsHDR | DepthInverted
+// [| AutoExposure]) and NGX_VULKAN_EVALUATE_DLSS_EXT; release() → NVSDK_NGX_VULKAN_ReleaseFeature; shutdown() →
+// DestroyParameters / Shutdown1, from a rhi::Device shutdown callback: NGX keeps Vulkan objects on the device for as
+// long as it is initialised, whoever probed it (a Renderer or just upscalerAvailability()).
 #include "dlss_backend.hpp"
 
 #include <oxwald/core/log.hpp>
@@ -112,17 +114,43 @@ void requiredExtensions(std::vector<std::string>& instanceExtensions, std::vecto
     }
 }
 
-Status probe(rhi::Device& device) {
-    NgxState& s = state();
-    std::lock_guard lock(s.mutex);
-    if (s.probed && s.device == device.vkDevice()) return s.status;
-    s.probed = true;
-    s.device = device.vkDevice();
-    s.status = {};
+namespace {
+
+// NGX creates its pipelines with whatever NVSDK_NGX_VULKAN_RequiredExtensions lists (push descriptors, NVX binary
+// import, ...) without checking the device: calling it on a device that lacks them only produces validation errors
+// and NVSDK_NGX_Result_FAIL_PlatformError, so the check is done here.
+std::string missingExtensions(const rhi::Device& device) {
+    std::vector<std::string> inst, dev;
+    requiredExtensions(inst, dev);
+    std::string missing;
+    auto add = [&](const std::string& e) { missing += (missing.empty() ? "" : ", ") + e; };
+    for (const std::string& e : inst) {
+        if (!device.hasInstanceExtension(e)) add(e);
+    }
+    for (const std::string& e : dev) {
+        if (!device.hasDeviceExtension(e)) add(e);
+    }
+    return missing;
+}
+
+// Releases everything NGX holds on the device (state().mutex held).
+void shutdownLocked(NgxState& s, VkDevice device) {
+    if (s.params) NVSDK_NGX_VULKAN_DestroyParameters(s.params);
+    s.params = nullptr;
+    if (s.initialized) NVSDK_NGX_VULKAN_Shutdown1(device);
+    s.initialized = false;
+}
+
+Status probeLocked(NgxState& s, rhi::Device& device) {
+    Status st;
     if (device.caps().vendor != rhi::GpuVendor::Nvidia) {
-        s.status.reason = std::format("NVIDIA DLSS requires an NVIDIA RTX GPU (this GPU: {})", device.caps().gpuName);
-        g_unavailable = true;
-        return s.status;
+        st.reason = std::format("NVIDIA DLSS requires an NVIDIA RTX GPU (this GPU: {})", device.caps().gpuName);
+        return st;
+    }
+    if (const std::string missing = missingExtensions(device); !missing.empty()) {
+        st.reason = "the Vulkan device was created without the extensions NVIDIA NGX needs (" + missing +
+                    "): call render::appendUpscalerVulkanExtensions(DeviceDesc&) before rhi::Device::create";
+        return st;
     }
     std::error_code ec;
     const std::filesystem::path data = std::filesystem::temp_directory_path(ec) / "oxwald_ngx";
@@ -145,16 +173,14 @@ Status probe(rhi::Device& device) {
         kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, s.dataPath.c_str(), device.vkInstance(),
         device.vkPhysicalDevice(), device.vkDevice(), vkGetInstanceProcAddr, vkGetDeviceProcAddr, &info);
     if (NVSDK_NGX_FAILED(r)) {
-        s.status.reason = "NGX initialisation failed: " + resultText(r);
-        g_unavailable = true;
-        return s.status;
+        st.reason = "NGX initialisation failed: " + resultText(r);
+        return st;
     }
     s.initialized = true;
     r = NVSDK_NGX_VULKAN_GetCapabilityParameters(&s.params);
     if (NVSDK_NGX_FAILED(r) || !s.params) {
-        s.status.reason = "NGX capability parameters unavailable: " + resultText(r);
-        g_unavailable = true;
-        return s.status;
+        st.reason = "NGX capability parameters unavailable: " + resultText(r);
+        return st;
     }
     int needsDriver = 0;
     unsigned int minMajor = 0, minMinor = 0;
@@ -163,23 +189,40 @@ Status probe(rhi::Device& device) {
         needsDriver) {
         NVSDK_NGX_Parameter_GetUI(s.params, NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMajor, &minMajor);
         NVSDK_NGX_Parameter_GetUI(s.params, NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMinor, &minMinor);
-        s.status.reason = std::format("NVIDIA DLSS needs a newer driver (at least {}.{})", minMajor, minMinor);
-        g_unavailable = true;
-        return s.status;
+        st.reason = std::format("NVIDIA DLSS needs a newer driver (at least {}.{})", minMajor, minMinor);
+        return st;
     }
     int available = 0;
     r = NVSDK_NGX_Parameter_GetI(s.params, NVSDK_NGX_Parameter_SuperSampling_Available, &available);
     if (NVSDK_NGX_FAILED(r) || !available) {
         int initResult = 0;
         NVSDK_NGX_Parameter_GetI(s.params, NVSDK_NGX_Parameter_SuperSampling_FeatureInitResult, &initResult);
-        s.status.reason = "NVIDIA DLSS is not supported on this GPU/driver: " +
-                          resultText(NVSDK_NGX_Result(initResult ? initResult : int(r)));
-        g_unavailable = true;
-        return s.status;
+        st.reason = "NVIDIA DLSS is not supported on this GPU/driver: " +
+                    resultText(NVSDK_NGX_Result(initResult ? initResult : int(r)));
+        return st;
     }
-    s.status.available = true;
-    g_unavailable = false;
-    OX_LOG_INFO("render", "NVIDIA DLSS available (NGX initialised)");
+    st.available = true;
+    return st;
+}
+
+} // namespace
+
+Status probe(rhi::Device& device) {
+    NgxState& s = state();
+    std::lock_guard lock(s.mutex);
+    if (s.probed && s.device == device.vkDevice()) return s.status;
+    if (s.probed) {
+        // volk allows one rhi::Device at a time and its shutdown callback forgets it: not reachable in practice.
+        return {false, "NVIDIA NGX is bound to another Vulkan device"};
+    }
+    s.probed = true;
+    s.device = device.vkDevice();
+    s.status = probeLocked(s, device);
+    g_unavailable = !s.status.available;
+    if (s.status.available) OX_LOG_INFO("render", "NVIDIA DLSS available (NGX initialised)");
+    else shutdownLocked(s, s.device); // NGX came up but DLSS cannot run: keep nothing on the device
+    // The verdict (and NGX itself) lives exactly as long as the device.
+    device.addShutdownCallback([&device] { shutdown(device); });
     return s.status;
 }
 
@@ -246,17 +289,25 @@ bool evaluate(rhi::Device& device, rhi::CommandList& cmd, ViewFeature& f, const 
     NVSDK_NGX_VK_DLSS_Eval_Params e{};
     e.Feature.pInColor = &color;
     e.Feature.pInOutput = &output;
-    e.Feature.InSharpness = p.sharpness;
+    e.Feature.InSharpness = p.sharpness; // ignored by current DLSS models (NGX sharpening is deprecated)
     e.pInDepth = &depth;
     e.pInMotionVectors = &motion;
     e.pInExposureTexture = p.exposure ? &exposure : nullptr;
+    // Conventions verified on an RTX 3080 (NGX 310.9.1), see PostProcessTest.DlssStaticSceneConvergesAndStaysStable /
+    // DlssFollowsCameraMotion: flipping the sign of either jitter or either motion vector axis loses 2.5–15 dB.
+    // Jitter: the offset in render pixels (x right, y down) by which the jittered projection moves the image, i.e.
+    // RenderView::jitterPixels() as is (proj = translate(jitter * 2 / renderSize) * unjittered, NDC y down).
     e.InJitterOffsetX = p.jitterPixels.x;
     e.InJitterOffsetY = p.jitterPixels.y;
     e.InRenderSubrectDimensions = {p.renderWidth, p.renderHeight};
     e.InReset = p.reset ? 1 : 0;
-    // Velocity is uvCurrent - uvPrevious; NGX wants the pixel offset from the current to the previous position.
+    // Velocity is uvCurrent - uvPrevious (unjittered, uv y down, render resolution: MVLowRes without MVJittered);
+    // NGX wants the offset in render pixels from the current to the previous position.
     e.InMVScaleX = -f32(p.renderWidth);
     e.InMVScaleY = -f32(p.renderHeight);
+    // Colour is radiance × preExposure and the texture holds the absolute exposure: NGX evaluates
+    // colour / InPreExposure × exposure. Only presets J/K (Quality, Balanced, DLAA by default) read them; L/M
+    // (UltraPerformance, Performance) always use NGX's auto exposure.
     e.InPreExposure = p.preExposure;
     e.InExposureScale = 1.0f;
     e.InFrameTimeDeltaInMsec = p.frameTimeMs;
@@ -279,12 +330,11 @@ void shutdown(rhi::Device& device) {
     NgxState& s = state();
     std::lock_guard lock(s.mutex);
     if (!s.probed || s.device != device.vkDevice()) return;
-    if (s.params) NVSDK_NGX_VULKAN_DestroyParameters(s.params);
-    s.params = nullptr;
-    if (s.initialized) NVSDK_NGX_VULKAN_Shutdown1(device.vkDevice());
-    s.initialized = false;
+    shutdownLocked(s, s.device);
     s.probed = false;
     s.device = VK_NULL_HANDLE;
+    s.status = {};
+    g_unavailable = false; // the next device is probed afresh
 }
 
 } // namespace ox::render::dlss

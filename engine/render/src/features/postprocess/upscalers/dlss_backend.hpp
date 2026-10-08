@@ -32,9 +32,12 @@ struct Status {
     std::string reason; // NGX error text, driver update request, GPU vendor... (empty when available)
 };
 // Initialises NGX for `device` on first call (once per device; NVSDK_NGX_VULKAN_Init_with_ProjectID) and queries the
-// SuperSampling capability parameters. Cached afterwards. Thread: render thread.
+// SuperSampling capability parameters. Cached afterwards. NGX is not called at all on non-NVIDIA GPUs and on devices
+// created without requiredExtensions(). Registers shutdown() as a shutdown callback of the device.
+// Thread: render thread.
 Status probe(rhi::Device& device);
-// Process-wide: NGX was probed and failed (renderer falls back to TAAU without re-probing every frame).
+// The current device was probed and DLSS cannot run on it (renderer falls back to TAAU without re-probing every
+// frame). Forgotten when that device is destroyed.
 [[nodiscard]] bool knownUnavailable();
 
 // Instance/device extensions NGX requires (NVSDK_NGX_VULKAN_RequiredExtensions); empty without NGX.
@@ -76,7 +79,8 @@ bool evaluate(rhi::Device& device, rhi::CommandList& cmd, ViewFeature& feature, 
 // Releases a view's feature (view destroyed / DLSS switched off). Waits nothing: call after the GPU is idle or
 // from deferred destruction.
 void release(ViewFeature& feature);
-// Shuts NGX down for this device (Renderer destruction).
+// Shuts NGX down for this device and forgets the probe result. Every view feature must have been released. Called
+// by the device's shutdown callback (rhi::Device::addShutdownCallback); renderers only release their features.
 void shutdown(rhi::Device& device);
 
 } // namespace ox::render::dlss
