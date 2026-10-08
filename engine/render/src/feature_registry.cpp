@@ -255,6 +255,7 @@ void FeatureContext::drawBatches(rhi::CommandList& cmd, const DrawList& list, st
                                              list.indirectCountOffset + u64(r.countSlot) * 4, r.commandCount, stride);
                 m_frame->stats->drawCalls += 1;
                 m_frame->stats->indirectDrawCalls += 1;
+                m_frame->stats->indirectCountDrawCalls += 1;
             } else if (multiDraw) {
                 cmd.drawIndexedIndirect(list.indirectBuffer, offset, r.commandCount, stride);
                 m_frame->stats->drawCalls += 1;

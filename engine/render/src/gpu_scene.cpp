@@ -288,7 +288,10 @@ void GpuScene::updateInstances(const RenderSnapshot& snapshot, GpuResourceCache&
     m_movedBounds.clear();
     m_liveInstances = 0;
     m_movedInstances = 0;
-    const std::unordered_set<u32> selected(snapshot.selection.begin(), snapshot.selection.end());
+    // Sorted scratch instead of a temporary hash set: no allocation in steady state (an empty std::unordered_set
+    // already allocates its sentinel node and buckets on the MSVC STL).
+    m_selectedScratch.assign(snapshot.selection.begin(), snapshot.selection.end());
+    std::sort(m_selectedScratch.begin(), m_selectedScratch.end());
     for (const SnapshotMesh& sm : snapshot.meshes) {
         const GpuMesh* gm = cache.mesh(sm.mesh);
         if (!gm) continue;
@@ -331,7 +334,10 @@ void GpuScene::updateInstances(const RenderSnapshot& snapshot, GpuResourceCache&
             if (sm.flags & kMeshCastShadows) inst.flags |= kInstanceCastShadows;
             if (sm.flags & kMeshReceiveShadows) inst.flags |= kInstanceReceiveShadows;
             if (moved) inst.flags |= kInstanceMoved;
-            if (selected.count(sm.entityId)) inst.flags |= kInstanceSelected;
+            if (!m_selectedScratch.empty() &&
+                std::binary_search(m_selectedScratch.begin(), m_selectedScratch.end(), sm.entityId)) {
+                inst.flags |= kInstanceSelected;
+            }
             if (sm.paletteOffset != ~0u && mi.skinOffset != kInvalidIndex) {
                 inst.flags |= kInstanceSkinned;
                 inst.paletteOffset = sm.paletteOffset;

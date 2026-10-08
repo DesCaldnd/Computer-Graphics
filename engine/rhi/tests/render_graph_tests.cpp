@@ -258,6 +258,69 @@ TEST(RenderGraphPlan, AsyncComputeBatchesAndQueueOwnershipTransfer) {
     }
 }
 
+// A dedicated compute family (NVIDIA: compute | transfer only) cannot execute graphics stages, so no barrier recorded
+// on the compute queue may name them — also not the cross-frame ordering against last frame's graphics readers.
+TEST(RenderGraphPlan, AsyncComputeBarriersNameNoGraphicsStages) {
+    RenderGraph g;
+    RGTexture out = g.importTexture(TextureHandle{1, 1}, tex("Out"), {Access::Undefined, Access::Present});
+    RGTexture depth = g.createTexture(tex("Depth", 256, 256, VK_FORMAT_D32_SFLOAT));
+    RGTexture hiz = g.createTexture(tex("HiZ", 256, 256, VK_FORMAT_R32_SFLOAT));
+    RGBuffer particles = g.createBuffer({4096, BufferUsage::Storage, MemoryUsage::GpuOnly, "Particles"});
+    g.addPass("Simulate", PassType::Compute).queue(QueueType::Compute).overwrite(particles, Access::StorageWriteCompute);
+    g.addPass("DepthPrepass").depth(depth);
+    g.addPass("HiZ", PassType::Compute).queue(QueueType::Compute)
+        .read(depth, Access::SampledCompute).overwrite(hiz, Access::StorageWriteCompute);
+    g.addPass("Lighting").read(particles, Access::StorageReadGraphics).read(hiz, Access::SampledFragment)
+        .depth(depth, VK_ATTACHMENT_LOAD_OP_LOAD, {}, true).color(out);
+    RGCompileOptions o;
+    o.asyncCompute = true;
+    o.queueFamilies = {0, 1, 2};
+    const RenderGraphPlan& plan = g.compile(o);
+    constexpr VkPipelineStageFlags2 kGraphicsStages =
+        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    u32 computeBarriers = 0;
+    for (const auto& p : plan.passes) {
+        if (p.queue != QueueType::Compute) continue;
+        for (const auto* list : {&p.before, &p.after}) {
+            for (const RGBarrier& b : *list) {
+                ++computeBarriers;
+                EXPECT_EQ(b.srcStages & kGraphicsStages, 0u) << g.passName(p.pass) << " / " << g.resourceName(b.resource);
+                EXPECT_EQ(b.dstStages & kGraphicsStages, 0u) << g.passName(p.pass) << " / " << g.resourceName(b.resource);
+            }
+        }
+    }
+    EXPECT_GE(computeBarriers, 4u);
+}
+
+// Graphics passes that do not depend on the async batch stay in their own batch (no wait), so they overlap with it;
+// the batch is split before the first pass that touches a resource the compute queue used (even read after read:
+// the resource changes its owning queue family).
+TEST(RenderGraphPlan, IndependentGraphicsPassesDoNotWaitForAsyncCompute) {
+    RenderGraph g;
+    RGTexture out = g.importTexture(TextureHandle{1, 1}, tex("Out"), {Access::Undefined, Access::Present});
+    RGTexture depth = g.createTexture(tex("Depth", 256, 256, VK_FORMAT_D32_SFLOAT));
+    RGTexture hiz = g.createTexture(tex("HiZ", 256, 256, VK_FORMAT_R32_SFLOAT));
+    RGTexture shadow = g.createTexture(tex("Shadow", 256, 256, VK_FORMAT_D32_SFLOAT));
+    RGTexture mask = g.createTexture(tex("ShadowMask", 256, 256, VK_FORMAT_R8_UNORM));
+    g.addPass("DepthPrepass").depth(depth);
+    g.addPass("HiZ", PassType::Compute).queue(QueueType::Compute)
+        .read(depth, Access::SampledCompute).overwrite(hiz, Access::StorageWriteCompute);
+    g.addPass("Shadows").depth(shadow);
+    g.addPass("ShadowMask").read(depth, Access::SampledFragment).read(shadow, Access::SampledFragment).color(mask);
+    g.addPass("Lighting").read(hiz, Access::SampledFragment).read(mask, Access::SampledFragment).color(out);
+    RGCompileOptions o;
+    o.asyncCompute = true;
+    o.queueFamilies = {0, 1, 2};
+    const RenderGraphPlan& plan = g.compile(o);
+    ASSERT_EQ(plan.batches.size(), 4u);
+    EXPECT_EQ(plan.batches[1].queue, QueueType::Compute);
+    ASSERT_EQ(plan.batches[2].passes.size(), 1u) << "only Shadows: ShadowMask reads the depth HiZ took over";
+    EXPECT_TRUE(plan.batches[2].waitBatches.empty()) << "Shadows overlaps with the async batch";
+    EXPECT_EQ(plan.batches[3].waitBatches, std::vector<u32>{1});
+}
+
 TEST(RenderGraphPlan, SameFamilyQueuesUseSemaphoresOnly) {
     RenderGraph g;
     RGBuffer buf = g.importBuffer(BufferHandle{1, 1}, {4096, BufferUsage::Storage, MemoryUsage::GpuOnly, "Particles"},

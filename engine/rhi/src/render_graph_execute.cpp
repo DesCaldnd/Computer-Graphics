@@ -294,27 +294,42 @@ void RenderGraph::execute(Device& device, const RGExecuteOptions& options) {
     std::vector<TimelinePoint> points(plan.batches.size());
     std::array<bool, kQueueTypeCount> queueStarted{};
     std::vector<TimelinePoint> lastPoints;
+    std::vector<CommandList*> recorded(plan.batches.size(), nullptr);
+    u32 submitted = 0;
+    // Submits the recorded batches [submitted, end) in plan order.
+    auto submitUpTo = [&](u32 end) {
+        for (; submitted < end; ++submitted) {
+            const u32 b = submitted;
+            const RGBatch& batch = plan.batches[b];
+            CommandList& cmd = *recorded[b];
+            SubmitInfo si;
+            for (u32 w : batch.waitBatches) si.waits.push_back(points[w]);
+            if (b == 0) si.waits.insert(si.waits.end(), options.waits.begin(), options.waits.end());
+            if (!queueStarted[u32(batch.queue)]) {
+                // Transient memory is reused across frames: order against the previous execution on other queues.
+                for (const TimelinePoint& p : g.lastExecution) {
+                    if (p.queue != batch.queue) si.waits.push_back(p);
+                }
+                queueStarted[u32(batch.queue)] = true;
+            }
+            if (options.swapchain && i32(b) == firstGraphics) {
+                si.waitSemaphores.push_back({options.swapchain->acquireSemaphore(), 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
+            }
+            if (options.swapchain && i32(b) == lastGraphics) {
+                si.signalSemaphores.push_back(options.swapchain->presentSemaphore());
+            }
+            points[b] = device.submit(cmd, si);
+        }
+    };
     for (u32 b = 0; b < plan.batches.size(); ++b) {
         const RGBatch& batch = plan.batches[b];
         CommandList& cmd = device.commandList(batch.queue, std::format("rendergraph.batch{}", b));
         for (u32 pi : batch.passes) g.recordPass(cmd, device, plan.passes[pi], options.timestamps, options.timestampPrefix);
-        SubmitInfo si;
-        for (u32 w : batch.waitBatches) si.waits.push_back(points[w]);
-        if (b == 0) si.waits.insert(si.waits.end(), options.waits.begin(), options.waits.end());
-        if (!queueStarted[u32(batch.queue)]) {
-            // Transient memory is reused across frames: order against the previous execution on other queues.
-            for (const TimelinePoint& p : g.lastExecution) {
-                if (p.queue != batch.queue) si.waits.push_back(p);
-            }
-            queueStarted[u32(batch.queue)] = true;
-        }
-        if (options.swapchain && i32(b) == firstGraphics) {
-            si.waitSemaphores.push_back({options.swapchain->acquireSemaphore(), 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
-        }
-        if (options.swapchain && i32(b) == lastGraphics) {
-            si.signalSemaphores.push_back(options.swapchain->presentSemaphore());
-        }
-        points[b] = device.submit(cmd, si);
+        recorded[b] = &cmd;
+        // An async batch is held back until the following graphics batch is recorded and both are submitted back to
+        // back: submitted on its own it would be finished by the time the CPU has recorded the graphics passes that
+        // are meant to overlap with it.
+        if (batch.queue == QueueType::Graphics || b + 1 == plan.batches.size()) submitUpTo(b + 1);
     }
     if (options.swapchain && firstGraphics < 0) {
         CommandList& cmd = device.commandList(QueueType::Graphics, "rendergraph.present");

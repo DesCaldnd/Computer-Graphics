@@ -15,6 +15,8 @@ void RenderStats::resetCounters() {
     drawCalls = 0;
     indirectDrawCalls = 0;
     indirectCommands = 0;
+    indirectCountDrawCalls = 0;
+    meshShaderDrawCalls = 0;
     parallelRecordedChunks = 0;
     triangles = 0;
     instances = 0;
@@ -53,7 +55,10 @@ std::string RenderStats::toString() const {
         s += std::format("  async compute {:.3f} ms ({:.3f} ms overlapped), GPU wall {:.3f} ms\n", asyncComputeMs,
                          asyncOverlapMs, gpuFrameWallMs);
     }
-    if (indirectDrawCalls) s += std::format("  indirect: {} calls, {} commands\n", indirectDrawCalls, indirectCommands);
+    if (indirectDrawCalls) {
+        s += std::format("  indirect: {} calls ({} with GPU draw count), {} commands\n", indirectDrawCalls,
+                         indirectCountDrawCalls, indirectCommands);
+    }
     if (streaming.enabled) {
         s += std::format("  streaming: {} textures, {:.1f}/{:.1f} MiB (wanted {:.1f}), {} pending, +{} -{} mips\n",
                          streaming.streamedTextures, f64(streaming.residentBytes) / (1 << 20),

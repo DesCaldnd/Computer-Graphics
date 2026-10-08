@@ -182,7 +182,17 @@ private:
         bool operator==(const InstanceKey&) const = default;
     };
     struct KeyHash {
-        size_t operator()(const InstanceKey& k) const noexcept { return (u64(k.entity) << 16) ^ k.submesh; }
+        // Mixed (murmur finalizer): the MSVC STL masks the low bits of the hash for the bucket index, a plain
+        // shift-xor put every entity into one bucket (updateInstances became quadratic).
+        size_t operator()(const InstanceKey& k) const noexcept {
+            u64 h = (u64(k.entity) << 32) | k.submesh;
+            h ^= h >> 33;
+            h *= 0xff51afd7ed558ccdull;
+            h ^= h >> 33;
+            h *= 0xc4ceb9fe1a85ec53ull;
+            h ^= h >> 33;
+            return size_t(h);
+        }
     };
     void markInstanceDirty(u32 slot);
 
@@ -201,6 +211,7 @@ private:
     std::vector<u32> m_dirtyInstances, m_dirtyMaterials, m_dirtyMeshInfos;
     std::vector<u8> m_instanceDirtyFlag;
     std::vector<Sphere> m_movedBounds;
+    std::vector<u32> m_selectedScratch; // sorted copy of the snapshot's selection (updateInstances)
     u32 m_liveInstances = 0;
     u32 m_movedInstances = 0;
     u64 m_updateStamp = 0;

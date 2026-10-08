@@ -94,6 +94,49 @@ protected:
         mr.materials = {mat};
         return e;
     }
+    // Stress scene of docs/dev/perf.md: `count` instances (mixed primitives + an LOD sphere, 64 materials, 10 % alpha
+    // tested) on a 200 m field with occluding walls, sun + 4 cascades + 8 shadowed point lights. Random draws are
+    // sequenced explicitly (function arguments are evaluated in a different order by MSVC and clang), so every
+    // platform measures the same scene.
+    CameraParams buildStressScene(u32 count) {
+        const Uuid sphere = lodSphere();
+        Random rng(7);
+        std::vector<Uuid> mats;
+        for (int i = 0; i < 64; ++i) {
+            const glm::vec4 colour{rng.nextFloat(), rng.nextFloat(), rng.nextFloat(), 0.5f};
+            const f32 metallic = rng.chance(0.3f) ? 1.0f : 0.0f;
+            const f32 roughness = rng.range(0.2f, 0.9f);
+            mats.push_back(material(colour, metallic, roughness, glm::vec3(0.0f),
+                                    i % 10 == 0 ? assets::BlendMode::AlphaTest : assets::BlendMode::Opaque));
+        }
+        mesh(Primitive::Plane, material({0.5f, 0.5f, 0.5f, 1}, 0.0f, 0.9f), {0, 0, 0}, glm::vec3(220.0f));
+        for (int w = 0; w < 12; ++w) {
+            const glm::vec3 position{rng.range(-80.0f, 80.0f), 4.0f, rng.range(-80.0f, 60.0f)};
+            const glm::vec3 size{rng.range(15.0f, 40.0f), 8.0f, 1.0f};
+            mesh(Primitive::Cube, mats[1], position, size);
+        }
+        for (u32 i = 0; i < count; ++i) {
+            const glm::vec3 p{rng.range(-100.0f, 100.0f), 0.5f, rng.range(-100.0f, 100.0f)};
+            const Uuid& m = mats[rng.rangeInt(0, 63)];
+            if (i % 8 == 0) meshAsset(sphere, m, p + glm::vec3(0, 0.2f, 0), glm::vec3(rng.range(0.5f, 1.5f)));
+            else {
+                Primitive pr = Primitive(rng.rangeInt(0, int(Primitive::Count) - 1));
+                if (pr == Primitive::Plane) pr = Primitive::Cube;
+                mesh(pr, m, p, glm::vec3(rng.range(0.4f, 1.2f)));
+            }
+        }
+        for (int i = 0; i < 8; ++i) {
+            pointLight({rng.range(-20.0f, 20.0f), 2.0f, rng.range(-20.0f, 20.0f)}, 5000.0f, 10.0f, glm::vec3(1.0f), true);
+        }
+        sun(glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f)), 30000.0f);
+        environment();
+        return camera({0, 6, 95}, {0, 0, 40}, 13.0f, 60.0f, 400.0f);
+    }
+    static u32 stressInstanceCount() {
+        u32 count = 10000;
+        if (const char* e = std::getenv("OX_RENDER_PERF")) count = u32(std::max(1000, std::atoi(e)));
+        return count;
+    }
 };
 
 void expectSimilar(const Image& a, const Image& b, f64 maxMean, f64 maxBad, const char* what) {
@@ -124,7 +167,11 @@ TEST_F(GpuDrivenTest, MatchesCpuPathWithShadows) {
         const Primitive p = Primitive(rng.rangeInt(0, int(Primitive::Count) - 1));
         if (p == Primitive::Plane) continue;
         const Uuid m = i % 7 == 0 ? masked : material({rng.nextFloat(), rng.nextFloat(), rng.nextFloat(), 1.0f}, 0.0f, 0.5f);
-        mesh(p, m, {rng.range(-12.0f, 12.0f), 0.5f, rng.range(-12.0f, 12.0f)}, glm::vec3(rng.range(0.5f, 1.2f)));
+        // Explicit order (position, then scale): function arguments are evaluated right to left by MSVC, which
+        // would build a different scene than the one in the golden image.
+        const glm::vec3 position{rng.range(-12.0f, 12.0f), 0.5f, rng.range(-12.0f, 12.0f)};
+        const f32 scale = rng.range(0.5f, 1.2f);
+        mesh(p, m, position, glm::vec3(scale));
     }
     sun(glm::normalize(glm::vec3(-1.0f, -0.6f, -0.5f)), 20000.0f);
     spotLight({0, 5, 4}, {0, -1, -0.4f}, 20000.0f, 15.0f, 20.0f, 35.0f, true);
@@ -136,6 +183,8 @@ TEST_F(GpuDrivenTest, MatchesCpuPathWithShadows) {
     const RenderStats& s = renderer->stats();
     std::printf("%s", s.toString().c_str());
     EXPECT_GT(s.indirectDrawCalls, 0u);
+    // r.GpuDriven.DrawCount Auto: GPU-compacted commands + drawIndirectCount wherever the device has it.
+    EXPECT_EQ(s.indirectCountDrawCalls, device->caps().drawIndirectCount ? s.indirectDrawCalls : 0u);
     ASSERT_TRUE(s.gpuCulling.valid);
     EXPECT_GT(s.gpuCulling.shadowInstancesTested, 0u);
     EXPECT_GT(s.gpuCulling.shadowInstancesVisible, 0u);
@@ -291,40 +340,11 @@ TEST_F(GpuDrivenTest, ToggleAtRuntimeKeepsRendering) {
 
 namespace ox::render::test {
 
-// Stress scene for docs/dev/perf.md: N instances (mixed primitives + an LOD sphere, 64 materials, 10 % alpha
-// tested) on a 200 m field with occluding walls, sun + 4 cascades + 8 shadowed point lights, 1080p.
+// Stress scene for docs/dev/perf.md (buildStressScene), 1080p.
 // OX_RENDER_PERF=<instances> overrides the default 10k (the numbers in perf.md use 10000 and 50000).
 TEST_F(GpuDrivenTest, StressSceneTimings) {
-    u32 count = 10000;
-    if (const char* e = std::getenv("OX_RENDER_PERF")) count = u32(std::max(1000, std::atoi(e)));
-    const Uuid sphere = lodSphere();
-    Random rng(7);
-    std::vector<Uuid> mats;
-    for (int i = 0; i < 64; ++i) {
-        mats.push_back(material({rng.nextFloat(), rng.nextFloat(), rng.nextFloat(), 0.5f}, rng.chance(0.3f) ? 1.0f : 0.0f,
-                                rng.range(0.2f, 0.9f), glm::vec3(0.0f),
-                                i % 10 == 0 ? assets::BlendMode::AlphaTest : assets::BlendMode::Opaque));
-    }
-    mesh(Primitive::Plane, material({0.5f, 0.5f, 0.5f, 1}, 0.0f, 0.9f), {0, 0, 0}, glm::vec3(220.0f));
-    for (int w = 0; w < 12; ++w) {
-        mesh(Primitive::Cube, mats[1], {rng.range(-80.0f, 80.0f), 4.0f, rng.range(-80.0f, 60.0f)}, {rng.range(15.0f, 40.0f), 8.0f, 1.0f});
-    }
-    for (u32 i = 0; i < count; ++i) {
-        const glm::vec3 p{rng.range(-100.0f, 100.0f), 0.5f, rng.range(-100.0f, 100.0f)};
-        const Uuid& m = mats[rng.rangeInt(0, 63)];
-        if (i % 8 == 0) meshAsset(sphere, m, p + glm::vec3(0, 0.2f, 0), glm::vec3(rng.range(0.5f, 1.5f)));
-        else {
-            Primitive pr = Primitive(rng.rangeInt(0, int(Primitive::Count) - 1));
-            if (pr == Primitive::Plane) pr = Primitive::Cube;
-            mesh(pr, m, p, glm::vec3(rng.range(0.4f, 1.2f)));
-        }
-    }
-    for (int i = 0; i < 8; ++i) {
-        pointLight({rng.range(-20.0f, 20.0f), 2.0f, rng.range(-20.0f, 20.0f)}, 5000.0f, 10.0f, glm::vec3(1.0f), true);
-    }
-    sun(glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f)), 30000.0f);
-    environment();
-    const CameraParams cam = camera({0, 6, 95}, {0, 0, 40}, 13.0f, 60.0f, 400.0f);
+    const u32 count = stressInstanceCount();
+    const CameraParams cam = buildStressScene(count);
     CVarScope cache("r.Shadows.Caching", "false");
     {
         // Extract (game thread): serial vs parallelFor over the mesh renderers.
@@ -340,6 +360,13 @@ TEST_F(GpuDrivenTest, StressSceneTimings) {
         const f64 serial = time(nullptr), parallel = time(&jobs);
         std::printf("extract %zu meshes: serial %.2f ms, parallel (%u threads) %.2f ms\n", snapshot.meshes.size(), serial,
                     jobs.threadCount(), parallel);
+        // Render thread: snapshot → GPU scene instances (steady state, nothing moved).
+        render(cam, {.width = 256, .height = 144, .frames = 2});
+        GpuScene& scene = renderer->scene();
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int k = 0; k < 10; ++k) scene.updateInstances(snapshot, renderer->resources(), 0.0f, cam.position());
+        std::printf("GpuScene::updateInstances: %.2f ms\n",
+                    std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - t0).count() / 10.0);
     }
 
     struct Config {
@@ -379,7 +406,8 @@ TEST_F(GpuDrivenTest, StressSceneTimings) {
             cpu += std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - t0).count();
             device->endFrame();
             gpu += renderer->stats().gpuFrameMs;
-            for (const PassTiming& p : renderer->stats().passes) passMs[p.name] += p.gpuMs;
+            // Pass names carry the view prefix ("TestView/DepthPrepass").
+            for (const PassTiming& p : renderer->stats().passes) passMs[p.name.substr(p.name.rfind('/') + 1)] += p.gpuMs;
         }
         device->waitIdle();
         const RenderStats& s = renderer->stats();
@@ -462,6 +490,99 @@ TEST_F(GpuDrivenTest, AsyncComputeOverlapsGraphics) {
     EXPECT_GT(asyncMs, 0.0);
     // No overlap is asserted: MoltenVK serialises the queues (Metal hazard tracking over the bindless heap).
     expectSimilar(sync, async, 0.2, 0.001, "async vs sync");
+}
+
+// r.AsyncCompute and r.ParallelRecording Off / On on the stress scene, for docs/dev/perf.md and the Auto heuristics
+// (alternating rounds: other processes share the machine). OX_RENDER_PERF=<instances> as in StressSceneTimings.
+TEST_F(GpuDrivenTest, StressSceneAsyncComputeAndParallelRecording) {
+    JobSystem jobs(0);
+    renderer.reset();
+    view = 0;
+    renderer = Renderer::create(*device, {.jobs = &jobs});
+    renderer->features().emplace<HiZConsumer>(); // keeps the (async) HiZ pass alive, like SSR / SSAO would
+    const u32 count = stressInstanceCount();
+    const CameraParams cam = buildStressScene(count);
+    CVarScope cache("r.Shadows.Caching", "false");
+    struct Sample {
+        f64 gpu = 0, wall = 0, cpu = 0, frame = 0, asyncMs = 0, overlap = 0;
+        u32 draws = 0, chunks = 0, rounds = 0;
+    };
+    constexpr u32 kFrames = 8, kRounds = 4;
+    auto measure = [&](Sample& out) {
+        render(cam, {.width = 1920, .height = 1080, .frames = 4}); // warm-up after the CVar change
+        device->waitIdle();
+        const auto f0 = std::chrono::steady_clock::now();
+        for (u32 f = 0; f < kFrames; ++f) {
+            device->beginFrame();
+            const auto t0 = std::chrono::steady_clock::now();
+            renderer->beginFrame(snapshot);
+            ViewRenderRequest req;
+            req.view = view;
+            req.camera = cam;
+            req.target.texture = target;
+            req.target.finalAccess = rhi::Access::TransferRead;
+            renderer->renderView(req);
+            renderer->endFrame();
+            out.cpu += std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            device->endFrame();
+            const RenderStats& s = renderer->stats();
+            out.gpu += s.gpuFrameMs;
+            out.wall += s.gpuFrameWallMs;
+            out.asyncMs += s.asyncComputeMs;
+            out.overlap += s.asyncOverlapMs;
+        }
+        device->waitIdle();
+        out.frame += std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - f0).count();
+        out.draws = renderer->stats().drawCalls;
+        out.chunks = renderer->stats().parallelRecordedChunks;
+        ++out.rounds;
+    };
+    auto print = [&](const char* name, const Sample& s) {
+        const f64 n = f64(s.rounds) * kFrames;
+        std::printf("| %s | %.2f | %.2f | %.2f | %.2f | %.3f | %.3f | %u | %u |\n", name, s.frame / n, s.gpu / n, s.wall / n,
+                    s.cpu / n, s.asyncMs / n, s.overlap / n, s.draws, s.chunks);
+    };
+    std::printf("\nstress scene: %u instances, 1920x1080, %u job threads, %u rounds x %u frames\n", count, jobs.threadCount(),
+                kRounds, kFrames);
+    std::printf("| config | frame ms | GPU passes ms | GPU wall ms | CPU renderer ms | async ms | overlapped ms | draw calls | "
+                "parallel chunks |\n|---|---|---|---|---|---|---|---|---|\n");
+    {
+        CVarScope gpu("r.GpuDriven", "true");
+        Sample off, on;
+        for (u32 r = 0; r < kRounds; ++r) {
+            {
+                CVarScope a("r.AsyncCompute", "Off");
+                measure(off);
+            }
+            {
+                CVarScope a("r.AsyncCompute", "On");
+                measure(on);
+            }
+        }
+        print("GPU-driven, r.AsyncCompute Off", off);
+        print("GPU-driven, r.AsyncCompute On", on);
+        EXPECT_EQ(off.asyncMs, 0.0);
+        if (device->caps().asyncComputeQueue) EXPECT_GT(on.asyncMs, 0.0);
+    }
+    {
+        CVarScope cpu("r.GpuDriven", "false");
+        CVarScope a("r.AsyncCompute", "Off");
+        Sample off, on;
+        for (u32 r = 0; r < kRounds; ++r) {
+            {
+                CVarScope pr("r.ParallelRecording", "Off");
+                measure(off);
+            }
+            {
+                CVarScope pr("r.ParallelRecording", "On");
+                measure(on);
+            }
+        }
+        print("CPU path, r.ParallelRecording Off", off);
+        print("CPU path, r.ParallelRecording On", on);
+        EXPECT_EQ(off.chunks, 0u);
+        EXPECT_GT(on.chunks, 0u);
+    }
 }
 
 } // namespace ox::render::test
@@ -640,7 +761,11 @@ TEST_F(GpuDrivenTest, TextureStreamingRespectsBudget) {
     std::printf("near texture %u px, far texture %u px\n", nearSize, farSize);
     EXPECT_GT(nearSize, farSize);
     EXPECT_GE(nearSize, 128u);
-    GoldenResult g = compareGolden("gpu_driven_streaming", img);
+    // Every mip level has its own colour, so the image shows the hardware's LOD selection directly: under 16x
+    // anisotropy NVIDIA picks a slightly coarser level than Apple GPUs in the distance (3.7 % of the pixels differ
+    // from the MoltenVK golden on an RTX 3080, mean error 0.94). The residency itself is asserted above; a wrong
+    // resident mip recolours whole planes (> 10 % of the image).
+    GoldenResult g = compareGolden("gpu_driven_streaming", img, 2.0, 0.05);
     EXPECT_TRUE(g.matched) << g.message;
     // Raising the budget lets the near textures reach full resolution (no stalls: swaps happen on later frames).
     {
@@ -711,12 +836,19 @@ TEST_F(GpuDrivenTest, MeshShaderPathCompilesAndMatchesWhenSupported) {
         CVarScope ms("r.GpuDriven.MeshShaders", "false");
         resetView();
         compute = render(cam, {.width = 256, .height = 192, .frames = 3});
+        EXPECT_EQ(renderer->stats().meshShaderDrawCalls, 0u);
     }
     {
         CVarScope ms("r.GpuDriven.MeshShaders", "true");
         resetView();
         mesh = render(cam, {.width = 256, .height = 192, .frames = 3});
+        // Not vacuous: the task/mesh pipelines were created and the meshlets were drawn through them.
+        EXPECT_GT(renderer->stats().meshShaderDrawCalls, 0u) << "mesh shader path fell back to the compute expansion";
+        std::printf("mesh shader path: %u drawMeshTasksIndirect calls of %u draw calls\n",
+                    renderer->stats().meshShaderDrawCalls, renderer->stats().drawCalls);
     }
+    writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / "gpu_driven_meshlets_compute.png", compute);
+    writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / "gpu_driven_meshlets_mesh_shader.png", mesh);
     expectSimilar(compute, mesh, 0.3, 0.002, "mesh shaders vs compute meshlet expansion");
 }
 
@@ -726,7 +858,8 @@ namespace ox::render::test {
 
 // Cost of the fixed-max-count indirect draws (zero-instance padding, no drawIndirectCount on MoltenVK): 448 batches
 // (7 meshes × 64 materials) of which only a handful are visible. Compares the depth prepass of the GPU path (all
-// 448 commands submitted) with the CPU path (only the visible batches).
+// 448 commands submitted, or the compacted ones through drawIndirectCount) with the CPU path (only the visible
+// batches).
 TEST_F(GpuDrivenTest, IndirectPaddingCost) {
     Random rng(17);
     std::vector<Uuid> mats;
@@ -744,21 +877,36 @@ TEST_F(GpuDrivenTest, IndirectPaddingCost) {
     sun(glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 20000.0f, glm::vec3(1.0f), false);
     const CameraParams cam = camera({0, 1.5f, 3}, {0, 0.5f, -3}, 12.5f, 60.0f, 300.0f);
     CVarScope occl("r.GpuDriven.Occlusion", "false");
-    for (const char* gpu : {"false", "true", "false", "true"}) {
-        CVarScope g("r.GpuDriven", gpu);
-        resetView();
-        f64 prepass = 0.0, forward = 0.0;
-        for (int k = 0; k < 6; ++k) {
-            render(cam, {.width = 1920, .height = 1080, .frames = 2});
-            for (const PassTiming& p : renderer->stats().passes) {
-                if (p.name.ends_with("/DepthPrepass")) prepass += p.gpuMs;
-                if (p.name.ends_with("/ForwardOpaque")) forward += p.gpuMs;
+    // GPU path twice: fixed max count with padding, and (where the device has it) drawIndirectCount over the
+    // GPU-compacted commands (r.GpuDriven.DrawCount Auto picks the latter).
+    struct Config {
+        const char* name;
+        const char* gpuDriven;
+        const char* drawCount;
+    };
+    std::vector<Config> configs = {{"CPU path", "false", "Auto"}, {"GPU path, MaxCount (padding)", "true", "MaxCount"}};
+    if (device->caps().drawIndirectCount) configs.push_back({"GPU path, IndirectCount", "true", "IndirectCount"});
+    for (int round = 0; round < 2; ++round) {
+        for (const Config& c : configs) {
+            CVarScope g("r.GpuDriven", c.gpuDriven);
+            CVarScope dc("r.GpuDriven.DrawCount", c.drawCount);
+            resetView();
+            f64 prepass = 0.0, forward = 0.0;
+            for (int k = 0; k < 6; ++k) {
+                render(cam, {.width = 1920, .height = 1080, .frames = 2});
+                for (const PassTiming& p : renderer->stats().passes) {
+                    if (p.name.ends_with("/DepthPrepass")) prepass += p.gpuMs;
+                    if (p.name.ends_with("/ForwardOpaque")) forward += p.gpuMs;
+                }
             }
+            const RenderStats& s = renderer->stats();
+            std::printf("%-28s: DepthPrepass %.3f ms, ForwardOpaque %.3f ms, %u draw calls (%u with GPU draw count), "
+                        "%u indirect commands (%u non-empty)\n",
+                        c.name, prepass / 6, forward / 6, s.drawCalls, s.indirectCountDrawCalls, s.indirectCommands,
+                        s.gpuCulling.drawCommands);
+            if (std::string_view(c.drawCount) == "IndirectCount") EXPECT_EQ(s.indirectCountDrawCalls, s.indirectDrawCalls);
+            if (std::string_view(c.drawCount) == "MaxCount") EXPECT_EQ(s.indirectCountDrawCalls, 0u);
         }
-        const RenderStats& s = renderer->stats();
-        std::printf("r.GpuDriven %-5s: DepthPrepass %.3f ms, ForwardOpaque %.3f ms, %u draw calls, %u indirect commands "
-                    "(%u non-empty)\n",
-                    gpu, prepass / 6, forward / 6, s.drawCalls, s.indirectCommands, s.gpuCulling.drawCommands);
     }
 }
 

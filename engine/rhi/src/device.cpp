@@ -90,6 +90,33 @@ std::vector<u8> readFile(const fs::path& p) {
     return std::vector<u8>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
+// Pipeline stages a queue family supports (Vulkan spec, "Supported pipeline stage flags"). Naming any other stage in
+// a barrier recorded for that family is invalid, e.g. graphics stages on NVIDIA's compute-only family.
+VkPipelineStageFlags2 queueFamilyStages(VkQueueFlags flags) {
+    constexpr VkPipelineStageFlags2 kGraphicsOnly =
+        VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
+        VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT |
+        VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT |
+        VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_RESOLVE_BIT |
+        VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR | VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT |
+        VK_PIPELINE_STAGE_2_FRAGMENT_DENSITY_PROCESS_BIT_EXT;
+    constexpr VkPipelineStageFlags2 kComputeOnly =
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR;
+    constexpr VkPipelineStageFlags2 kGraphicsOrCompute =
+        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT |
+        VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
+    VkPipelineStageFlags2 stages = ~0ull;
+    if (!(flags & VK_QUEUE_GRAPHICS_BIT)) stages &= ~kGraphicsOnly;
+    if (!(flags & VK_QUEUE_COMPUTE_BIT)) stages &= ~kComputeOnly;
+    if (!(flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))) stages &= ~kGraphicsOrCompute;
+    return stages;
+}
+
 } // namespace
 
 // Implemented in profiling.cpp
@@ -531,6 +558,7 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
             pq.index = slots[t].index;
             vkGetDeviceQueue(s.device, pq.family, pq.index, &pq.queue);
             pq.timestamps = families[pq.family].timestampValidBits > 0;
+            pq.stages = queueFamilyStages(families[pq.family].queueFlags);
             VkSemaphoreTypeCreateInfo ti{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
             ti.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
             ti.initialValue = 0;
@@ -865,17 +893,9 @@ void Device::setDebugName(VkObjectType type, u64 handle, std::string_view name) 
 }
 
 VkPipelineStageFlags2 DeviceState::sanitizeStages(VkPipelineStageFlags2 st, QueueType q) const {
-    st &= supportedStages;
-    if (q == QueueType::Transfer && queueOf[u32(QueueType::Transfer)] != queueOf[u32(QueueType::Graphics)]) {
-        // Dedicated transfer queues only accept transfer/host stages.
-        const VkPipelineStageFlags2 allowed = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT |
-                                              VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT |
-                                              VK_PIPELINE_STAGE_2_HOST_BIT | VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        if (queues[queueOf[u32(QueueType::Transfer)]].family != queues[queueOf[u32(QueueType::Graphics)]].family) {
-            st &= allowed;
-        }
-    }
-    return st;
+    // Barriers may only name stages the command buffer's queue family can execute (a dedicated compute family has
+    // no graphics stages, a dedicated transfer family only copies).
+    return st & supportedStages & queues[queueOf[u32(q)]].stages;
 }
 
 VkAccessFlags2 DeviceState::sanitizeAccess(VkAccessFlags2 a) const { return a & supportedAccess; }

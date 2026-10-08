@@ -402,7 +402,7 @@ void RenderGraph::Impl::compileFull(const RGCompileOptions& o) {
     // pass that depends on another queue's batch the current batch does not wait for yet: semaphore waits apply to
     // whole submissions, so the independent passes before it keep overlapping with async compute.
     {
-        std::vector<i32> writerBatch(resCount, -1);
+        std::vector<i32> writerBatch(resCount, -1), lastBatch(resCount, -1);
         std::vector<std::vector<i32>> readerBatches(resCount);
         std::vector<i32> batchDeps, need;
         for (u32 p = 0; p < passCount; ++p) {
@@ -417,6 +417,10 @@ void RenderGraph::Impl::compileFull(const RGCompileOptions& o) {
             for (const auto& a : passes[p].accesses) {
                 const i32 wb = writerBatch[a.resource];
                 if (wb >= 0 && out.batches[u32(wb)].queue != pp.queue) need.push_back(wb);
+                // Any access after another queue's (even read after read) waits for that batch: the resource
+                // changes its owning queue (step 5).
+                const i32 lb = lastBatch[a.resource];
+                if (lb >= 0 && out.batches[u32(lb)].queue != pp.queue) need.push_back(lb);
                 if (isWrite(a.access)) {
                     for (i32 rb : readerBatches[a.resource]) {
                         if (out.batches[u32(rb)].queue != pp.queue) need.push_back(rb);
@@ -442,6 +446,7 @@ void RenderGraph::Impl::compileFull(const RGCompileOptions& o) {
                 } else {
                     readerBatches[a.resource].push_back(i32(pp.batch));
                 }
+                lastBatch[a.resource] = i32(pp.batch);
             }
             out.batches.back().passes.push_back(u32(out.passes.size()));
             out.passes.push_back(std::move(pp));
@@ -787,6 +792,9 @@ void RenderGraph::Impl::compileFull(const RGCompileOptions& o) {
         const ResState& first = states[slot.resources.front()];
         const ResState& last = states[slot.resources.back()];
         if (first.firstBarrierPass < 0) continue;
+        // Stages of another queue family are not valid in this queue's barrier (e.g. fragment stages on a dedicated
+        // compute family); there the execution waits on the previous frame's submissions of the other queues instead.
+        if (familyOf(out.passes[u32(first.firstBarrierPass)].queue) != familyOf(last.queue)) continue;
         RGBarrier& br = out.passes[u32(first.firstBarrierPass)].before[u32(first.firstBarrierIndex)];
         br.srcStages |= last.writeStages | last.readStages;
         br.srcAccessMask |= last.writeAccess;

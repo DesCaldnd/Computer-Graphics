@@ -888,6 +888,7 @@ void GpuDriven::drawMeshlets(FrameState& fs, rhi::CommandList& cmd, bool late, b
             cmd.pushConstants(mp);
             cmd.drawMeshTasksIndirect(md.taskArgs.buffer, md.taskArgs.offset);
             fs.stats->drawCalls += 1;
+            fs.stats->meshShaderDrawCalls += 1;
             fs.stats->indirectDrawCalls += 1;
             fs.stats->indirectCommands += 1;
         }

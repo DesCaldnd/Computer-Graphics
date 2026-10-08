@@ -83,6 +83,7 @@ struct PhysicalQueue {
     VkSemaphore timeline = VK_NULL_HANDLE;
     u64 submitted = 0;
     bool timestamps = false;
+    VkPipelineStageFlags2 stages = ~0ull; // pipeline stages commands of this queue family may name in barriers
     std::unique_ptr<std::mutex> mutex = std::make_unique<std::mutex>();
 };
 

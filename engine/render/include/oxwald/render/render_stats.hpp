@@ -70,6 +70,8 @@ struct RenderStats {
     u32 drawCalls = 0;          // API draw calls (an indirect multi-draw counts once)
     u32 indirectDrawCalls = 0;  // of which indirect (GPU-driven)
     u32 indirectCommands = 0;   // indirect commands submitted (fixed max count incl. empty padding)
+    u32 indirectCountDrawCalls = 0; // indirect calls whose draw count comes from the GPU (drawIndirectCount)
+    u32 meshShaderDrawCalls = 0;    // drawMeshTasksIndirect calls (VK_EXT_mesh_shader meshlet path)
     u64 triangles = 0;
     u32 instances = 0;         // GPU scene instances (entity × submesh)
     u32 visibleInstances = 0;  // after camera culling, all views
