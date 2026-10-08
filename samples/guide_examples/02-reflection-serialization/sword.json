@@ -1,0 +1,10 @@
+{
+  "format": "oxb1-json",
+  "kind": "item",
+  "version": 1,
+  "data": {
+    "name": "Sword of Testing",
+    "damage": 42.5,
+    "tags": ["melee", "legendary"]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "blackboard": { "alert": false, "ammo": 3 },
+  "root": {
+    "type": "Selector", "name": "Root",
+    "children": [
+      { "type": "BlackboardCondition", "name": "HasTarget", "key": "target", "op": "IsSet", "abort": "Both",
+        "child": { "type": "Sequence", "name": "Combat", "children": [
+          { "type": "BlackboardCondition", "key": "ammo", "op": "Greater", "value": 0 },
+          { "type": "Action", "action": "Shoot" },
+          { "type": "Wait", "seconds": 0.2 }
+        ] } },
+      { "type": "Repeater", "count": -1, "child": { "type": "SubTree", "tree": "Patrol" } }
+    ]
+  }
+}

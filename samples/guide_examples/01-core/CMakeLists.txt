@@ -1,0 +1,8 @@
+ox_guide_example(core_log_result SOURCES log_result.cpp DEPS Oxwald::core)
+ox_guide_example(core_math SOURCES math.cpp DEPS Oxwald::core)
+ox_guide_example(core_ids_hashes SOURCES ids_hashes.cpp DEPS Oxwald::core)
+ox_guide_example(core_services_events SOURCES services_events.cpp DEPS Oxwald::core)
+ox_guide_example(core_jobs SOURCES jobs.cpp DEPS Oxwald::core)
+ox_guide_example(core_files SOURCES vfs.cpp file_watcher.cpp DEPS Oxwald::core)
+ox_guide_example(core_memory_time SOURCES memory.cpp time_profile.cpp debug_draw.cpp DEPS Oxwald::core)
+ox_guide_example(core_lua_log SOURCES lua_log.cpp DEPS Oxwald::script)

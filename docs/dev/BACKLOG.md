@@ -1,0 +1,14 @@
+# Integration backlog (found while writing the guide and integrating modules)
+
+- core/script: cvar duplicate check case-sensitive while `find` isn't; no Lua binding for cvars; setting `r.*` cvars via `set()`/`execute()` doesn't trigger graphics apply; Lua `log.*` ignores minLevel; stderr log sink can't be disabled.
+- runtime: OxwaldPlayer ignores `--pak` and always uses NullRenderer (render team wiring); renderer destroyed in `shutdown()`; `listSlots()` decodes every save fully (should read header only); `ISaveable` must be unregistered manually; typos in input sources / project `modules` fail silently.
+- scene: no tag-only component.
+- script: `bindApi` APIs don't reach environments created earlier (contradicts script.md); only `input` has Lua bindings from runtime.
+- net/async: no public test harness; timed-out RPC can't be cancelled individually.
+- audio: `loadSound` takes only a filesystem path (no VFS / memory); runtime overrides bus volumes on every audio settings change; no ready physics occlusion provider (gameplay has one?) — verify.
+- ai/world: `BTContext::user` is `void*`; streamer doesn't call `onUnload` on destruction.
+- spline/animation: const spline queries not thread-safe until `rebuild()`; animation uses its own serialization instead of `ox::serial`; `Animator` holds raw skeleton pointer.
+- rhi: no public API for manual Tracy GPU zones; no Xcode GPU capture trigger; `ShaderCompileDesc` can't set include dirs for inline source.
+- vcpkg: moltenvk port should keep a valid code signature (deploy step re-signs today).
+- net: replicated field set fixed at spawn, no arrays/maps replication.
+- gameplay: one script per entity; child colliders not merged into parent bodies; raycasts empty in edit mode.
