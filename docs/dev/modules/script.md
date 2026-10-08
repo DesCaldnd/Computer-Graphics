@@ -177,3 +177,12 @@ Throwing from a binding is safe (sol2 turns it into a Lua error, which is then l
 * Module hot reload reloads every file script (no dependency tracking yet).
 * Coroutines yield across `pcall` fine, but not across C++ callbacks (e.g. inside an `events` handler).
 * No debugger/profiler hooks yet (a `debug` library for the editor build could be added behind a config flag).
+
+## Async bridge (optional, with the `async` module)
+
+When `async` is configured, `engine/script/async/async_bridge.cpp` is compiled into `ox_script` (which then links
+`Oxwald::async`, `OX_SCRIPT_HAS_ASYNC=1`). `ox::script::AsyncBridge` (`oxwald/script/async_bridge.hpp`) exposes
+`ox::Future<T>` to Lua (`local v = await(f)` inside `spawn`ed coroutines, `Future:isReady/hasError/error/get`) and lets
+C++ coroutines `co_await` script functions (`bridge.call(fn, ...)`, `bridge.invoke(instance, "fn", ...)`). Call
+`bridge.update()` before `vm.update(dt)`. To park coroutines without polling, `Scheduler` gained `currentTaskId()` and
+`wake(id)` (a task yielding `math.huge` sleeps until woken). Details and examples: `docs/dev/modules/async.md`.

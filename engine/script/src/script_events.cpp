@@ -117,6 +117,7 @@ bool Scheduler::resume(u64 id, lua_State* from, int nargs) {
     lua_State* co = it->second.thread;
     it->second.running = true;
     m_running.push_back(co);
+    m_runningIds.push_back(id);
     int nres = 0;
     int status;
     {
@@ -124,6 +125,7 @@ bool Scheduler::resume(u64 id, lua_State* from, int nargs) {
         status = lua_resume(co, from, nargs, &nres);
     }
     m_running.pop_back();
+    m_runningIds.pop_back();
     Task& task = m_tasks[id]; // std::map: nested spawns never invalidate it
     task.running = false;
 
@@ -153,6 +155,12 @@ u64 Scheduler::addTimer(f64 delay, f64 interval, sol::protected_function fn, u64
     const u64 id = ++m_nextId;
     m_timers.push_back(Timer{id, owner, m_time + std::max(0.0, delay), interval, std::move(fn)});
     return id;
+}
+
+void Scheduler::wake(u64 id) {
+    if (auto it = m_tasks.find(id); it != m_tasks.end() && !it->second.cancelled) {
+        it->second.wakeTime = std::min(it->second.wakeTime, m_time);
+    }
 }
 
 void Scheduler::cancel(u64 id) {

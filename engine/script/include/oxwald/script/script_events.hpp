@@ -66,6 +66,12 @@ public:
     bool inTask(struct lua_State* L) const;
     void clear();
 
+    // Parking support (used by the async bridge's `await`): a task that yields math.huge sleeps until wake(id).
+    // currentTaskId() is the innermost running task (0 outside tasks); wake() makes a parked task due at the next
+    // update() and ignores unknown/finished ids.
+    u64 currentTaskId() const { return m_runningIds.empty() ? 0 : m_runningIds.back(); }
+    void wake(u64 id);
+
 private:
     struct Task {
         struct lua_State* thread = nullptr;
@@ -93,6 +99,7 @@ private:
     std::map<u64, Task> m_tasks;
     std::vector<Timer> m_timers;
     std::vector<struct lua_State*> m_running; // stack of currently resumed task threads
+    std::vector<u64> m_runningIds;            // ids parallel to m_running
 };
 
 } // namespace ox::script
