@@ -20,6 +20,11 @@ layout(set = 0, binding = 0) uniform texture2DArray oxTextures2DArray[];
 layout(set = 0, binding = 0) uniform textureCube oxTexturesCube[];
 layout(set = 0, binding = 0) uniform texture3D oxTextures3D[];
 layout(set = 0, binding = 0) uniform utexture2D oxUTextures2D[];
+// Depth textures sampled with comparison samplers get their own aliases: on Metal (MoltenVK / SPIRV-Cross) an array
+// used with a shadow sampler is typed depth2d<float>, which would make every other texture read through the same
+// array return its red channel replicated.
+layout(set = 0, binding = 0) uniform texture2D oxShadowTextures2D[];
+layout(set = 0, binding = 0) uniform texture2DArray oxShadowTextures2DArray[];
 layout(set = 0, binding = 2) uniform sampler oxSamplers[];
 layout(set = 0, binding = 2) uniform samplerShadow oxShadowSamplers[];
 
@@ -51,7 +56,8 @@ const uint OX_INVALID_INDEX = 0xFFFFFFFFu;
 #define OX_SAMPLE_2D_ARRAY(tex, smp, uvw) texture(sampler2DArray(OX_TEX2D_ARRAY(tex), OX_SAMPLER(smp)), (uvw))
 #define OX_SAMPLE_CUBE(tex, smp, dir) texture(samplerCube(OX_TEXCUBE(tex), OX_SAMPLER(smp)), (dir))
 #define OX_SAMPLE_3D(tex, smp, uvw) texture(sampler3D(OX_TEX3D(tex), OX_SAMPLER(smp)), (uvw))
-#define OX_SAMPLE_SHADOW(tex, uvz) texture(sampler2DShadow(OX_TEX2D(tex), oxShadowSamplers[OX_SAMPLER_SHADOW]), (uvz))
+#define OX_SAMPLE_SHADOW(tex, uvz) texture(sampler2DShadow(oxShadowTextures2D[nonuniformEXT(tex)], oxShadowSamplers[OX_SAMPLER_SHADOW]), (uvz))
+#define OX_SAMPLE_SHADOW_ARRAY(tex, uvwz) texture(sampler2DArrayShadow(oxShadowTextures2DArray[nonuniformEXT(tex)], oxShadowSamplers[OX_SAMPLER_SHADOW]), (uvwz))
 #define OX_FETCH_2D(tex, coord, lod) texelFetch(OX_TEX2D(tex), (coord), (lod))
 
 #define OX_IMAGE2D(fmt, idx) oxImages2D_##fmt[nonuniformEXT(idx)]

@@ -1,6 +1,9 @@
 // OxwaldPlayer: runs a project (loose directory or cooked pak) without the editor.
 #include <oxwald/core/log.hpp>
 #include <oxwald/runtime/runtime.hpp>
+#if OX_HAS_RENDER && OX_RENDER_HAS_RUNTIME
+#include <oxwald/render/runtime_renderer.hpp>
+#endif
 
 #include <cstdio>
 
@@ -13,10 +16,6 @@ int main(int argc, char** argv) {
     if (options->help) {
         std::printf("%s", ox::launchUsage().c_str());
         return 0;
-    }
-    if (!options->pak.empty()) {
-        // TODO(assets): mount the pak over project:// once the assets module exposes its IMountSource.
-        OX_LOG_WARN("player", "--pak is not supported yet; use --project with a loose project directory");
     }
 
     ox::Engine engine;
@@ -46,8 +45,10 @@ int main(int argc, char** argv) {
         config.headless = true;
     }
 #endif
-    // TODO(render): engine.setRenderer(ox::render::createRenderer()) once the render module implements IRenderer.
-    // Until then the NullRenderer keeps the frame pipeline (game thread + render thread) running.
+#if OX_HAS_RENDER && OX_RENDER_HAS_RUNTIME
+    // Vulkan renderer (headless runs render offscreen). Dedicated servers keep the NullRenderer.
+    if (!config.dedicatedServer) engine.setRenderer(ox::render::createRenderer());
+#endif
 
     if (auto st = engine.init(config); !st) {
         std::fprintf(stderr, "OxwaldPlayer: %s\n", st.error().message.c_str());

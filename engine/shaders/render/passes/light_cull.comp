@@ -1,0 +1,93 @@
+#version 460
+// Clustered light culling: one invocation per cluster tests every local light (loaded cooperatively into shared
+// memory, 64 at a time) against the cluster's view-space AABB. Writes counts + fixed-size index lists.
+#include <render/common/clusters.glsl>
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 64) in;
+
+OX_RENDER_PUSH(uint unused;);
+
+shared vec4 sLights[64]; // view-space bounding sphere (xyz, radius)
+shared uint sIndex[64];
+
+vec3 clusterPoint(vec2 ndc, float depth, bool ortho) {
+    if (ortho) {
+        vec4 p = VIEW.invProj * vec4(ndc, 0.5, 1.0);
+        return vec3(p.xy / p.w, -depth);
+    }
+    vec4 p = VIEW.invProj * vec4(ndc, 1.0, 1.0); // a point on the near plane
+    vec3 v = p.xyz / p.w;
+    return v * (depth / -v.z);
+}
+
+void main() {
+    uvec3 grid = VIEW.clusterGrid.xyz;
+    uint maxPerCluster = VIEW.clusterGrid.w;
+    uint clusterCount = grid.x * grid.y * grid.z;
+    uint cluster = gl_GlobalInvocationID.x;
+    bool inRange = cluster < clusterCount;
+    uint cx = cluster % grid.x;
+    uint cy = (cluster / grid.x) % grid.y;
+    uint cz = cluster / (grid.x * grid.y);
+
+    // Slice depth range (exponential).
+    float zNear = VIEW.clusterDepth.z, zFar = VIEW.clusterDepth.w;
+    float d0 = zNear * pow(zFar / zNear, float(cz) / float(grid.z));
+    float d1 = zNear * pow(zFar / zNear, float(cz + 1u) / float(grid.z));
+    bool ortho = (VIEW.flags & OX_VIEW_ORTHOGRAPHIC) != 0u;
+    vec2 ndcMin = vec2(cx, cy) / vec2(grid.xy) * 2.0 - 1.0;
+    vec2 ndcMax = vec2(cx + 1u, cy + 1u) / vec2(grid.xy) * 2.0 - 1.0;
+    vec3 bmin = vec3(1e30), bmax = vec3(-1e30);
+    for (uint i = 0u; i < 4u; ++i) {
+        vec2 ndc = vec2((i & 1u) != 0u ? ndcMax.x : ndcMin.x, (i & 2u) != 0u ? ndcMax.y : ndcMin.y);
+        vec3 a = clusterPoint(ndc, d0, ortho);
+        vec3 b = clusterPoint(ndc, d1, ortho);
+        bmin = min(bmin, min(a, b));
+        bmax = max(bmax, max(a, b));
+    }
+
+    LightBuffer lights = SCENE.lights;
+    uint first = SCENE.directionalLightCount;
+    uint total = SCENE.lightCount;
+    mat4 view = VIEW.view;
+    uint count = 0u;
+    for (uint base = first; base < total; base += 64u) {
+        uint li = base + gl_LocalInvocationID.x;
+        if (li < total) {
+            Light l = lights.l[li];
+            vec3 center = l.position;
+            float radius = l.range;
+            if (l.type == OX_LIGHT_SPOT) {
+                // Bounding sphere of the cone (spotOffset = -cos(outer) * spotScale).
+                float cosOuter = clamp(-l.spotOffset / max(l.spotScale, 1e-6), 0.0, 1.0);
+                if (cosOuter > 0.70710678) {
+                    float r = l.range / (2.0 * cosOuter);
+                    center = l.position + l.direction * r;
+                    radius = r;
+                } else {
+                    float sinOuter = sqrt(1.0 - cosOuter * cosOuter);
+                    center = l.position + l.direction * (l.range * cosOuter);
+                    radius = l.range * sinOuter;
+                }
+            }
+            sLights[gl_LocalInvocationID.x] = vec4((view * vec4(center, 1.0)).xyz, radius);
+            sIndex[gl_LocalInvocationID.x] = li;
+        }
+        barrier();
+        uint n = min(64u, total - base);
+        if (inRange) {
+            for (uint i = 0u; i < n; ++i) {
+                vec4 sphere = sLights[i];
+                vec3 closest = clamp(sphere.xyz, bmin, bmax);
+                vec3 d = sphere.xyz - closest;
+                if (dot(d, d) <= sphere.w * sphere.w) {
+                    if (count < maxPerCluster) VIEW.clusters.data[clusterCount + cluster * maxPerCluster + count] = sIndex[i];
+                    count++;
+                }
+            }
+        }
+        barrier();
+    }
+    if (inRange) VIEW.clusters.data[cluster] = min(count, maxPerCluster);
+}

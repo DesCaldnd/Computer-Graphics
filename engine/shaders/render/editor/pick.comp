@@ -1,0 +1,12 @@
+#version 460
+// Copies an EntityID rect into a readback buffer (render resolution coordinates).
+#include <common/bindless.glsl>
+layout(local_size_x = 8, local_size_y = 8) in;
+OX_BUFFER(PickOut, { uint ids[]; });
+OX_PUSH_CONSTANTS({ PickOut dst; uint entityTex; uint x; uint y; uint w; uint h; });
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= pc.w || p.y >= pc.h) return;
+    uint id = texelFetch(oxUTextures2D[nonuniformEXT(pc.entityTex)], ivec2(pc.x + p.x, pc.y + p.y), 0).r;
+    pc.dst.ids[p.y * pc.w + p.x] = id;
+}

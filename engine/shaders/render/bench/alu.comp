@@ -1,0 +1,16 @@
+#version 460
+#include <common/bindless.glsl>
+layout(local_size_x = 256) in;
+OX_BUFFER(Out, { vec4 v[]; });
+OX_PUSH_CONSTANTS({ Out dst; uint iterations; float seed; });
+void main() {
+    vec4 a = vec4(gl_GlobalInvocationID.x) * 1e-6 + pc.seed;
+    vec4 b = a + 0.1, c = a + 0.2, d = a + 0.3;
+    const vec4 m = vec4(0.9999), k = vec4(1e-4);
+    for (uint i = 0u; i < pc.iterations; ++i) {
+        a = a * m + k; b = b * m + k; c = c * m + k; d = d * m + k;
+        a = a * m + k; b = b * m + k; c = c * m + k; d = d * m + k;
+    }
+    vec4 r = a + b + c + d;
+    if (r.x == 12345.678) pc.dst.v[gl_GlobalInvocationID.x] = r; // practically never: keeps the loop alive
+}

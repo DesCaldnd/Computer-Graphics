@@ -1,0 +1,35 @@
+#version 460
+// GGX prefiltered specular cube (split sum, N = V = R) with filtered importance sampling (Colbert & Krivanek):
+// each sample reads a source mip matching its solid angle → noise-free with few samples.
+#include <render/common/pbr.glsl>
+#include <render/common/view.glsl>
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+OX_PUSH_CONSTANTS({ uint src; uint dst; uint size; uint srcSize; float roughness; uint sampleCount; float srcMips; });
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= pc.size || id.y >= pc.size) return;
+    vec2 uv = (vec2(id.xy) + 0.5) / float(pc.size);
+    vec3 N = oxCubeDirection(id.z, uv);
+    if (pc.roughness <= 0.0) {
+        imageStore(oxImages2DArray_rgba16f[nonuniformEXT(pc.dst)], ivec3(id), vec4(textureLod(samplerCube(OX_TEXCUBE(pc.src), OX_SAMPLER(OX_SAMPLER_LINEAR_CLAMP)), N, 0.0).rgb, 1.0));
+        return;
+    }
+    float a = pc.roughness * pc.roughness;
+    float texelSolidAngle = 4.0 * OX_PI / (6.0 * float(pc.srcSize * pc.srcSize));
+    vec3 sum = vec3(0.0);
+    float weight = 0.0;
+    for (uint i = 0u; i < pc.sampleCount; ++i) {
+        vec2 xi = oxHammersley(i, pc.sampleCount);
+        vec3 H = oxImportanceSampleGGX(xi, a, N);
+        vec3 L = 2.0 * dot(N, H) * H - N;
+        float NdotL = dot(N, L);
+        if (NdotL <= 0.0) continue;
+        float NdotH = clamp(dot(N, H), 0.0, 1.0);
+        float pdf = oxDGGX(NdotH, a) * 0.25;
+        float sampleSolidAngle = 1.0 / (float(pc.sampleCount) * pdf + 1e-6);
+        float lod = clamp(0.5 * log2(sampleSolidAngle / texelSolidAngle) + 1.0, 0.0, pc.srcMips - 1.0);
+        sum += textureLod(samplerCube(OX_TEXCUBE(pc.src), OX_SAMPLER(OX_SAMPLER_LINEAR_CLAMP)), L, lod).rgb * NdotL;
+        weight += NdotL;
+    }
+    imageStore(oxImages2DArray_rgba16f[nonuniformEXT(pc.dst)], ivec3(id), vec4(sum / max(weight, 1e-4), 1.0));
+}
