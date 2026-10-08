@@ -10,12 +10,15 @@
 
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <string>
 
 using namespace ox;
 using namespace ox::showcase::gen;
 
-int main(int argc, char** argv) {
+namespace {
+
+int run(int argc, char** argv) {
     fs::path project = OX_SHOWCASE_DIR;
     std::string only;
     bool check = false;
@@ -74,9 +77,22 @@ int main(int argc, char** argv) {
     gen.registry->scan();
     if (check) {
         for (const std::string& d : gen.differences) std::printf("differs: %s\n", d.c_str());
-        std::printf("oxshowcase_generate --check: %zu differences, %u files up to date\n", gen.differences.size(), gen.filesUnchanged);
+        std::printf("oxshowcase_generate --check: %zu differences, %u files up to date (%u of them within the numeric tolerance)\n",
+                    gen.differences.size(), gen.filesUnchanged, gen.filesEquivalent);
         return gen.differences.empty() ? 0 : 1;
     }
     std::printf("oxshowcase_generate: %u files written, %u unchanged\n", gen.filesWritten, gen.filesUnchanged);
     return 0;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    // An escaping exception (std::filesystem mostly) would end in a silent fast-fail on Windows: name it instead.
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "oxshowcase_generate: %s\n", e.what());
+        return 3;
+    }
 }

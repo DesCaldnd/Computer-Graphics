@@ -401,10 +401,14 @@ void generateProjectFile(Gen& gen) {
         const fs::path tmp = fs::temp_directory_path() / "oxshowcase_check.oxproj";
         if (auto st = p.saveAs(tmp); st) {
             withEditorSection(tmp);
-            std::ifstream a(tmp, std::ios::binary), b(file, std::ios::binary);
-            const std::string sa((std::istreambuf_iterator<char>(a)), {}), sb((std::istreambuf_iterator<char>(b)), {});
-            if (sa != sb) gen.differences.push_back("OxwaldShowcase.oxproj");
-            fs::remove(tmp);
+            auto slurp = [](const fs::path& f) {
+                std::ifstream in(f, std::ios::binary);
+                return std::string((std::istreambuf_iterator<char>(in)), {});
+            };
+            // The streams are closed before the removal: Windows does not delete a file that is still open.
+            if (slurp(tmp) != slurp(file)) gen.differences.push_back("OxwaldShowcase.oxproj");
+            std::error_code ec;
+            fs::remove(tmp, ec);
         }
         return;
     }

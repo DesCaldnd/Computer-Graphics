@@ -7,7 +7,10 @@ set(_showcase_user ${CMAKE_CURRENT_BINARY_DIR}/user)
 set(_showcase_fail "\\[error\\]|\\[fatal\\]|Validation Error|VUID-|assertion")
 
 add_test(NAME Showcase.GeneratorCheck COMMAND oxshowcase_generate --project ${OX_SHOWCASE_DIR} --check)
-set_tests_properties(Showcase.GeneratorCheck PROPERTIES LABELS "showcase" TIMEOUT 600)
+# The check also imports the models into the project's asset cache, and a scene can only resolve a model sub-asset
+# (mesh, material) once its model has an import record: the player tests wait for it instead of racing it under
+# `ctest -j` with a cold cache.
+set_tests_properties(Showcase.GeneratorCheck PROPERTIES LABELS "showcase" TIMEOUT 600 FIXTURES_SETUP showcase_content)
 
 if(TARGET OxwaldPlayer)
     set(_scenes MainMenu Hub)
@@ -23,12 +26,13 @@ if(TARGET OxwaldPlayer)
                  COMMAND OxwaldPlayer --project ${OX_SHOWCASE_DIR} --headless --frames 120 --quality high
                          --scene project://Assets/Scenes/${scene}.oxscene --user-dir ${_showcase_user}/${_name} -- --photo)
         set_tests_properties(Showcase.Scene.${_name} PROPERTIES LABELS "showcase;gpu" TIMEOUT 180
+            FIXTURES_REQUIRED showcase_content
             PASS_REGULAR_EXPRESSION "frames=120" FAIL_REGULAR_EXPRESSION "${_showcase_fail}")
     endforeach()
     add_test(NAME Showcase.Tour
              COMMAND OxwaldPlayer --project ${OX_SHOWCASE_DIR} --headless --frames 60000 --quality medium
                      --user-dir ${_showcase_user}/tour -- --tour --quit)
-    set_tests_properties(Showcase.Tour PROPERTIES LABELS "showcase;gpu" TIMEOUT 600
+    set_tests_properties(Showcase.Tour PROPERTIES LABELS "showcase;gpu" TIMEOUT 600 FIXTURES_REQUIRED showcase_content
         PASS_REGULAR_EXPRESSION "Tour finished" FAIL_REGULAR_EXPRESSION "${_showcase_fail}")
 endif()
 

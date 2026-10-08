@@ -355,7 +355,9 @@ void generateAudio(Gen& gen) {
         for (usize i = 0; i < a.s.size(); ++i) {
             if (white() > 0.9985f) crackle = 1.0f;
             crackle *= 0.995f;
-            a.s[i] = white() * 0.15f + white() * crackle;
+            // Two statements: the operands of + are evaluated in an unspecified order (MSVC draws the right one first).
+            const f32 hiss = white() * 0.15f;
+            a.s[i] = hiss + white() * crackle;
         }
         lowpass(a.s, 3500.0f, a.rate);
         makeLoop(a.s, a.rate / 4);

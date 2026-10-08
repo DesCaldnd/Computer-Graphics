@@ -2,6 +2,7 @@
 
 #include <oxwald/assets/asset_meta.hpp>
 #include <oxwald/assets/asset_registry.hpp>
+#include <oxwald/assets/image.hpp>
 #include <oxwald/assets/importer.hpp>
 #include <oxwald/core/log.hpp>
 #include <oxwald/gameplay/asset_providers.hpp>
@@ -12,7 +13,10 @@
 #include <oxwald/gameplay/world/components.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <fstream>
+#include <span>
 #include <sstream>
 
 namespace ox::showcase::gen {
@@ -121,11 +125,116 @@ static std::vector<std::byte> readAll(const fs::path& p) {
     return out;
 }
 
-bool Gen::writeAsset(const std::string& rel, const std::vector<std::byte>& bytes) {
+// ---- numeric equivalence of generated payloads ----
+// The procedural content goes through libm (sin / exp / pow) and through float expressions that one compiler
+// contracts into FMAs and another does not, so the last bit of a result depends on the platform. A committed file
+// that differs from the fresh one only by that noise is up to date: it is compared as numbers with a tight
+// tolerance, everything that is not a number (sizes, headers, names, ids, integers) still has to match exactly.
+namespace {
+
+constexpr f64 kFloatTolerance = 1e-5; // relative, absolute below 1
+constexpr int kPngTolerance = 1;      // 8-bit steps per channel ...
+constexpr f64 kPngMaxFraction = 1e-3; // ... on at most this share of the channels
+constexpr int kWavTolerance = 8;      // 16-bit steps (-72 dBFS)
+
+bool closeFloats(f64 a, f64 b) { return std::abs(a - b) <= kFloatTolerance * std::max({1.0, std::abs(a), std::abs(b)}); }
+
+bool equivalentPng(std::span<const std::byte> a, std::span<const std::byte> b) {
+    const auto ia = assets::loadImageFromMemory(a, "png"), ib = assets::loadImageFromMemory(b, "png");
+    if (!ia || !ib || ia->width != ib->width || ia->height != ib->height || ia->channels != ib->channels) return false;
+    usize off = 0;
+    for (usize i = 0; i < ia->pixels.size(); ++i) {
+        for (int c = 0; c < 4; ++c) {
+            const int d = std::abs(int(std::lround(ia->pixels[i][c] * 255.0f)) - int(std::lround(ib->pixels[i][c] * 255.0f)));
+            if (d > kPngTolerance) return false;
+            off += d != 0 ? 1 : 0;
+        }
+    }
+    return f64(off) <= kPngMaxFraction * f64(ia->pixels.size() * 4);
+}
+
+// 16-bit PCM as written by toWav (44-byte header).
+bool equivalentWav(std::span<const std::byte> a, std::span<const std::byte> b) {
+    constexpr usize kHeader = 44;
+    if (a.size() != b.size() || a.size() < kHeader || std::memcmp(a.data(), b.data(), kHeader) != 0) return false;
+    for (usize i = kHeader; i + 1 < a.size(); i += 2) {
+        i16 sa, sb;
+        std::memcpy(&sa, a.data() + i, 2);
+        std::memcpy(&sb, b.data() + i, 2);
+        if (std::abs(int(sa) - int(sb)) > kWavTolerance) return false;
+    }
+    return true;
+}
+
+bool equivalentJson(const nlohmann::ordered_json& a, const nlohmann::ordered_json& b) {
+    if (a.is_number() && b.is_number()) {
+        if (a.is_number_float() || b.is_number_float()) return closeFloats(a.get<f64>(), b.get<f64>());
+        return a == b;
+    }
+    if (a.type() != b.type() || a.size() != b.size()) return false;
+    if (a.is_object()) {
+        for (auto ia = a.begin(), ib = b.begin(); ia != a.end(); ++ia, ++ib)
+            if (ia.key() != ib.key() || !equivalentJson(ia.value(), ib.value())) return false;
+        return true;
+    }
+    if (a.is_array()) {
+        for (usize i = 0; i < a.size(); ++i)
+            if (!equivalentJson(a[i], b[i])) return false;
+        return true;
+    }
+    return a == b;
+}
+
+// Binary archives (scenes, prefabs): same document with float leaves within the tolerance.
+bool equivalentArchive(std::span<const std::byte> a, std::span<const std::byte> b) {
+    if (a.size() != b.size() || !serial::isBinaryArchive(a) || !serial::isBinaryArchive(b)) return false;
+    const auto ja = serial::binaryToJson(a, 0), jb = serial::binaryToJson(b, 0);
+    if (!ja || !jb) return false;
+    const auto da = nlohmann::ordered_json::parse(*ja, nullptr, false), db = nlohmann::ordered_json::parse(*jb, nullptr, false);
+    return !da.is_discarded() && !db.is_discarded() && equivalentJson(da, db);
+}
+
+// Raw buffers: f32 inside `floats`, exact bytes elsewhere.
+bool equivalentFloats(std::span<const std::byte> a, std::span<const std::byte> b, const FloatRanges& floats) {
+    if (a.size() != b.size()) return false;
+    usize pos = 0;
+    for (const auto& [off, len] : floats) {
+        if (off < pos || off + len > a.size() || std::memcmp(a.data() + pos, b.data() + pos, off - pos) != 0) return false;
+        for (usize i = off; i + 4 <= off + len; i += 4) {
+            f32 fa, fb;
+            std::memcpy(&fa, a.data() + i, 4);
+            std::memcpy(&fb, b.data() + i, 4);
+            if (!closeFloats(fa, fb)) return false;
+        }
+        pos = off + len;
+    }
+    return std::memcmp(a.data() + pos, b.data() + pos, a.size() - pos) == 0;
+}
+
+bool equivalent(const std::string& rel, std::span<const std::byte> a, std::span<const std::byte> b, const FloatRanges& floats) {
+    const std::string ext = fs::path(rel).extension().string();
+    if (!floats.empty()) return equivalentFloats(a, b, floats);
+    if (ext == ".png") return equivalentPng(a, b);
+    if (ext == ".wav") return equivalentWav(a, b);
+    if (ext == ".oxscene" || ext == ".oxprefab") return equivalentArchive(a, b);
+    return false;
+}
+
+} // namespace
+
+bool Gen::writeAsset(const std::string& rel, const std::vector<std::byte>& bytes, const FloatRanges& floats) {
     const fs::path p = assets / rel;
-    if (fs::exists(p) && readAll(p) == bytes) {
-        ++filesUnchanged;
-        return false;
+    if (fs::exists(p)) {
+        const std::vector<std::byte> existing = readAll(p);
+        if (existing == bytes) {
+            ++filesUnchanged;
+            return false;
+        }
+        if (equivalent(rel, existing, bytes, floats)) {
+            ++filesUnchanged;
+            ++filesEquivalent;
+            return false;
+        }
     }
     if (checkOnly) {
         differences.push_back(rel);

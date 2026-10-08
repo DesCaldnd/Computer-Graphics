@@ -46,6 +46,9 @@ struct Station {
 [[nodiscard]] const std::vector<Station>& stations();
 [[nodiscard]] const Station& station(std::string_view id);
 
+// (offset, size) byte ranges of a buffer that hold little-endian f32 values.
+using FloatRanges = std::vector<std::pair<usize, usize>>;
+
 // Shared generator state: project paths, asset database, generated asset UUIDs.
 class Gen {
 public:
@@ -64,8 +67,10 @@ public:
     Uuid material(const std::string& name, const assets::MaterialAsset& m);
     [[nodiscard]] Uuid mat(const std::string& name) const; // previously defined material (asserts)
 
-    // Writes `bytes` to Assets/<rel> when different. Returns true when the file changed.
-    bool writeAsset(const std::string& rel, const std::vector<std::byte>& bytes);
+    // Writes `bytes` to Assets/<rel> when different. Returns true when the file changed. PNG / WAV / scene and
+    // prefab payloads that match the existing file within a tight numeric tolerance count as unchanged (last-bit
+    // libm and FMA differences between platforms); `floats` marks the f32 ranges of a raw buffer for the same test.
+    bool writeAsset(const std::string& rel, const std::vector<std::byte>& bytes, const FloatRanges& floats = {});
     bool writeText(const std::string& rel, const std::string& text);
     // Ensures a meta with a deterministic UUID exists for Assets/<rel>; `settings` merged into the importer
     // defaults. Returns the asset UUID (existing metas keep theirs).
@@ -80,6 +85,7 @@ public:
 
     u32 filesWritten = 0;
     u32 filesUnchanged = 0;
+    u32 filesEquivalent = 0; // of filesUnchanged: equal within the numeric tolerance, not byte for byte
     // --check: nothing is written; files that would change are listed in `differences`.
     bool checkOnly = false;
     std::vector<std::string> differences;

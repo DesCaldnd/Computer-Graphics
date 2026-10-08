@@ -196,6 +196,7 @@ void generateMannequin(Gen& gen) {
 
     // ---- binary buffer ----
     std::vector<std::byte> bin;
+    FloatRanges floatRanges; // FLOAT accessors: compared numerically by Gen::writeAsset
     auto align4 = [&] { while (bin.size() % 4) bin.push_back(std::byte{0}); };
     auto append = [&](const void* p, usize n) -> std::pair<usize, usize> {
         align4();
@@ -209,6 +210,7 @@ void generateMannequin(Gen& gen) {
                            std::optional<std::pair<std::vector<f32>, std::vector<f32>>> minMax = std::nullopt,
                            std::optional<int> target = std::nullopt) {
         auto [off, n] = append(data, bytes);
+        if (componentType == 5126) floatRanges.emplace_back(off, n);
         nlohmann::ordered_json v = {{"buffer", 0}, {"byteOffset", off}, {"byteLength", n}};
         if (target) v["target"] = *target;
         views.push_back(v);
@@ -304,7 +306,7 @@ void generateMannequin(Gen& gen) {
         {"bufferViews", views},
         {"accessors", accessors},
     };
-    gen.writeAsset("Models/Mannequin.bin", bin);
+    gen.writeAsset("Models/Mannequin.bin", bin, floatRanges);
     gen.writeText(kMannequin, gltf.dump(1) + "\n");
     gen.meta(kMannequin);
     OX_LOG_INFO("generate", "mannequin: {} vertices, {} joints, {} clips", m.pos.size(), kJointCount, std::size(clips));
