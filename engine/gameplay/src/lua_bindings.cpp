@@ -367,7 +367,9 @@ void installBindings(ScriptRuntime& rt) {
             bool ok = false;
             std::string path = childPath(c.path, key, ok);
             if (!ok) return sol::lua_nil;
-            return refToLua(ts, c, childRef(c, path), std::move(path));
+            // Resolve before moving the path: argument evaluation order is unspecified (MSVC goes right to left).
+            const ValueRef ref = childRef(c, path);
+            return refToLua(ts, c, ref, std::move(path));
         },
         sol::meta_function::new_index,
         [](const LuaComponent& c, sol::object key, sol::object value) {

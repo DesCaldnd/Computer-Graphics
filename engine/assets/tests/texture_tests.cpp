@@ -88,6 +88,95 @@ TEST(TextureCompression, BC5RoundTripPsnr) {
     EXPECT_LT(maxErr, 0.03);
 }
 
+namespace {
+
+struct Bc7BlockWriter {
+    std::byte block[16] = {};
+    u32 pos = 0;
+
+    void put(u32 value, u32 bits) {
+        for (u32 i = 0; i < bits; ++i, ++pos) {
+            if ((value >> i) & 1) block[pos / 8] |= std::byte(1u << (pos % 8));
+        }
+    }
+};
+
+glm::ivec4 texel8(const Image& img, u32 x, u32 y) { return glm::ivec4(glm::round(img.at(x, y) * 255.0f)); }
+
+} // namespace
+
+TEST(TextureCompression, BC7DecodeHandBuiltBlocks) {
+    { // Reserved mode byte: transparent black.
+        std::byte block[16] = {};
+        block[5] = std::byte(0xff);
+        Image img = decodeBC7(block, 4, 4);
+        for (u32 i = 0; i < 16; ++i) EXPECT_EQ(texel8(img, i % 4, i / 4), glm::ivec4(0)) << i;
+    }
+    { // Mode 6: 7.7.7.7 + per-endpoint p-bit, 4-bit indices.
+        Bc7BlockWriter w;
+        w.put(1u << 6, 7);
+        for (u32 v : {127u, 0u, 0u, 127u, 64u, 32u, 127u, 0u}) w.put(v, 7); // r0 r1 g0 g1 b0 b1 a0 a1
+        w.put(1, 1);
+        w.put(0, 1);
+        for (u32 i = 0; i < 16; ++i) w.put(i == 5 ? 15 : 0, i == 0 ? 3 : 4);
+        ASSERT_EQ(w.pos, 128u);
+        Image img = decodeBC7(w.block, 4, 4);
+        for (u32 i = 0; i < 16; ++i) {
+            EXPECT_EQ(texel8(img, i % 4, i / 4), i == 5 ? glm::ivec4(0, 254, 64, 0) : glm::ivec4(255, 1, 129, 255)) << i;
+        }
+    }
+    { // Mode 5: 7.7.7 colour + 8-bit alpha in separate planes, rotation 1 swaps A and R.
+        Bc7BlockWriter w;
+        w.put(1u << 5, 6);
+        w.put(1, 2);
+        for (u32 v : {10u, 10u, 20u, 20u, 30u, 30u}) w.put(v, 7);
+        w.put(200, 8);
+        w.put(200, 8);
+        w.put(0, 31);
+        w.put(0, 31);
+        ASSERT_EQ(w.pos, 128u);
+        Image img = decodeBC7(w.block, 4, 4);
+        for (u32 i = 0; i < 16; ++i) EXPECT_EQ(texel8(img, i % 4, i / 4), glm::ivec4(200, 40, 60, 20)) << i;
+    }
+    { // Mode 1: two subsets (partition 13 = top/bottom halves), 6.6.6 + shared p-bit per subset.
+        Bc7BlockWriter w;
+        w.put(1u << 1, 2);
+        w.put(13, 6);
+        for (u32 v : {63u, 63u, 0u, 0u, /*g*/ 0u, 0u, 63u, 63u, /*b*/ 0u, 0u, 0u, 0u}) w.put(v, 6);
+        w.put(1, 1);
+        w.put(0, 1);
+        w.put(0, 46);
+        ASSERT_EQ(w.pos, 128u);
+        Image img = decodeBC7(w.block, 4, 4);
+        for (u32 i = 0; i < 16; ++i) {
+            EXPECT_EQ(texel8(img, i % 4, i / 4), i < 8 ? glm::ivec4(255, 2, 2, 255) : glm::ivec4(0, 253, 0, 255)) << i;
+        }
+    }
+    { // Mode 4 with the index selection bit: colour takes the 3-bit indices, alpha the 2-bit ones.
+        Bc7BlockWriter w;
+        w.put(1u << 4, 5);
+        w.put(0, 2);
+        w.put(1, 1);
+        for (u32 c = 0; c < 3; ++c) {
+            w.put(0, 5);
+            w.put(31, 5);
+        }
+        w.put(0, 6);
+        w.put(63, 6);
+        const u32 idx2[16] = {0, 3, 0, 1};
+        const u32 idx3[16] = {0, 0, 7, 1};
+        for (u32 i = 0; i < 16; ++i) w.put(idx2[i], i == 0 ? 1 : 2);
+        for (u32 i = 0; i < 16; ++i) w.put(idx3[i], i == 0 ? 2 : 3);
+        ASSERT_EQ(w.pos, 128u);
+        Image img = decodeBC7(w.block, 4, 4);
+        EXPECT_EQ(texel8(img, 0, 0), glm::ivec4(0, 0, 0, 0));
+        EXPECT_EQ(texel8(img, 1, 0), glm::ivec4(0, 0, 0, 255));
+        EXPECT_EQ(texel8(img, 2, 0), glm::ivec4(255, 255, 255, 0));
+        EXPECT_EQ(texel8(img, 3, 0), glm::ivec4(36, 36, 36, 84));
+        for (u32 i = 4; i < 16; ++i) EXPECT_EQ(texel8(img, i % 4, i / 4), glm::ivec4(0)) << i;
+    }
+}
+
 TEST(TextureCompression, BuildTextureFormats) {
     Image img = gradientImage(32, 32);
     TextureImportSettings s;

@@ -1,16 +1,10 @@
-// BC4/BC5 encoder + decoder (own) and BC7 decoding (Basis Universal's unpacker shipped inside libktx).
+// BC4/BC5 encoder + decoder and a BC7 (BPTC) block decoder, all self-contained.
 #include <oxwald/assets/texture_import.hpp>
 
 #include "internal.hpp"
 
 #include <cmath>
 #include <thread>
-
-namespace basisu {
-struct color_rgba;
-// Defined in libktx's bundled Basis Universal encoder (basisu_gpu_texture.cpp).
-bool unpack_bc7(const void* pBlock, color_rgba* pPixels);
-} // namespace basisu
 
 namespace ox::assets {
 
@@ -126,6 +120,163 @@ void decodeBC4Block(const std::byte* in, u8 out[16]) {
 
 u8 toU8(f32 v) { return u8(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
 
+struct Bc7Mode {
+    u8 subsets, partitionBits, rotationBits, indexSelBits, colorBits, alphaBits, endpointPBits, sharedPBits, indexBits, index2Bits;
+};
+
+constexpr Bc7Mode kBc7Modes[8] = {
+    {3, 4, 0, 0, 4, 0, 1, 0, 3, 0}, {2, 6, 0, 0, 6, 0, 0, 1, 3, 0}, {3, 6, 0, 0, 5, 0, 0, 0, 2, 0}, {2, 6, 0, 0, 7, 0, 1, 0, 2, 0},
+    {1, 0, 2, 1, 5, 6, 0, 0, 2, 3}, {1, 0, 2, 0, 7, 8, 0, 0, 2, 2}, {1, 0, 0, 0, 7, 7, 1, 0, 4, 0}, {2, 6, 0, 0, 5, 5, 1, 0, 2, 0},
+};
+
+constexpr u8 kBc7Weights2[4] = {0, 21, 43, 64};
+constexpr u8 kBc7Weights3[8] = {0, 9, 18, 27, 37, 46, 55, 64};
+constexpr u8 kBc7Weights4[16] = {0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64};
+
+// Subset of each texel, texel 0 in the low bits: 1 bit per texel for two subsets, 2 bits per texel for three.
+constexpr u16 kBc7Partition2[64] = {
+    0xcccc, 0x8888, 0xeeee, 0xecc8, 0xc880, 0xfeec, 0xfec8, 0xec80, 0xc800, 0xffec, 0xfe80, 0xe800, 0xffe8, 0xff00, 0xfff0, 0xf000,
+    0xf710, 0x008e, 0x7100, 0x08ce, 0x008c, 0x7310, 0x3100, 0x8cce, 0x088c, 0x3110, 0x6666, 0x366c, 0x17e8, 0x0ff0, 0x718e, 0x399c,
+    0xaaaa, 0xf0f0, 0x5a5a, 0x33cc, 0x3c3c, 0x55aa, 0x9696, 0xa55a, 0x73ce, 0x13c8, 0x324c, 0x3bdc, 0x6996, 0xc33c, 0x9966, 0x0660,
+    0x0272, 0x04e4, 0x4e40, 0x2720, 0xc936, 0x936c, 0x39c6, 0x639c, 0x9336, 0x9cc6, 0x817e, 0xe718, 0xccf0, 0x0fcc, 0x7744, 0xee22,
+};
+constexpr u32 kBc7Partition3[64] = {
+    0xaa685050, 0x6a5a5040, 0x5a5a4200, 0x5450a0a8, 0xa5a50000, 0xa0a05050, 0x5555a0a0, 0x5a5a5050,
+    0xaa550000, 0xaa555500, 0xaaaa5500, 0x90909090, 0x94949494, 0xa4a4a4a4, 0xa9a59450, 0x2a0a4250,
+    0xa5945040, 0x0a425054, 0xa5a5a500, 0x55a0a0a0, 0xa8a85454, 0x6a6a4040, 0xa4a45000, 0x1a1a0500,
+    0x0050a4a4, 0xaaa59090, 0x14696914, 0x69691400, 0xa08585a0, 0xaa821414, 0x50a4a450, 0x6a5a0200,
+    0xa9a58000, 0x5090a0a8, 0xa8a09050, 0x24242424, 0x00aa5500, 0x24924924, 0x24499224, 0x50a50a50,
+    0x500aa550, 0xaaaa4444, 0x66660000, 0xa5a0a5a0, 0x50a050a0, 0x69286928, 0x44aaaa44, 0x66666600,
+    0xaa444444, 0x54a854a8, 0x95809580, 0x96969600, 0xa85454a8, 0x80959580, 0xaa141414, 0x96960000,
+    0xaaaa1414, 0xa05050a0, 0xa0a5a5a0, 0x96000000, 0x40804080, 0xa9a8a9a8, 0xaaaaaa44, 0x2a4a5254,
+};
+
+// Anchor texels of subsets 1 and 2 (an anchor's index is stored one bit short); texel 0 always anchors subset 0.
+constexpr u8 kBc7Anchor2[64] = {
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 2, 8, 2, 2,  8,  8, 15, 2,  8,  2,  2,  8,  8, 2, 2,
+    15, 15, 6,  8,  2,  8,  15, 15, 2,  8,  2,  2,  2,  15, 15, 6,  6,  2, 6, 8, 15, 15, 2, 2,  15, 15, 15, 15, 15, 2, 2, 15,
+};
+constexpr u8 kBc7Anchor3a[64] = {
+    3, 3,  15, 15, 8, 3,  15, 15, 8,  8, 6,  6, 6,  5,  3,  3,  3, 3,  8, 15, 3, 3, 6, 10, 5, 8,  8, 6,  8,  5,  15, 15,
+    8, 15, 3,  5,  6, 10, 8,  15, 15, 3, 15, 5, 15, 15, 15, 15, 3, 15, 5, 5,  5, 8, 5, 10, 5, 10, 8, 13, 15, 12, 3,  3,
+};
+constexpr u8 kBc7Anchor3b[64] = {
+    15, 8, 8,  3,  15, 15, 3, 8,  15, 15, 15, 15, 15, 15, 15, 8, 15, 8, 15, 3,  15, 8,  15, 8,  3,  15, 6,  10, 15, 15, 10, 8,
+    15, 3, 15, 10, 10, 8,  9, 10, 6,  15, 8,  15, 3,  6,  6,  8, 15, 3, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 3,  15, 15, 8,
+};
+
+struct Bc7Bits {
+    u64 lo = 0, hi = 0;
+    u32 pos = 0;
+
+    explicit Bc7Bits(const std::byte* block) {
+        for (u32 i = 0; i < 8; ++i) {
+            lo |= u64(u8(block[i])) << (8 * i);
+            hi |= u64(u8(block[8 + i])) << (8 * i);
+        }
+    }
+
+    u32 read(u32 n) { // LSB first, n <= 8
+        if (n == 0) return 0;
+        u64 v = pos < 64 ? lo >> pos : hi >> (pos - 64);
+        if (pos < 64 && pos + n > 64) v |= hi << (64 - pos);
+        pos += n;
+        return u32(v) & ((1u << n) - 1);
+    }
+};
+
+u8 bc7Interpolate(u32 e0, u32 e1, u32 index, u32 bits) {
+    const u32 w = bits == 2 ? kBc7Weights2[index] : bits == 3 ? kBc7Weights3[index] : kBc7Weights4[index];
+    return u8((e0 * (64 - w) + e1 * w + 32) >> 6);
+}
+
+// 16 RGBA8 texels, row-major. A reserved block (mode byte 0) decodes to transparent black.
+void decodeBC7Block(const std::byte* block, u8 out[64]) {
+    std::memset(out, 0, 64);
+    const u8 first = u8(block[0]);
+    if (first == 0) return;
+    u32 mode = 0;
+    while (!(first & (1u << mode))) ++mode;
+    const Bc7Mode& m = kBc7Modes[mode];
+
+    Bc7Bits bits(block);
+    bits.read(mode + 1);
+    const u32 partition = bits.read(m.partitionBits);
+    const u32 rotation = bits.read(m.rotationBits);
+    const u32 indexSel = bits.read(m.indexSelBits);
+
+    const u32 endpoints = m.subsets * 2u;
+    u8 ep[6][4];
+    for (u32 c = 0; c < 3; ++c) {
+        for (u32 e = 0; e < endpoints; ++e) ep[e][c] = u8(bits.read(m.colorBits));
+    }
+    for (u32 e = 0; e < endpoints; ++e) ep[e][3] = u8(bits.read(m.alphaBits));
+
+    u32 pbits[6] = {};
+    if (m.endpointPBits) {
+        for (u32 e = 0; e < endpoints; ++e) pbits[e] = bits.read(1);
+    } else if (m.sharedPBits) {
+        for (u32 s = 0; s < m.subsets; ++s) pbits[s * 2] = pbits[s * 2 + 1] = bits.read(1);
+    }
+    const bool hasPBit = m.endpointPBits || m.sharedPBits;
+    for (u32 e = 0; e < endpoints; ++e) {
+        for (u32 c = 0; c < 4; ++c) {
+            u32 n = c == 3 ? m.alphaBits : m.colorBits;
+            if (n == 0) {
+                ep[e][c] = 255;
+                continue;
+            }
+            u32 v = ep[e][c];
+            if (hasPBit) {
+                v = (v << 1) | pbits[e];
+                ++n;
+            }
+            v <<= 8 - n;
+            ep[e][c] = u8(v | (v >> n));
+        }
+    }
+
+    u8 subset[16] = {};
+    bool anchor[16] = {true};
+    if (m.subsets == 2) {
+        for (u32 i = 0; i < 16; ++i) subset[i] = u8((kBc7Partition2[partition] >> i) & 1);
+        anchor[kBc7Anchor2[partition]] = true;
+    } else if (m.subsets == 3) {
+        for (u32 i = 0; i < 16; ++i) subset[i] = u8((kBc7Partition3[partition] >> (2 * i)) & 3);
+        anchor[kBc7Anchor3a[partition]] = true;
+        anchor[kBc7Anchor3b[partition]] = true;
+    }
+
+    u8 idx[16], idx2[16] = {};
+    for (u32 i = 0; i < 16; ++i) idx[i] = u8(bits.read(m.indexBits - (anchor[i] ? 1u : 0u)));
+    if (m.index2Bits) {
+        for (u32 i = 0; i < 16; ++i) idx2[i] = u8(bits.read(m.index2Bits - (i == 0 ? 1u : 0u)));
+    }
+
+    // Dual-plane modes carry two index sets; the selection bit says which one drives colour.
+    const u8* colorIdx = idx;
+    const u8* alphaIdx = idx;
+    u32 colorIdxBits = m.indexBits, alphaIdxBits = m.indexBits;
+    if (m.index2Bits) {
+        if (indexSel) {
+            colorIdx = idx2;
+            colorIdxBits = m.index2Bits;
+        } else {
+            alphaIdx = idx2;
+            alphaIdxBits = m.index2Bits;
+        }
+    }
+
+    for (u32 i = 0; i < 16; ++i) {
+        const u8* e0 = ep[subset[i] * 2];
+        const u8* e1 = ep[subset[i] * 2 + 1];
+        u8* p = out + i * 4;
+        for (u32 c = 0; c < 3; ++c) p[c] = bc7Interpolate(e0[c], e1[c], colorIdx[i], colorIdxBits);
+        p[3] = m.alphaBits ? bc7Interpolate(e0[3], e1[3], alphaIdx[i], alphaIdxBits) : u8(255);
+        if (rotation) std::swap(p[3], p[rotation - 1]);
+    }
+}
+
 } // namespace
 
 std::vector<std::byte> compressBC5(const Image& image) {
@@ -201,8 +352,7 @@ Image decodeBC7(std::span<const std::byte> blocks, u32 width, u32 height) {
     u8 px[64];
     for (u32 by = 0; by < bh; ++by) {
         for (u32 bx = 0; bx < bw; ++bx) {
-            std::memset(px, 0, sizeof(px));
-            basisu::unpack_bc7(blocks.data() + (usize(by) * bw + bx) * 16, reinterpret_cast<basisu::color_rgba*>(px));
+            decodeBC7Block(blocks.data() + (usize(by) * bw + bx) * 16, px);
             for (u32 y = 0; y < 4; ++y) {
                 for (u32 x = 0; x < 4; ++x) {
                     const u32 ix = bx * 4 + x, iy = by * 4 + y;

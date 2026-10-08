@@ -565,8 +565,12 @@ TEST_F(AudioTest, LoadSoundThroughVfs) {
         tone[i] = 0.5f * std::sin(6.2831853f * 440.f * static_cast<f32>(i) / kRate);
     }
     writeWav16(dir / "tone.wav", tone, kRate);
-    std::ifstream in(dir / "tone.wav", std::ios::binary);
-    std::vector<char> raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<char> raw;
+    {
+        // Closed before remove_all below: Windows cannot delete a file that is still open.
+        std::ifstream in(dir / "tone.wav", std::ios::binary);
+        raw.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
     std::vector<std::byte> bytes(raw.size());
     std::memcpy(bytes.data(), raw.data(), raw.size());
 
