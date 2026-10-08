@@ -9,17 +9,15 @@ target_link_libraries(OxwaldPlayer PRIVATE Oxwald::runtime)
 ox_set_warnings(OxwaldPlayer)
 set_target_properties(OxwaldPlayer PROPERTIES FOLDER "apps")
 
-# The render module (when configured) provides the Vulkan IRenderer; resolved after the whole tree is configured.
-function(ox_player_link_renderer)
-    if(TARGET ox_render)
-        target_link_libraries(OxwaldPlayer PRIVATE ox_render)
-        target_compile_definitions(OxwaldPlayer PRIVATE OX_HAS_RENDER=1)
-    endif()
-    if(COMMAND ox_add_gpu_test_env AND TARGET ox_rhi)
-        ox_add_gpu_test_env(OxwaldPlayer)
-    endif()
-endfunction()
-cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL ox_player_link_renderer)
+# The render module (when configured) provides the Vulkan IRenderer. engine/ is configured before apps/,
+# so its targets already exist here (custom commands must be added in this directory).
+if(TARGET ox_render)
+    target_link_libraries(OxwaldPlayer PRIVATE ox_render)
+    target_compile_definitions(OxwaldPlayer PRIVATE OX_HAS_RENDER=1)
+endif()
+if(COMMAND ox_add_gpu_test_env AND TARGET ox_rhi)
+    ox_add_gpu_test_env(OxwaldPlayer)
+endif()
 
 if(OX_BUILD_TESTS)
     add_test(NAME OxwaldPlayer.HeadlessSmoke
