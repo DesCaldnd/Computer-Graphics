@@ -48,7 +48,7 @@ Module targets: `ox_<name>` with alias `Oxwald::<name>`. Modules:
 | `core` | glm, nlohmann-json, enkiTS, Tracy | types, log, assert, math, hashing, UUID, time, jobs, services (DI), events, reflection, serialization, cvars & scalability, paths/VFS, file watching, frame allocator, profiling macros, debug-draw collector |
 | `scene` | core, EnTT | ECS world, entities, core components, hierarchy/transforms, component registry, systems & phases, scene (de)serialization, prefabs |
 | `rhi` | core, volk, VMA, vk-bootstrap, shaderc, spirv-reflect | Vulkan device, swapchain, resources, bindless, command lists, render graph, shader compiler & hot reload, DeviceCaps |
-| `assets` | core, assimp, fastgltf, meshoptimizer, ktx, stb, tinyexr | asset database (UUID + .meta), importers, CPU mesh/texture/material data, async loading, pak archives |
+| `assets` | core, scene, (animation), assimp, fastgltf, meshoptimizer, ktx, stb, tinyexr, zstd | asset database (UUID + .meta), importers, CPU mesh/texture/material data, async loading, pak archives |
 | `render` | rhi, scene, assets | renderer, GPU scene, materials, lighting/shadows, render features, upscalers, quality settings |
 | `physics` | core (+scene for ECS glue) , Jolt | physics world, shapes, queries, character controller |
 | `animation` | core, assimp | skeletons, clips, blending, state machines, IK, root motion |

@@ -1,0 +1,19 @@
+#pragma once
+
+#include <oxwald/assets/asset_data.hpp>
+#include <oxwald/assets/asset_handle.hpp>
+#include <oxwald/assets/asset_manager.hpp>
+#include <oxwald/assets/asset_meta.hpp>
+#include <oxwald/assets/asset_registry.hpp>
+#include <oxwald/assets/asset_source.hpp>
+#include <oxwald/assets/asset_types.hpp>
+#include <oxwald/assets/cook.hpp>
+#include <oxwald/assets/image.hpp>
+#include <oxwald/assets/importer.hpp>
+#include <oxwald/assets/material.hpp>
+#include <oxwald/assets/mesh.hpp>
+#include <oxwald/assets/mesh_processing.hpp>
+#include <oxwald/assets/model_import.hpp>
+#include <oxwald/assets/pak.hpp>
+#include <oxwald/assets/texture.hpp>
+#include <oxwald/assets/texture_import.hpp>
