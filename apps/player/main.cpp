@@ -4,6 +4,9 @@
 #if OX_HAS_RENDER && OX_RENDER_HAS_RUNTIME
 #include <oxwald/render/runtime_renderer.hpp>
 #endif
+#if OX_HAS_UI
+#include <oxwald/ui/ui_module.hpp>
+#endif
 
 #include <cstdio>
 
@@ -47,7 +50,15 @@ int main(int argc, char** argv) {
 #endif
 #if OX_HAS_RENDER && OX_RENDER_HAS_RUNTIME
     // Vulkan renderer (headless runs render offscreen). Dedicated servers keep the NullRenderer.
+#if OX_HAS_UI
+    // Debug overlay (F1 / ~) and RmlUi game UI on top of the renderer.
+    if (!config.dedicatedServer) {
+        engine.addModule(std::make_unique<ox::ui::UiModule>());
+        engine.setRenderer(ox::ui::withUi(ox::render::createRenderer()));
+    }
+#else
     if (!config.dedicatedServer) engine.setRenderer(ox::render::createRenderer());
+#endif
 #endif
 
     if (auto st = engine.init(config); !st) {

@@ -1,0 +1,78 @@
+<rml>
+<head>
+    <title>Settings</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<!-- Data model "settings" is provided by the engine (GameUI::bindSettingsMenu) and writes ox::Settings. -->
+<body class="menu" data-model="settings">
+    <div class="panel wide">
+        <h1>Настройки / Settings</h1>
+
+        <h2>Графика / Graphics</h2>
+        <div class="row">
+            <span class="label">Качество / Quality</span>
+            <div class="choices">
+                <button class="choice quality" data-for="q : qualities" data-attr-id="'quality-' + q"
+                        data-class-selected="q == quality" data-event-click="set_quality(q)">{{q}}</button>
+            </div>
+        </div>
+        <div class="row hint" data-if="autoStatus != ''">{{autoStatus}}</div>
+        <div class="row">
+            <span class="label">Окно / Window</span>
+            <div class="choices">
+                <button class="choice" data-for="m, i : windowModes" data-class-selected="i == windowMode"
+                        data-event-click="set_window_mode(i)">{{m}}</button>
+            </div>
+        </div>
+        <div class="row">
+            <span class="label">Разрешение / Resolution</span>
+            <select id="resolution" data-value="resolution">
+                <option data-for="r : resolutions" data-attr-value="r">{{r}}</option>
+            </select>
+        </div>
+        <div class="row">
+            <span class="label">VSync</span>
+            <input id="vsync" type="checkbox" data-checked="vsync"/>
+        </div>
+        <div class="row">
+            <span class="label">Трассировка лучей / RT</span>
+            <input id="raytracing" type="checkbox" data-checked="rayTracing" data-attrif-disabled="!rtAvailable"/>
+        </div>
+        <div class="row hint" data-if="!rtAvailable">{{rtReason}}</div>
+        <div class="row">
+            <span class="label">Апскейлер / Upscaler</span>
+            <div class="choices">
+                <button class="choice upscaler" data-for="u : upscalers" data-attr-id="'upscaler-' + u.name"
+                        data-class-selected="u.name == upscaler" data-class-unavailable="!u.available"
+                        data-attr-title="u.reason" data-event-click="set_upscaler(u.name)">{{u.name}}</button>
+            </div>
+        </div>
+        <div class="row hint" data-if="upscalerReason != ''">{{upscalerReason}}</div>
+
+        <h2>Звук / Audio</h2>
+        <div class="row">
+            <span class="label">Общая / Master</span>
+            <input id="master" type="range" min="0" max="1" step="0.05" data-value="masterVolume"/>
+            {{ masterVolume * 100 | format(0) }}%
+        </div>
+        <div class="row">
+            <span class="label">Музыка / Music</span>
+            <input id="music" type="range" min="0" max="1" step="0.05" data-value="musicVolume"/>
+            {{ musicVolume * 100 | format(0) }}%
+        </div>
+        <div class="row">
+            <span class="label">Эффекты / SFX</span>
+            <input id="sfx" type="range" min="0" max="1" step="0.05" data-value="sfxVolume"/>
+            {{ sfxVolume * 100 | format(0) }}%
+        </div>
+
+        <div class="buttons">
+            <button id="save" class="primary" data-event-click="save">Сохранить / Save</button>
+            <button id="revert" data-event-click="revert">Отменить / Revert</button>
+            <button id="back">Назад / Back</button>
+        </div>
+        <div class="status">{{status}}</div>
+    </div>
+</body>
+</rml>

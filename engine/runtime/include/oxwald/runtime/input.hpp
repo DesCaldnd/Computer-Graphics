@@ -235,6 +235,10 @@ public:
     void inject(const InputEvent& event);
     // Game thread, once per frame.
     void update(f64 dt);
+    // Optional pre-filter run by update() (game thread) for every queued event before it is applied: return true
+    // to consume it (UI layers on top of the game, e.g. ox::ui::UiSystem). Release events should not be consumed.
+    using EventFilter = std::function<bool(const InputEvent&)>;
+    void setEventFilter(EventFilter filter) { m_filter = std::move(filter); }
 
     // ---- raw state (as of the last update) ----
     [[nodiscard]] bool keyDown(Key k) const;
@@ -334,6 +338,7 @@ private:
     };
     std::unordered_map<std::string, std::unique_ptr<CallbackSet>> m_callbacks;
     std::function<void(const std::string&)> m_capture;
+    EventFilter m_filter;
 
     std::bitset<kKeyCount> m_keyDown, m_keyPressed, m_keyReleased;
     std::bitset<kMouseButtonCount> m_mouseDown, m_mousePressed, m_mouseReleased;

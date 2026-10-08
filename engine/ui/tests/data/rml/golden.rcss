@@ -1,0 +1,11 @@
+body { display: block; font-family: Inter; width: 100%; height: 100%; background-color: #1b2433; color: #ffffff; }
+div { display: block; }
+#panel { position: absolute; left: 16px; top: 16px; width: 180px; height: 150px; padding: 12px;
+         background-color: #2f6fe0; border-radius: 12px; font-size: 18px; }
+#title { font-weight: bold; font-size: 22px; margin-bottom: 4px; }
+button { display: block; margin-top: 12px; width: 120px; padding: 6px 0; background-color: #ffffff; color: #101820;
+         border-radius: 6px; text-align: center; font-size: 16px; }
+#glass { position: absolute; left: 170px; top: 100px; width: 120px; height: 70px; background-color: #ff505080; }
+#rotated { position: absolute; left: 240px; top: 30px; width: 50px; height: 26px; background-color: #50e090;
+           transform: rotate(20deg); }
+#mono { position: absolute; left: 230px; top: 176px; font-family: "JetBrains Mono"; font-size: 13px; color: #f0b85a; }

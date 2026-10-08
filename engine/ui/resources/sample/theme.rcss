@@ -1,0 +1,92 @@
+/* Oxwald sample theme (dark glass panels, blue accent). Edit while the game runs: hot reload applies changes. */
+body.menu {
+    width: 100%;
+    height: 100%;
+    background-color: #0b0f17c8;
+}
+.panel {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 420dp;
+    margin-left: -210dp;
+    margin-top: -220dp;
+    padding: 28dp 32dp;
+    background-color: #151b26f0;
+    border: 1dp #2c3a52;
+    border-radius: 10dp;
+}
+.panel.wide { width: 720dp; margin-left: -360dp; margin-top: -300dp; }
+.title { font-size: 44dp; font-weight: bold; color: #ffffff; letter-spacing: 2dp; }
+.subtitle { color: #8ea2c0; margin-bottom: 22dp; }
+
+button {
+    display: block;
+    margin: 8dp 0;
+    padding: 10dp 18dp;
+    font-size: 18dp;
+    color: #e8ecf2;
+    background-color: #223047;
+    border: 1dp #34496b;
+    border-radius: 6dp;
+    text-align: center;
+    tab-index: auto;
+    nav: auto;
+    cursor: pointer;
+    transition: background-color 0.12s linear-in-out;
+}
+button:hover, button:focus-visible { background-color: #2f4a73; border-color: #5b8fe0; }
+button:active { background-color: #3d8bff; color: #ffffff; }
+button.primary { background-color: #2f6fe0; border-color: #5b8fe0; }
+button.primary:hover { background-color: #3d8bff; }
+button:disabled, button.unavailable { color: #6d7a8e; background-color: #1a212e; border-color: #263247; }
+
+.row { display: block; margin: 8dp 0; height: 34dp; }
+.row .label { display: inline-block; width: 190dp; color: #aab8cc; }
+.choices { display: inline-block; }
+button.choice { display: inline-block; margin: 0 6dp 0 0; padding: 6dp 12dp; font-size: 15dp; }
+button.choice.selected { background-color: #3d8bff; border-color: #8cb8ff; color: #ffffff; }
+.hint { color: #f0b85a; font-size: 13dp; height: auto; margin-left: 190dp; }
+.status { color: #8ea2c0; font-size: 13dp; margin-top: 12dp; }
+.buttons { margin-top: 18dp; }
+.buttons button { display: inline-block; margin-right: 10dp; }
+
+input.checkbox {
+    width: 22dp;
+    height: 22dp;
+    vertical-align: middle;
+    background-color: #223047;
+    border: 1dp #4a6390;
+    border-radius: 4dp;
+}
+input.checkbox:hover { border-color: #8cb8ff; }
+input.checkbox:checked { background-color: #3d8bff; }
+input.checkbox:disabled { background-color: #1a212e; border-color: #2a3446; }
+
+input.range { width: 260dp; height: 18dp; vertical-align: middle; }
+input.range slidertrack { margin-top: 7dp; height: 4dp; background-color: #34496b; border-radius: 2dp; }
+input.range sliderbar { width: 16dp; height: 16dp; background-color: #8cb8ff; border-radius: 8dp; }
+input.range sliderbar:hover { background-color: #ffffff; }
+input.range sliderarrowdec, input.range sliderarrowinc { width: 0; height: 0; }
+
+select { height: 26dp; padding: 3dp 8dp; background-color: #223047; border: 1dp #4a6390; border-radius: 4dp; }
+select selectvalue { height: 20dp; }
+select selectarrow { width: 18dp; height: 20dp; background-color: #34496b; }
+select selectbox { margin-top: 2dp; background-color: #1b2433; border: 1dp #4a6390; padding: 4dp 0; }
+select selectbox option { padding: 4dp 8dp; }
+select selectbox option:hover { background-color: #2f4a73; }
+select selectbox option:checked { color: #8cb8ff; }
+
+/* HUD: lets clicks through to the game except where elements opt in (pointer-events: auto). */
+body.hud { width: 100%; height: 100%; pointer-events: none; }
+.hud-health { position: absolute; left: 32dp; bottom: 32dp; width: 300dp; }
+.hud-health .caption { font-size: 14dp; color: #aab8cc; }
+progress.health { display: block; width: 300dp; height: 14dp; background-color: #1a212ec0; border-radius: 7dp; }
+progress.health fill { background-color: #4fd17a; border-radius: 7dp; }
+progress.health.low fill { background-color: #ff5a4f; }
+.hud-ammo { position: absolute; right: 36dp; bottom: 28dp; font-size: 40dp; font-weight: bold; color: #ffffff; text-align: right; }
+.hud-ammo .reserve { font-size: 18dp; color: #aab8cc; }
+.hud-objective { position: absolute; left: 32dp; top: 28dp; padding: 10dp 14dp; background-color: #0b0f1799; border-left: 3dp #3d8bff; }
+.crosshair { position: absolute; left: 50%; top: 50%; width: 6dp; height: 6dp; margin-left: -3dp; margin-top: -3dp;
+             background-color: #ffffffd0; border-radius: 3dp; }
+.hud-pause { position: absolute; right: 24dp; top: 24dp; pointer-events: auto; display: inline-block; font-size: 14dp; padding: 6dp 12dp; margin: 0; }

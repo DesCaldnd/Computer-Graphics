@@ -1,0 +1,18 @@
+<rml>
+<head>
+    <title>HUD</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<!-- Data model "hud" (created by game code / Lua before loading): health, maxHealth, ammo, reserve, objective. -->
+<body class="hud" data-model="hud">
+    <div class="hud-objective">{{objective}}</div>
+    <div class="crosshair"/>
+    <div class="hud-health">
+        <div class="caption">Здоровье {{health}} / {{maxHealth}}</div>
+        <progress class="health" max="1" data-attr-value="health / maxHealth" data-class-low="health < maxHealth * 0.25"/>
+    </div>
+    <div class="hud-ammo">{{ammo}} <span class="reserve">/ {{reserve}}</span></div>
+    <button id="pause" class="hud-pause">Пауза (Esc)</button>
+</body>
+</rml>

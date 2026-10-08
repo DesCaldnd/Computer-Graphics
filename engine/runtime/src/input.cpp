@@ -609,6 +609,7 @@ void InputSystem::update(f64 dt) {
     m_wheel = glm::vec2(0.0f);
     m_text.clear();
 
+    if (m_filter) std::erase_if(events, [this](const InputEvent& e) { return m_filter(e); });
     for (const auto& e : events) applyEvent(e);
     const bool captured = processCapture(events);
     if (captured) {

@@ -1,0 +1,15 @@
+<rml>
+<head>
+    <link type="text/rcss" href="golden.rcss"/>
+</head>
+<body>
+    <div id="panel">
+        <div id="title">Оксвальд UI</div>
+        Привет, мир!
+        <button>Кнопка</button>
+    </div>
+    <div id="glass"/>
+    <div id="rotated"/>
+    <div id="mono">ёЖ 0123</div>
+</body>
+</rml>

@@ -1,0 +1,23 @@
+/* RmlUi has no built-in user-agent stylesheet: the defaults every document needs. */
+body, div, h1, h2, h3, h4, p, hr, pre, form, tabset tabs, ul, li { display: block; }
+head, title, script, style, link { display: none; }
+body {
+    font-family: Inter;
+    font-weight: normal;
+    font-style: normal;
+    font-size: 16dp;
+    color: #e8ecf2;
+}
+em { font-style: italic; }
+strong, b { font-weight: bold; }
+h1 { font-size: 34dp; font-weight: bold; margin-bottom: 12dp; }
+h2 { font-size: 20dp; font-weight: bold; margin: 14dp 0 8dp 0; }
+p { margin: 6dp 0; }
+pre, .mono { font-family: "JetBrains Mono"; white-space: pre; }
+input, select, button, progress { display: inline-block; }
+input.text, input.password { width: 200dp; }
+textarea { display: inline-block; }
+select { width: 200dp; }
+table { display: table; }
+tr { display: table-row; }
+td { display: table-cell; }

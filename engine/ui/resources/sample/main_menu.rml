@@ -1,0 +1,17 @@
+<rml>
+<head>
+    <title>Main menu</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<body class="menu">
+    <div class="panel">
+        <div class="title">OXWALD</div>
+        <div class="subtitle">Showcase · Демонстрация движка</div>
+        <button id="play" class="primary">Играть / Play</button>
+        <button id="continue">Продолжить / Continue</button>
+        <button id="settings">Настройки / Settings</button>
+        <button id="quit">Выход / Quit</button>
+    </div>
+</body>
+</rml>
