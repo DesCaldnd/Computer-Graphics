@@ -24,6 +24,12 @@
 #include <oxwald/gameplay/script.hpp>
 #include <oxwald/gameplay/spline.hpp>
 #include <oxwald/scene/system.hpp>
+#if defined(OX_GAMEPLAY_HAS_WORLD)
+#include <oxwald/gameplay/world.hpp>
+#endif
+#if defined(OX_GAMEPLAY_HAS_ASSETS)
+#include <oxwald/gameplay/asset_providers.hpp>
+#endif
 
 #include <string_view>
 
@@ -38,6 +44,8 @@ struct GameplayConfig {
     bool networking = true;
     bool scripting = true;
     bool coroutines = true; // uses the CoroutineScheduler service when one is registered (async module)
+    bool world = true;      // world module components/systems (OX_GAMEPLAY_HAS_WORLD builds only)
+    bool prediction = true; // client-side prediction with input replay for PredictedCharacter entities
 
     // Services created when missing.
     physics::PhysicsWorldDesc physicsWorld;
@@ -47,15 +55,20 @@ struct GameplayConfig {
     bool tickCoroutines = true;
     // Add scene's TransformSystem when the scheduler has none.
     bool addTransformSystem = true;
+#if defined(OX_GAMEPLAY_HAS_WORLD)
+    WorldSystemsConfig worldSystems; // `physics` is and-ed with `physics` above
+#endif
 };
 
 // System names (SystemScheduler::find / setEnabled).
 namespace systems {
 inline constexpr std::string_view kLifecycle = "Gameplay.Lifecycle";
+inline constexpr std::string_view kAssetHotReload = "Gameplay.Assets.HotReload";
 inline constexpr std::string_view kNetPre = "Gameplay.Net.Poll";
 inline constexpr std::string_view kScriptPre = "Gameplay.Script.PreUpdate";
 inline constexpr std::string_view kCoroutines = "Gameplay.Coroutines";
 inline constexpr std::string_view kScriptFixed = "Gameplay.Script.FixedUpdate";
+inline constexpr std::string_view kNetPredict = "Gameplay.Net.Predict";
 inline constexpr std::string_view kPerception = "Gameplay.AI.Perception";
 inline constexpr std::string_view kBehaviorTrees = "Gameplay.AI.BehaviorTrees";
 inline constexpr std::string_view kNavigation = "Gameplay.AI.Navigation";

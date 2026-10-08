@@ -43,12 +43,12 @@ void CoroutineRuntime::detach() {
 }
 
 void CoroutineRuntime::onPendingDestroy(entt::registry&, entt::entity e) {
-    if (m_scheduler) m_scheduler->cancelOwner(toRuntimeId(e));
+    if (m_scheduler) m_scheduler->cancelOwner(coroutineOwner(e));
 }
 
 void CoroutineRuntime::cancelWorldOwners() {
     if (!m_scheduler || !m_world) return;
-    for (auto e : m_world->registry().view<IdComponent>()) m_scheduler->cancelOwner(toRuntimeId(e));
+    for (auto e : m_world->registry().view<IdComponent>()) m_scheduler->cancelOwner(coroutineOwner(e));
 }
 
 void CoroutineRuntime::syncPlayState(bool playing) {

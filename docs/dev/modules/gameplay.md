@@ -1,7 +1,7 @@
 # gameplay (`Oxwald::gameplay`, namespace `ox::gameplay`)
 
 ECS glue: components + systems that bind the CPU modules (physics, animation, spline, audio, ai, net, script and,
-when configured, async) to the scene `World`. Public deps: scene + all of those modules. Umbrella header
+when configured, async, world and the assets database) to the scene `World`. Public deps: scene + all of those modules. Umbrella header
 `<oxwald/gameplay/gameplay.hpp>`.
 
 ```cpp
@@ -40,10 +40,12 @@ components, so cloned/serialized components never carry stale handles.
 | Phase | Order | System | Mode | Work |
 | --- | --- | --- | --- | --- |
 | PreUpdate | -1000 | `Gameplay.Lifecycle` | always | attach/detach runtimes, edit<->play transitions |
+| PreUpdate | -950 | `Gameplay.Assets.HotReload` | always | apply queued `GameplayAssetEvents` (scripts, trees, prefabs, animators, mesh colliders) |
 | PreUpdate | -900 | `Gameplay.Net.Poll` | always | net clock, server/client poll, client interpolation -> transforms |
 | PreUpdate | 0 | `Gameplay.Script.PreUpdate` | play | `AsyncBridge::update`, `vm.update(dt)` (timers, coroutines, hot reload), create pending instances |
 | PreUpdate | 10 | `Gameplay.Coroutines` | always | `CoroutineScheduler::tick` (`config.tickCoroutines`) |
 | FixedUpdate | -100 | `Gameplay.Script.FixedUpdate` | play | `onFixedUpdate` |
+| FixedUpdate | -90 | `Gameplay.Net.Predict` | play | PredictedCharacter: client samples/applies/sends inputs, server runs queued inputs + acks |
 | FixedUpdate | -70 | `Gameplay.AI.Perception` | play | listeners/sources from transforms, LOS via physics, blackboard `target*` keys |
 | FixedUpdate | -60 | `Gameplay.AI.BehaviorTrees` | play | tick trees (`tickInterval`) |
 | FixedUpdate | -50 | `Gameplay.AI.Navigation` | play | bake/load navmesh on demand, crowd update, move entities / drive character controllers |
@@ -153,6 +155,22 @@ source, "sight"|"hearing")`.
 | `NetworkIdentity` | `netType` (prefab name the client spawns), `relevancy`, `relevancyRadius`, `priority`, `viewer`; runtime `netId`, `owner` (peer, set on the server before replication) |
 | `NetworkTransform` | `syncPosition`, `syncRotation`, `syncScale`, `positionRange`, `positionResolution`, `rotationBits`, `interpolate`, `predicted`, `correctionThreshold` |
 
+| `PredictedCharacter` | `moveAction` ("Move", Axis2D), `jumpAction` ("Jump"), `moveSpeed`, `correctionTolerance` (m), `inputRedundancy`; runtime `corrections`, `pendingInputs` |
+
+**Client prediction with input replay** (`PredictedCharacterComponent` + `CharacterController` + `NetworkIdentity`
+with `owner` = the controlling client + `NetworkTransform.predicted`): each fixed step the owning client samples a
+`CharacterInput{move, yaw, jump}` from the `ICharacterInputSource` service (the engine implements it with
+InputSystem actions, relative to the primary camera yaw; tests register scripted sources), simulates it immediately
+through `PhysicsWorld::moveCharacter` (`net::ClientPrediction`) and sends the newest unacknowledged inputs
+(`UnreliableSequenced`, exact floats). The server runs them in order (`net::ServerInputQueue`, <= 4 per step, dt
+clamped) with the same function and acks `(last seq, position, velocity)` to the owner; a mismatch above
+`correctionTolerance` rewinds the character and replays the pending inputs. Both sides tag the entity
+`ExternalCharacterMotionTag` so the physics step does not also move it (teleports by gameplay code are still
+honoured: the server continues from the moved position, the client is corrected by the next ack). Other clients
+interpolate it as usual. Without networking (or for a server-owned character on a host) the input drives
+`CharacterController.desiredVelocity/jump`. Tested: immediate local response under 60 ms latency, convergence
+< 2 cm without loss and < 5 cm with 20 % loss + jitter, replay after a server-side teleport.
+
 `NetworkRuntime::startServer(transport, NetServerConfig)` / `connect(transport, host, port)`: the server replicates
 every `NetworkIdentity` entity (also ones created later; destroyed ones despawn). Properties: world transform
 (quantised), then every reflected `attr::Replicated` field of the entity's components sorted by component name/field
@@ -236,20 +254,86 @@ end
 ## Coroutines (async module)
 
 `startCoroutine(services, entity, Task<>, name)` spawns on the `CoroutineScheduler` service with owner
-`coroutineOwner(entity)`; `stopAllCoroutines(services, entity)`. `CoroutineRuntime` cancels an entity's coroutines
+`coroutineOwner(entity)` (= `ox::entityRuntimeId(handle)` from `<oxwald/scene/runtime_id.hpp>`, the same id the
+engine runtime uses on its destroy/unload paths; `toRuntimeId` is the same packing); `stopAllCoroutines(services, entity)`. `CoroutineRuntime` cancels an entity's coroutines
 when it is scheduled for destruction (`PendingDestroyTag` construct -> before any component is freed; also on
 `destroyImmediate`) and all entity coroutines when play mode stops. Script coroutines from C++:
 `ScriptRuntime::startScriptCoroutine(entity, "fn")` (`AsyncBridge::invoke`, owned by the instance). Script instances
 of destroyed entities get `onDestroy` immediately at `Entity::destroy()` (deferred to the end of the current Lua call
 when a script destroys an entity from Lua), so components are still accessible.
 
-## Providers (assets are pending)
+## Providers and the asset database
 
 `IMeshColliderProvider` (mesh triangles for mesh colliders and navmesh baking), `IAnimationAssetProvider` (skeletons,
 controllers, clips), `IBehaviorTreeProvider` (JSON), `IPrefabProvider` (prefab documents by name + `prefabNames()` for
-network types), `IScriptSourceProvider` (sources by name/id), `IAudioClipProvider` (SoundId by asset id).
-`GameplayAssetRegistry` implements all of them in memory; `registerIn(services)` registers it for every interface not
-yet present. The asset database should implement them.
+network types), `IScriptSourceProvider` (sources by name/id), `IAudioClipProvider` (SoundId by asset id),
+`IHeightmapProvider` (`HeightmapData{resolution, normalized}` for terrains). `GameplayAssetRegistry` implements them
+in memory (tests, tools); `registerIn(services)` only fills interfaces not yet present.
+
+**Asset database bridge** (`engine/gameplay/assets/`, compiled when the `assets` module is configured,
+`OX_GAMEPLAY_HAS_ASSETS=1`, header `<oxwald/gameplay/asset_providers.hpp>`). Dependency direction gameplay -> assets:
+the asset database knows nothing about gameplay, gameplay owns the interfaces and adapts `assets::AssetManager`:
+
+```cpp
+ox::assets::AssetRegistry registry(projectDir);            // or a PakAssetSource (cooked)
+ox::gameplay::registerGameplayImporters(registry.importers()); // .oxbt behaviour trees, .oxanimctrl controllers
+ox::assets::AssetManager manager(registry, &jobs);
+ox::gameplay::AssetProviders providers(manager);
+providers.registerIn(services);                            // all 7 interfaces + GameplayAssetEvents
+```
+
+- Names: UUID string, asset path (`Prefabs/enemy.oxprefab`), path without extension (`Prefabs/enemy`) or a unique
+  file stem (`enemy`); `prefabNames()` lists paths without extension + unique stems.
+- Loads are `loadSync` on first use (game thread), type-checked against the asset record, handles kept so used
+  assets stay resident. Meshes use the import-time collision mesh when present, else LOD 0. Audio clips are decoded
+  with `AudioEngine::loadSoundFromMemory`. Behaviour trees / animator controllers are `AssetType::Raw` blobs with
+  info `kind` = `BehaviorTree` / `AnimatorController` (cookable without new asset types); controllers are
+  `InlineAnimatorController` JSON built with `buildAnimatorController()`; their clip UUIDs are import dependencies.
+- **Hot reload**: `AssetManager::onReloaded` -> caches invalidated -> `GameplayAssetEvents::changed`
+  (`GameplayAssetChange{kind, id, path}`) -> queued by `Gameplay.Assets.HotReload` (PreUpdate -950) and applied at the
+  next frame: scripts reload in place (`ScriptRuntime::reloadChangedScripts` -> `ScriptVM::reloadScript`: same
+  instance and `self`, `on_reload`), behaviour trees are rebuilt keeping their blackboard
+  (`AIRuntime::reloadBehaviorTree`), prefab instances are re-synchronised keeping overrides
+  (`updatePrefabInstances`), animators using a changed skeleton/controller/clip are rebuilt
+  (`AnimationRuntime::invalidateAssets`), mesh colliders using a changed mesh are recreated. Heightmap changes
+  rebuild terrains (world section).
+
+## World (`engine/gameplay/world/`, `OX_GAMEPLAY_HAS_WORLD=1` when the `world` module is configured)
+
+`<oxwald/gameplay/world.hpp>`. `registerGameplayTypes()` also registers the world components
+(`registerWorldGameplayTypes()`); `addGameplaySystems` calls `addWorldSystems(scheduler, services,
+config.worldSystems)` unless `GameplayConfig::world = false` (`WorldSystemsConfig`: physics, vegetation, streaming,
+bindLua, aspect, maxVegetationChunksPerFrame, streamingExecutor Auto/Inline/JobSystem/ThreadPool). Services:
+`WorldRuntime` (all derived data keyed by entity: heightfields, quadtrees, splat maps, vegetation chunks, bodies,
+TimeOfDay/WeatherController, chunk streamers) and `WorldRenderData`.
+
+| Component (category "World") | Purpose |
+| --- | --- |
+| `Terrain` | source Procedural (noise + optional hydraulic/thermal erosion) / Heightmap asset (`IHeightmapProvider`) / Flat / External (streamed tiles); resolution, worldSize, heightScale/Offset, format, centred or offset placement; splat layer materials + auto-paint rules; CDLOD settings; collision -> static Jolt heightfield bodies per tile (play mode, user data = terrain entity so raycasts report it) |
+| `Vegetation` | `world::VegetationLayer`s scattered around viewers (streaming sources + primary camera) in chunks, tree colliders, exclusion zones |
+| `Sky` | Preetham turbidity, sun disc / moon / stars parameters |
+| `TimeOfDay` | location, date, `localHours` (SaveGame), timeScale; drives the sun `Light` (rotation, colour, lux), `Environment` fog/ambient and the primary camera exposure; curve overrides; `WorldTimeEvent` (Sunrise/Sunset/Noon/Midnight) on `WorldRuntime::onTimeOfDayEvent` + EventBus |
+| `Water` | Gerstner waves (explicit or `fromWind`), extent, fluid density, current |
+| `Wind` | global wind + optional weather preset blending |
+| `Buoyancy` | box sample points or explicit points, drag; forces/torques through `PhysicsRuntime` before the physics step |
+| `StreamingSource` / `WorldStreaming` | viewers; chunk streaming of `world::ChunkData` files (`project://World/chunk_{x}_{z}.oxchunk` via Vfs) -> terrain tiles + vegetation, and/or prefabs (`Chunks/chunk_{x}_{z}` via `IPrefabProvider`); unload destroys spawned entities |
+
+Systems: `Gameplay.World.Lifecycle` (PreUpdate -990), `.Streaming` (-500, play), `.Terrain` (-400), `.Environment`
+(-300), `.Buoyancy` (FixedUpdate -10, play), `.Vegetation` (PostUpdate 300), `.Extract` (Extract 50). Visual data
+(terrain build, LOD selection, sky) also runs in edit mode. Lua: components through `e:get("Terrain")`, plus the
+`world` table (`terrainHeight`, `terrainNormal`, `waterHeight`, `timeOfDay`, `setTimeOfDay`, `isDay`,
+`sunDirection`, `wind`, `setWeather`, `isAreaReady`, `time`).
+
+**WorldRenderData** (renderer contract, filled in Extract on the game thread; read it in `IRenderer::extract()` and
+copy): primary camera view/reversed-Z projection (`aspect` set by the renderer); per terrain the heightfield
+(+version, dirty rect, fullUpload), splat map (+version, dirty rect), layer materials, shared `TerrainGridMesh`,
+quadtree (re-select for shadow views), skirt depths, selected `TerrainPatchGpu`s; vegetation prototypes + batches of
+`VegetationInstanceGpu` with cells; sky (`PreethamSky::Gpu`, sun/moon, stars rotation, atmosphere, main light);
+water (`GerstnerParamsGpu`, transform, size); `WindGpu`; weather. See `world/render_data.hpp`.
+
+Limits: brush edits are runtime-only (a component change rebuilds from the component); streamed vegetation needs a
+heightfield tile in its chunk; the chunk `userData` blob is ignored; the JobSystem streaming executor is not covered
+by tests (tests use Inline).
 
 ## Tests (`ox_gameplay_tests`, label `gameplay`)
 
@@ -268,7 +352,10 @@ interpolation (moves every frame at 30 Hz snapshots, ~100 ms behind), kinematic 
 round trip (binary + JSON, byte-identical binary<->JSON) with all 20 gameplay components; prefab with gameplay
 components instantiates twice and simulates. Async: Lua `await` on a C++ future, `physics.raycastAsync`,
 `scene.nextFrame`; script coroutine started from C++; C++ entity coroutine cancelled (unwound) on destroy and on play
-stop.
+stop. Assets bridge: every provider kind from a temporary project (registry + manager), hot reload of a script,
+behaviour tree and prefab into a running world (instance/self/blackboard/overrides kept). Prediction: latency
+convergence, 20 % loss + server teleport replay, offline input. World: 14 tests (serialization, terrain physics,
+heightmap reload, time of day, buoyancy, streaming files/prefabs, render data, Lua, play-in-editor clone).
 
 ## Known limits / TODO
 
@@ -277,8 +364,9 @@ stop.
 - Edit-mode raycasts/overlaps return nothing (bodies exist only in play mode).
 - One navmesh surface per world; crowd agents driving a character controller are re-seated when they drift (no
   Detour position sync API); `NavObstacle` carving requires `dynamicObstacles` (tile cache, not serialisable).
-- Networking: client prediction is limited to "owned + predicted => local simulation, server corrections above
-  `correctionThreshold`" (no input replay through `ClientPrediction` yet); replicated property layout is fixed at spawn
+- Networking: input replay covers character controllers (`PredictedCharacter`); other owned + predicted entities
+  still use "local simulation, snapshot corrections above `correctionThreshold`". Rigid-body prediction is not
+  rewound. Replicated property layout is fixed at spawn
   (components added later are not replicated); array/map fields are not replicable; replicated setters don't fire
   change signals.
 - One script per entity (`ScriptComponent`); a `ScriptList` component would lift that.

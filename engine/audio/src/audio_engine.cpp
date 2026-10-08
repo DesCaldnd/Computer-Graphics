@@ -385,6 +385,37 @@ SoundId AudioEngine::createFromPcm(std::span<const f32> interleaved, u32 channel
     return id;
 }
 
+SoundId AudioEngine::loadSoundFromMemory(std::span<const std::byte> encoded, std::string_view debugName) {
+    if (!m_impl || encoded.empty()) {
+        return {};
+    }
+    // Decoded to the engine rate up front: PCM sounds need no decoder (or its source buffer) at play time.
+    ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, m_impl->config.sampleRate);
+    ma_decoder decoder;
+    if (ma_decoder_init_memory(encoded.data(), encoded.size(), &cfg, &decoder) != MA_SUCCESS) {
+        OX_LOG_ERROR("audio", "failed to decode sound '{}' from memory", debugName);
+        return {};
+    }
+    const u32 channels = decoder.outputChannels;
+    std::vector<f32> pcm;
+    f32 block[4096];
+    const ma_uint64 framesPerBlock = channels ? (sizeof(block) / sizeof(f32)) / channels : 0;
+    for (;;) {
+        ma_uint64 read = 0;
+        if (framesPerBlock == 0 || ma_decoder_read_pcm_frames(&decoder, block, framesPerBlock, &read) != MA_SUCCESS ||
+            read == 0) {
+            break;
+        }
+        pcm.insert(pcm.end(), block, block + read * channels);
+    }
+    ma_decoder_uninit(&decoder);
+    if (pcm.empty()) {
+        OX_LOG_ERROR("audio", "sound '{}' decoded to no samples", debugName);
+        return {};
+    }
+    return createFromPcm(pcm, channels, m_impl->config.sampleRate);
+}
+
 SoundId AudioEngine::createSine(f32 frequency, f32 amplitude) {
     if (!m_impl) {
         return {};

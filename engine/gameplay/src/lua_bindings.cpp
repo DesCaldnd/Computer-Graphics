@@ -4,6 +4,7 @@
 #include <oxwald/gameplay/ai.hpp>
 #include <oxwald/gameplay/animation.hpp>
 #include <oxwald/gameplay/audio.hpp>
+#include <oxwald/gameplay/coroutines.hpp>
 #include <oxwald/gameplay/physics.hpp>
 #include <oxwald/gameplay/spline.hpp>
 #include <oxwald/scene/components.hpp>
@@ -745,7 +746,7 @@ void installBindings(ScriptRuntime& rt) {
                     return arrived;
                 });
                 promise->setValue(arrived);
-            }, SpawnOptions{.name = "lua.moveToAsync", .owner = toRuntimeId(h)});
+            }, SpawnOptions{.name = "lua.moveToAsync", .owner = coroutineOwner(h)});
             return R->bridge()->wrap(future);
         };
 #endif

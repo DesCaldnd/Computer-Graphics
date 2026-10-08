@@ -26,7 +26,7 @@ engine.shutdown();       // also from ~Engine
 JobSystem → EventBus → FileWatcher → Vfs (`engine://` engine dir, `project://` project root (writable in editor),
 `user://` `paths::userDataDir(project name)` or `cfg.userDir`) → DebugDraw → Settings (project defaults → user
 settings → `--quality`/`--cvar`) → InputSystem (project mappings + user rebinds) → SaveGameSystem → Console →
-modules in order: built-ins (physics `PhysicsWorld`, audio `AudioEngine` (offline when headless), script `ScriptVM`
+modules in order: built-ins (assets — see below —, physics `PhysicsWorld`, audio `AudioEngine` (offline when headless), script `ScriptVM`
 + Lua `input` table + `AsyncBridge`, async `JobSystemExecutor` + `CoroutineScheduler`, gameplay
 `addGameplaySystems`) then user modules → SystemScheduler (+TransformSystem, module systems) → startup scene →
 IRenderer (`NullRenderer` by default) `init` → RenderPipeline start.
@@ -49,7 +49,11 @@ PreUpdate order with all modules: `Gameplay.Net.Poll` (-900) → script VM (`bri
 system `Runtime.ScriptVM`, or `Gameplay.Script.PreUpdate` when gameplay is linked; order 0, play mode only) →
 `Runtime.Coroutines` (order 10: `scheduler.tick(realDt, frame)` with `setPaused(paused || !playing)` /
 `setTimeScale(timeScale)`). FixedUpdate: physics step (0) → `Runtime.Coroutines.Fixed` (10, `fixedTick`).
-`onWorldUnloading` → `CoroutineScheduler::cancelAll()`. Audio: `AudioEngine::update` in PostUpdate (1000).
+Coroutine owners are `ox::entityRuntimeId(e)` (scene `runtime_id.hpp`, identical to `gameplay::coroutineOwner`):
+entity coroutines are cancelled when the entity is scheduled for destruction / destroyed immediately (gameplay's
+`CoroutineRuntime`, or the async module's own registry hooks when gameplay is disabled); leaving editor play mode
+cancels only the play world's entity coroutines; a level change / shutdown (`onWorldUnloading` of the level world)
+→ `CoroutineScheduler::cancelAll()`. Audio: `AudioEngine::update` in PostUpdate (1000).
 
 **Worlds & modes**: `world()` (active), `loadScene(uri|path)` (sync replace), `loadSceneAdditive` / `unloadAdditive`
 (UUIDs kept), `requestLevelChange(uri)` (file read + decode on the job system, `LoadingScreenHooks{begin,end}`,
@@ -58,6 +62,25 @@ system `Runtime.ScriptVM`, or `Gameplay.Script.PreUpdate` when gameplay is linke
 in Edit; `enterPlayMode()` clones the edit world (`World::clone`) and simulates the copy, `exitPlayMode()` drops it.
 `setPaused`, `setTimeScale`, `stepFrames`, `requestQuit`. Console commands: `quit pause step timescale level save load
 stats help find history clear`.
+
+## Assets (`OX_HAS_ASSETS`, built-in module "assets", first in the module order)
+
+* **Dev/editor** (project directory): `AssetRegistry` service over `<project>/<assetDirs[0]>` (default `Assets`;
+  further asset dirs are ignored with a warning), gameplay importers registered, `scan()` at init; watching +
+  `poll()` every frame when `cfg.editor` or `cfg.fileWatching` (hot reimport).
+* **Cooked** (`EngineConfig::pakPath` + optional `patchPaks`, later override earlier): `PakAssetSource` service only
+  (no importers). Without `projectPath` the project settings come from the pak's root `<Name>.oxproj` (cookProject
+  copies it in). VFS: raw pak entries mounted on `project://` (priority 10) and an asset-path view
+  (priority 20): `project://<assetDir>/<asset path>` reads the cooked artifact, so `loadScene` /
+  `requestLevelChange("project://Assets/Levels/a.oxscene")` and the startup scene work unchanged from a pak.
+  A missing/broken pak fails `Engine::init`.
+* Both: `assets::IAssetSource` + `assets::AssetManager` services (`cfg.assetMemoryBudget`), `update()` in the
+  module's `preUpdate` (game thread, every frame, before the scheduler tick), `waitAll()` at shutdown. With gameplay:
+  `gameplay::AssetProviders` registered for every provider interface + `GameplayAssetEvents` (hot reload into
+  running scripts/trees/prefabs, see gameplay.md). Toggle with `"modules": {"assets": false}`.
+* The gameplay module also registers `gameplay::ICharacterInputSource` (InputSystem actions of
+  `PredictedCharacter.moveAction/jumpAction`, yaw of the primary camera, jump presses latched per frame) and passes
+  `"world"` as a module toggle.
 
 ## Threading (game thread + render thread)
 
@@ -176,16 +199,23 @@ Opens a GLFW window unless headless; NullRenderer until the render module provid
 ## Tests
 
 `ctest --test-dir build/<you> -L runtime` — 44 tests core+scene only, 47 with physics/audio/script/async (+Lua
-input, coroutine pause/time-scale/cancel-on-unload, module toggles). Passes under ThreadSanitizer (only core
-JobSystem/enkiTS internals need suppressing).
+input, coroutine pause/time-scale/cancel-on-unload, module toggles), plus `assets_integration_tests.cpp`: asset
+database service + providers + scripts from assets, cooked game running from the pak alone (project file, startup
+scene, async level change, prefab), missing pak, `--pak` mapping, coroutine owner ids on destroy/unload paths (with
+and without the gameplay module). Passes under ThreadSanitizer with **no suppressions**: core's JobSystem carries
+`__tsan_acquire/__tsan_release` annotations for the enkiTS hand-off (enkiTS is prebuilt without TSan, so its
+synchronisation is invisible; verified by relinking against a TSan-built enkiTS — 0 reports). `tools/sanitizers/
+tsan.supp` documents this and has no active entries.
 
 ## Limits / TODO
 
-* `--pak` not supported yet (needs the assets module's pak `IMountSource`); no AssetManager service yet.
+* `LaunchOptions::toEngineConfig` maps `--pak` to `EngineConfig::pakPath`; apps/player still prints a "not supported"
+  warning until its owner removes it (no other change needed).
+* One asset database root per project (first `assetDirs` entry).
 * Render module: implement `IRenderer`, add a factory the player calls; editor needs an `IPlatform` for its viewport.
-* Gameplay integration (`GameplayModule`) compiles but the gameplay module currently fails to link
-  (`typeOf<InlineAnimatorController>` undefined) — its own work in progress.
 * Slot listing decodes whole files (fine for typical saves; a header-only read would be faster).
 * Header timestamps have 1 s resolution; autosave rotation uses file mtimes.
 * Gamepad sources read "any pad"; per-player device assignment (local multiplayer) is not implemented.
 * Net/AI have no engine-level service (gameplay owns their runtimes); no dedicated-server net loop wiring yet.
+* `ProjectSettings::assetDirs` default changed to `{"Assets"}` (asset registry convention); docs/guide still shows
+  `"assets"` (case-insensitive on macOS only).

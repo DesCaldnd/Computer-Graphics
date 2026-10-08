@@ -45,6 +45,11 @@ struct EngineConfig {
     f64 maxFrameDelta = 0.25;    // clamps hitches (debugger breaks) before time scaling
     std::filesystem::path projectPath; // .oxproj or its directory; empty = no project
     std::optional<ProjectSettings> projectSettings; // in-memory project (tests/tools) when no projectPath
+    // Cooked game (assets module): assets and project:// are served from this .oxpak only (PakAssetSource, no
+    // AssetRegistry/importers). Without projectPath the project settings come from the pak's <Name>.oxproj.
+    std::filesystem::path pakPath;
+    std::vector<std::filesystem::path> patchPaks; // mounted after pakPath; later paks override earlier ones
+    usize assetMemoryBudget = 0;                  // AssetManager budget in bytes (0 = unlimited)
     std::filesystem::path userDir;   // user:// root; default paths::userDataDir(appName or project name)
     std::filesystem::path engineDir; // engine:// root; default paths::engineSourceDir()
     std::string startupScene;    // overrides the project's startup scene ("" = project's, "-" = none)

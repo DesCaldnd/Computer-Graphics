@@ -63,6 +63,7 @@ public:
         bool deleteOrphanMetas = true; // metas whose source vanished (and was not matched to a moved file)
         bool importOnDemand = true;    // record()/readArtifact() import stale assets
         std::chrono::milliseconds watchDebounce{100};
+        std::filesystem::path assetsDir = "Assets"; // source directory, relative to the project (or absolute)
     };
 
     explicit AssetRegistry(std::filesystem::path projectDir);

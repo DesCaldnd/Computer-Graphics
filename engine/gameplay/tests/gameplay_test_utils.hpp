@@ -18,6 +18,9 @@ inline GameplayConfig testConfig() {
     c.physicsWorld.maxContactConstraints = 1024;
     c.physicsWorld.tempAllocatorBytes = 8u << 20;
     c.scriptVM.hotReloadInterval = 0.0;
+#if defined(OX_GAMEPLAY_HAS_WORLD)
+    c.worldSystems.streamingExecutor = WorldSystemsConfig::Executor::Inline; // deterministic
+#endif
     return c;
 }
 
@@ -27,8 +30,8 @@ class GameplayHarness {
 public:
     explicit GameplayHarness(GameplayConfig config = testConfig(), std::function<void(Services&)> preServices = {}) {
         registerGameplayTypes();
+        if (preServices) preServices(services); // may register real providers; the in-memory ones fill the rest
         assets.registerIn(services);
-        if (preServices) preServices(services);
         addGameplaySystems(scheduler, services, config);
     }
     ~GameplayHarness() { scheduler.detach(); }

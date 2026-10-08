@@ -68,6 +68,9 @@ environment with the new chunk, keeps its `self` table (all fields persist), rec
 properties and `on_reload(self)` (or `onReload`) is called. A changed `require`d module invalidates the module cache
 and reloads all file scripts. Coroutines/timers/subscriptions started by the old code keep their old closures.
 
+`ScriptVM::reloadScript(asset, source)` reloads a string-backed script (asset database, network) the same way
+(compile check first, then every live instance reloads in place); gameplay uses it for asset hot reload.
+
 ## Lua API
 
 | Global | |

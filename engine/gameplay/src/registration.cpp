@@ -526,6 +526,18 @@ void registerNetworking(ComponentRegistry& reg) {
         .field("predicted", &NetworkTransformComponent::predicted)
         .field("correctionThreshold", &NetworkTransformComponent::correctionThreshold, Range{0.0, 100.0});
     reg.add<NetworkTransformComponent>({.icon = "arrows-up-down-left-right"});
+
+    OX_REFLECT_TYPE(PredictedCharacterComponent, "PredictedCharacter")
+        .attributes(Category{"Networking"}, Meta{"icon", "gamepad"})
+        .field("moveAction", &PredictedCharacterComponent::moveAction, Tooltip{"Axis2D input action (x right, y forward)"})
+        .field("jumpAction", &PredictedCharacterComponent::jumpAction)
+        .field("moveSpeed", &PredictedCharacterComponent::moveSpeed, Range{0.0, 100.0})
+        .field("correctionTolerance", &PredictedCharacterComponent::correctionTolerance, Range{0.0, 10.0},
+               Tooltip{"Predicted vs server position error (m) that triggers a rewind + input replay"})
+        .field("inputRedundancy", &PredictedCharacterComponent::inputRedundancy, Range{1.0, 64.0})
+        .field("corrections", &PredictedCharacterComponent::corrections, NoSerialize{}, ReadOnly{})
+        .field("pendingInputs", &PredictedCharacterComponent::pendingInputs, NoSerialize{}, ReadOnly{});
+    reg.add<PredictedCharacterComponent>({.icon = "gamepad"});
 }
 
 } // namespace
@@ -541,6 +553,9 @@ void registerGameplayTypes() {
     registerAI(reg);
     registerScripting(reg);
     registerNetworking(reg);
+#if defined(OX_GAMEPLAY_HAS_WORLD)
+    registerWorldGameplayTypes();
+#endif
 }
 
 } // namespace ox

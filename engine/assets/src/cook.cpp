@@ -86,6 +86,18 @@ Result<CookReport> cookProject(AssetRegistry& registry, const std::filesystem::p
         report.items.push_back({id, rec->type, rec->path, bytes->size(), 0});
         catalog.push_back(std::move(e));
     }
+    // Project files (<Name>.oxproj) travel at the pak root so a cooked game runs from the pak alone
+    // (`OxwaldPlayer --pak Game.oxpak`); the runtime reads the first one when no project directory is given.
+    {
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(registry.projectDir(), ec)) {
+            if (!entry.is_regular_file() || entry.path().extension() != ".oxproj") continue;
+            if (auto bytes = detail::readFile(entry.path())) {
+                writer.add(entry.path().filename().generic_string(), *bytes,
+                           options.compress ? PakCompression::Zstd : PakCompression::None);
+            }
+        }
+    }
     const std::string cat = catalogToJson(catalog);
     writer.add(std::string(kPakCatalogPath), detail::asBytes(cat), options.compress ? PakCompression::Zstd : PakCompression::None);
     if (auto st = writer.write(outputPak, options.compressionLevel); !st) return st.error();

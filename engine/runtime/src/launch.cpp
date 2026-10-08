@@ -136,6 +136,7 @@ EngineConfig LaunchOptions::toEngineConfig(std::string appName) const {
     EngineConfig c;
     c.appName = std::move(appName);
     c.projectPath = project;
+    c.pakPath = pak;
     c.startupScene = scene;
     c.headless = headless;
     c.dedicatedServer = server;

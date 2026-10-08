@@ -1,22 +1,18 @@
 #pragma once
 
 #include <oxwald/core/types.hpp>
+#include <oxwald/scene/runtime_id.hpp>
 #include <oxwald/scene/world.hpp>
 
 #include <entt/entity/entity.hpp>
 
 namespace ox::gameplay {
 
-// Entity <-> u64 used as physics body user data, blackboard entity ids and similar runtime-only references.
-// Encodes the entt handle (index + version) so stale ids are detected by World::valid(). Never persisted:
-// use EntityRef (UUID) for anything that is saved.
-[[nodiscard]] constexpr u64 toRuntimeId(entt::entity e) {
-    return e == entt::null ? 0 : (u64{1} << 32) | static_cast<u64>(entt::to_integral(e));
-}
+// Entity <-> u64 used as physics body user data, blackboard entity ids and similar runtime-only references
+// (ox::entityRuntimeId, shared with the runtime). Never persisted: use EntityRef (UUID) for anything saved.
+[[nodiscard]] constexpr u64 toRuntimeId(entt::entity e) { return entityRuntimeId(e); }
 [[nodiscard]] inline u64 toRuntimeId(const Entity& e) { return e.valid() ? toRuntimeId(e.handle()) : 0; }
-[[nodiscard]] constexpr entt::entity fromRuntimeId(u64 id) {
-    return (id >> 32) == 1 ? static_cast<entt::entity>(static_cast<u32>(id)) : entt::entity{entt::null};
-}
+[[nodiscard]] constexpr entt::entity fromRuntimeId(u64 id) { return entityFromRuntimeId(id); }
 // Invalid Entity when the id is 0 or the entity no longer exists in `world`.
 [[nodiscard]] inline Entity entityFromRuntimeId(World& world, u64 id) {
     const entt::entity e = fromRuntimeId(id);

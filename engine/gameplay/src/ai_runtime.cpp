@@ -727,6 +727,28 @@ AIRuntime::TreeRecord* AIRuntime::ensureTree(Entity e) {
     return &ins->second;
 }
 
+u32 AIRuntime::reloadBehaviorTree(const Uuid& id) {
+    if (!m_world || !id.isValid()) return 0;
+    std::vector<std::pair<entt::entity, std::unordered_map<std::string, ai::BlackboardValue>>> affected;
+    for (auto& [e, rec] : m_trees) {
+        if (rec.treeId != id) continue;
+        affected.emplace_back(e, rec.tree ? rec.tree->blackboard().values()
+                                          : std::unordered_map<std::string, ai::BlackboardValue>{});
+    }
+    u32 rebuilt = 0;
+    for (auto& [e, values] : affected) {
+        m_trees.erase(e);
+        if (!m_world->valid(e) || !m_world->registry().all_of<BehaviorTreeComponent>(e)) continue;
+        TreeRecord* rec = ensureTree(m_world->wrap(e));
+        if (!rec) continue;
+        ai::Blackboard& bb = rec->tree->blackboard();
+        for (auto& [key, value] : values) bb.setValue(key, std::move(value));
+        ++rebuilt;
+    }
+    if (rebuilt) OX_LOG_INFO("gameplay", "behaviour tree {} reloaded ({} instance(s))", id.toString(), rebuilt);
+    return rebuilt;
+}
+
 void AIRuntime::updateBehaviorTrees(f32 dt) {
     if (!m_world || !m_playing) return;
     OX_PROFILE_ZONE_N("AIRuntime::updateBehaviorTrees");

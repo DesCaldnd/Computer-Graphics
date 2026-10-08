@@ -144,7 +144,8 @@ AssetRegistry::AssetRegistry(fs::path projectDir) : AssetRegistry(std::move(proj
 
 AssetRegistry::AssetRegistry(fs::path projectDir, Options options)
     : m_projectDir(fs::absolute(projectDir).lexically_normal()), m_options(options) {
-    m_assetsDir = m_projectDir / "Assets";
+    m_assetsDir = (m_projectDir / m_options.assetsDir).lexically_normal();
+    if (!m_assetsDir.has_filename()) m_assetsDir = m_assetsDir.parent_path(); // "Assets/"
     m_cacheDir = m_projectDir / ".oxcache";
     std::error_code ec;
     fs::create_directories(m_assetsDir, ec);

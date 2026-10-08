@@ -98,6 +98,10 @@ void fillEverything(World& world, Entity e, Entity other) {
     ni.relevancy = net::Relevancy::Distance;
     ni.netId = 99; // runtime
     e.add<NetworkTransformComponent>().predicted = true;
+    auto& pch = e.add<PredictedCharacterComponent>();
+    pch.moveSpeed = 6.5f;
+    pch.jumpAction = "Leap";
+    pch.corrections = 5; // runtime
     (void)world;
 }
 
@@ -118,7 +122,7 @@ std::vector<const ComponentInfo*> gameplayComponents() {
 TEST(GameplaySerialization, SceneRoundTripWithAllGameplayComponents) {
     registerGameplayTypes();
     const auto infos = gameplayComponents();
-    EXPECT_EQ(infos.size(), 20u);
+    EXPECT_EQ(infos.size(), 21u);
     World world;
     Entity other = world.create("Other");
     Entity e = world.create("Everything");

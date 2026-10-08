@@ -105,6 +105,11 @@ struct CharacterControllerComponent {
     glm::vec3 velocity{0.f};
 };
 
+// Runtime tag (not reflected): the character is moved by someone else (network prediction replays inputs through
+// PhysicsWorld::moveCharacter itself). The physics step still syncs teleports and writes the character pose back,
+// but does not move it from desiredVelocity/jump.
+struct ExternalCharacterMotionTag {};
+
 // Marks the entity's collider as a sensor and filters which entities produce trigger events.
 struct TriggerComponent {
     std::string requiredTag;  // only entities with this tag (TagComponent) trigger; empty = all

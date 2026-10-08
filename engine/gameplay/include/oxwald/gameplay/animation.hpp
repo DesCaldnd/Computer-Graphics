@@ -59,6 +59,11 @@ struct InlineAnimatorController {
     std::string defaultState; // empty = first state
 };
 
+// Builds a single-layer anim::AnimatorController from the reflected description (inline controllers and
+// AnimatorController assets share it). Clips are resolved through `clips` (may be null: states without motion).
+[[nodiscard]] std::shared_ptr<const anim::AnimatorController> buildAnimatorController(const InlineAnimatorController& desc,
+                                                                                    IAnimationAssetProvider* clips);
+
 struct AnimatorComponent {
     Uuid skeleton;   // Skeleton asset
     Uuid controller; // AnimatorController asset; nil = inlineController
@@ -123,6 +128,9 @@ public:
     void setBool(Entity e, std::string_view name, bool value);
     void setTrigger(Entity e, std::string_view name);
     bool play(Entity e, std::string_view state, u32 layer = 0, f32 crossFade = 0.f);
+    // Hot reload: animators using skeleton/controller `id` (or any clip when `clip` is true) are rebuilt on their
+    // next update. Parameter values live in the component and are re-applied.
+    void invalidateAssets(const Uuid& id, bool clip = false);
 
     Signal<const AnimationEvent&> onEvent;
     bool debugDraw = false;
@@ -147,8 +155,6 @@ private:
     void onChanged(entt::registry& r, entt::entity e);
     void onDestroyed(entt::registry& r, entt::entity e);
     Record* ensure(Entity e);
-    std::shared_ptr<const anim::AnimatorController> buildInline(const InlineAnimatorController& desc,
-                                                                const anim::Skeleton& skeleton);
     void applyIK(Entity e, const anim::Skeleton& skeleton, anim::Pose& pose, std::vector<anim::Transform>& model);
     void applyRootMotion(Entity e, const anim::Transform& delta, f32 dt);
     void writePalette(Entity e, const Record& rec);

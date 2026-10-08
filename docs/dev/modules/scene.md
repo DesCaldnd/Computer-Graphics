@@ -77,6 +77,11 @@ component, `"-Light"` for a removed one, `"Name"`): `recordOverride`, `detectOve
 `updatePrefabInstances(world, prefab)` (propagates changes, keeps overrides, adds/removes entities). The root
 Transform and name of an instance are always instance-specific.
 
+## Runtime ids (`runtime_id.hpp`)
+`ox::entityRuntimeId(entt::entity)` / `entityFromRuntimeId(u64)`: entt handle packed with a tag bit (0 = none), for
+runtime-only references (physics user data, coroutine owners, blackboards). Used by gameplay (`toRuntimeId`,
+`coroutineOwner`) and the runtime so owner ids always match. Never persisted.
+
 ## Limits / TODO
 - Nested prefabs are flattened when a prefab is created from a subtree containing other instances.
 - Override granularity is a component field (paths into vectors such as `position.x` override the whole field).

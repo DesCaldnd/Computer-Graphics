@@ -2,6 +2,7 @@
 
 #include <oxwald/animation/animator.hpp>
 #include <oxwald/audio/audio_engine.hpp>
+#include <oxwald/core/events.hpp>
 #include <oxwald/core/serial/value.hpp>
 #include <oxwald/core/services.hpp>
 #include <oxwald/core/uuid.hpp>
@@ -76,6 +77,48 @@ public:
     virtual ~IAudioClipProvider() = default;
     // Invalid SoundId when unknown. May load lazily into `engine`.
     [[nodiscard]] virtual audio::SoundId sound(audio::AudioEngine& engine, const Uuid& clip) = 0;
+};
+
+// Normalized height samples of a heightmap asset (square grid, row-major, z * resolution + x). World scale,
+// origin and storage format come from the consumer (TerrainComponent).
+struct HeightmapData {
+    u32 resolution = 0;
+    std::vector<f32> normalized;
+};
+
+class IHeightmapProvider {
+public:
+    virtual ~IHeightmapProvider() = default;
+    [[nodiscard]] virtual std::shared_ptr<const HeightmapData> heightmap(const Uuid& id) = 0;
+};
+
+// ---- hot reload ---------------------------------------------------------------------------------------------
+
+enum class GameplayAssetKind : u8 {
+    Mesh,
+    Skeleton,
+    AnimatorController,
+    AnimationClip,
+    BehaviorTree,
+    Prefab,
+    Script,
+    AudioClip,
+    Heightmap,
+    Other,
+};
+
+struct GameplayAssetChange {
+    GameplayAssetKind kind = GameplayAssetKind::Other;
+    Uuid id;
+    std::string path; // asset path when known ("Scripts/player.lua"), also matched against names
+};
+
+// Service: providers backed by a changing source (the asset database) emit `changed` on the main thread after an
+// asset was reloaded; the gameplay runtimes propagate it to running instances at the next frame
+// (scripts hot reload in place, behaviour trees are rebuilt, prefab instances re-synchronised, ...).
+class GameplayAssetEvents {
+public:
+    Signal<const GameplayAssetChange&> changed;
 };
 
 // In-memory implementation of every provider interface.

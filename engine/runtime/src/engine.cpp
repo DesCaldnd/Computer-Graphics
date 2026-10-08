@@ -9,9 +9,14 @@
 #include <oxwald/core/serial/format.hpp>
 #include <oxwald/core/vfs.hpp>
 #include <oxwald/runtime/engine.hpp>
+#include <oxwald/runtime/json_io.hpp>
 #include <oxwald/runtime/platform.hpp>
 #include <oxwald/scene/scene.hpp>
 #include <oxwald/scene/scene_serializer.hpp>
+
+#if OX_HAS_ASSETS
+#include <oxwald/assets/pak.hpp>
+#endif
 
 #include <algorithm>
 #include <format>
@@ -143,6 +148,27 @@ Status Engine::init(const EngineConfig& config) {
 }
 
 Status Engine::loadProject() {
+#if OX_HAS_ASSETS
+    if (m_config.projectPath.empty() && !m_config.pakPath.empty() && !m_config.projectSettings) {
+        // Cooked game without a project directory: the project file travels inside the pak (cookProject).
+        auto pak = assets::PakReader::open(m_config.pakPath);
+        if (!pak) return makeError("pak '{}': {}", m_config.pakPath.string(), pak.error().message);
+        for (const auto& entry : (*pak)->entries()) {
+            if (entry.path.find('/') != std::string::npos || !entry.path.ends_with(Project::kExtension)) continue;
+            auto bytes = (*pak)->read(entry);
+            if (!bytes) return makeError("pak project file: {}", bytes.error().message);
+            auto j = json::parse(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+            registerProjectTypes();
+            ProjectSettings settings;
+            if (!j || !json::fromPlain(*j, settings)) return makeError("pak project file '{}' is invalid", entry.path);
+            m_projectSettings = std::move(settings);
+            return {};
+        }
+        m_projectSettings = ProjectSettings{};
+        m_projectSettings.name = m_config.appName;
+        return {};
+    }
+#endif
     if (!m_config.projectPath.empty()) {
         auto p = Project::load(m_config.projectPath);
         if (!p) return makeError("project: {}", p.error().message);

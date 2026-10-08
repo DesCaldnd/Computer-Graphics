@@ -46,6 +46,44 @@ struct NetworkTransformComponent {
     f32 correctionThreshold = 0.5f;
 };
 
+// One fixed step of character input (what a player controls). Simulated identically on the owning client
+// (prediction) and on the server (authority), so it travels unquantised.
+struct CharacterInput {
+    glm::vec2 move{0.f}; // x = right, y = forward, length clamped to 1
+    f32 yaw = 0.f;       // radians around +Y the move is relative to (0 = world -Z forward), e.g. camera yaw
+    bool jump = false;
+};
+
+// Character driven by player input with client-side prediction and server reconciliation by input replay:
+// the owning client applies each fixed step's input immediately through the character controller
+// (net::ClientPrediction) and streams its unacknowledged inputs to the server, which runs them in order
+// (net::ServerInputQueue) and acknowledges (last input seq, authoritative position + velocity). A mismatch above
+// `correctionTolerance` rewinds the character to the server state and replays the pending inputs.
+// Requires CharacterController (no RigidBody), NetworkIdentity (owner = the controlling client) and
+// NetworkTransform with `predicted` (other clients interpolate it as usual). Without networking (or for a
+// server-owned character on a listen server) the input drives CharacterController.desiredVelocity/jump directly.
+struct PredictedCharacterComponent {
+    std::string moveAction = "Move"; // Axis2D input action (x right, y forward) read by ICharacterInputSource
+    std::string jumpAction = "Jump"; // Bool action, triggered = jump
+    f32 moveSpeed = 5.f;             // m/s at |move| = 1
+    f32 correctionTolerance = 0.05f; // metres of predicted/authoritative divergence before a replay
+    u32 inputRedundancy = 10;        // newest unacknowledged inputs resent per packet (loss resilience)
+    // runtime (client)
+    u32 corrections = 0;    // replays so far
+    u32 pendingInputs = 0;  // unacknowledged inputs
+};
+
+// Samples the local player's input for a predicted character (once per fixed step). The engine runtime
+// implements it with InputSystem actions; tests/AI/replays can register their own.
+class ICharacterInputSource {
+public:
+    virtual ~ICharacterInputSource() = default;
+    [[nodiscard]] virtual CharacterInput sample(Entity e, const PredictedCharacterComponent& c, f32 dt) = 0;
+};
+
+// Shared simulation of one input step (client prediction, replay and server authority).
+[[nodiscard]] glm::vec3 desiredCharacterVelocity(const CharacterInput& input, f32 speed);
+
 // ---- runtime -------------------------------------------------------------------------------------------
 
 enum class NetRole : u8 { None, Server, Client };
@@ -76,12 +114,21 @@ public:
     // ---- driven by the gameplay systems ----
     void attach(World& world, Services& services);
     void detach();
-    void preUpdate(f32 dt);  // poll, client interpolation
+    void preUpdate(f32 dt);  // poll, client interpolation, prediction acks (replay)
+    void fixedUpdate(f32 dt); // PredictedCharacter: sample/apply/send inputs (client), run queued inputs (server)
     void postUpdate(f32 dt); // server: spawn new identities, tick snapshots at the tick rate
+
+    // Prediction state of a predicted character (client: owned entity, server: client-owned entity).
+    [[nodiscard]] bool isPredicted(Entity e) const;
 
 private:
     class EntityObject;
     friend class EntityObject;
+    struct Prediction;
+    void installPredictionHandlers();
+    Prediction* ensurePrediction(Entity e, bool server);
+    void dropPrediction(entt::entity e);
+    void predictionStep(f32 dt);
     std::shared_ptr<EntityObject> makeObject(Entity e, std::string_view netType);
     void serverAdd(Entity e);
     void onIdentityDestroyed(entt::registry& r, entt::entity e);
@@ -98,6 +145,7 @@ private:
     std::vector<entt::entity> m_pendingSpawns;
     std::vector<std::string> m_registeredTypes;
     std::vector<entt::scoped_connection> m_connections;
+    std::unordered_map<entt::entity, std::unique_ptr<Prediction>> m_predictions;
     f64 m_time = 0.0;
     f64 m_nextTick = 0.0;
     bool m_externalTime = false;

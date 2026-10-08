@@ -172,6 +172,9 @@ public:
     void stop(Entity agent);
     [[nodiscard]] bool reached(Entity agent) const;
     [[nodiscard]] ai::BehaviorTree* behaviorTree(Entity e) const;
+    // Hot reload: rebuilds the running trees created from asset `id`, keeping their blackboard values. Returns the
+    // number of trees rebuilt.
+    u32 reloadBehaviorTree(const Uuid& id);
     [[nodiscard]] ai::Blackboard* blackboard(Entity e) const;
     void reportNoise(const glm::vec3& position, f32 loudness, f32 radius, Entity instigator = {},
                      const std::string& tag = {});

@@ -51,16 +51,16 @@ void AnimationRuntime::onChanged(entt::registry& r, entt::entity e) {
 
 void AnimationRuntime::onDestroyed(entt::registry&, entt::entity e) { m_records.erase(e); }
 
-std::shared_ptr<const anim::AnimatorController> AnimationRuntime::buildInline(const InlineAnimatorController& desc,
-                                                                              const anim::Skeleton&) {
+std::shared_ptr<const anim::AnimatorController> buildAnimatorController(const InlineAnimatorController& desc,
+                                                                    IAnimationAssetProvider* clips) {
     auto ctrl = std::make_shared<anim::AnimatorController>();
     for (const auto& p : desc.parameters) ctrl->addParameter(p.name, p.type, p.defaultValue);
     const u32 layer = ctrl->addLayer("Base");
     for (const auto& s : desc.states) {
         anim::StateDesc sd;
         sd.name = s.name;
-        if (s.clip.isValid() && m_assets) {
-            if (auto clip = m_assets->clip(s.clip)) sd.motion = anim::Motion::fromClip(std::move(clip));
+        if (s.clip.isValid() && clips) {
+            if (auto clip = clips->clip(s.clip)) sd.motion = anim::Motion::fromClip(std::move(clip));
             else OX_LOG_WARN("gameplay", "animator state '{}': clip {} not found", s.name, s.clip.toString());
         }
         sd.speed = s.speed;
@@ -88,6 +88,13 @@ std::shared_ptr<const anim::AnimatorController> AnimationRuntime::buildInline(co
     return ctrl;
 }
 
+void AnimationRuntime::invalidateAssets(const Uuid& id, bool clip) {
+    std::erase_if(m_records, [&](const auto& kv) {
+        const Record& r = kv.second;
+        return clip || r.failed || r.skeletonId == id || r.controllerId == id;
+    });
+}
+
 AnimationRuntime::Record* AnimationRuntime::ensure(Entity e) {
     auto it = m_records.find(e.handle());
     if (it != m_records.end()) return it->second.failed ? nullptr : &it->second;
@@ -104,7 +111,7 @@ AnimationRuntime::Record* AnimationRuntime::ensure(Entity e) {
         rec.failed = true;
     } else {
         rec.controller = c.controller.isValid() ? m_assets->controller(c.controller)
-                                                : buildInline(c.inlineController, *rec.skeleton);
+                                                : buildAnimatorController(c.inlineController, m_assets);
         if (!rec.controller || rec.controller->layers().empty()) {
             OX_LOG_WARN("gameplay", "animator of '{}': no controller", e.name());
             rec.failed = true;

@@ -54,6 +54,9 @@ audio.update(dt);   // once per frame: frees finished voices, occlusion, custom 
 * **Offline rendering** (tests/tools): `init({.offline = true})`, then `render(buffer, frames)` or
   `renderSeconds(seconds, block)` (calls `update` between blocks). Fully deterministic.
 
+`loadSoundFromMemory(bytes, name)` decodes an encoded file image (wav/ogg/mp3/flac, e.g. an asset database blob)
+to PCM at the engine rate (used by the gameplay asset providers).
+
 ## Mixer
 
 Default hierarchy: `Master → Music, SFX, Voice, UI, Ambience`. Each bus = `ma_sound_group` (summing input) →

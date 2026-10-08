@@ -228,7 +228,7 @@ loaded->settings.moduleEnabled("physics");      // true: отсутствие в
   "name": "MyGame",
   "version": "1.0.0",
   "startupScene": "project://levels/main.oxscene",
-  "assetDirs": ["assets"],
+  "assetDirs": ["Assets"],
   "modules": { "audio": false },
   "saveVersion": 1,
   "physics": { "gravity": [0, -9.81, 0], "fixedRate": 50, "maxSubsteps": 8 },

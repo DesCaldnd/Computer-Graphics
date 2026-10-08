@@ -54,6 +54,8 @@ public:
     // ---- sound data ---------------------------------------------------------------------------
     SoundId loadSound(const std::string& path, LoadMode mode = LoadMode::Decode);
     SoundId createFromPcm(std::span<const f32> interleaved, u32 channels, u32 sampleRate);
+    // Decodes an encoded file image (wav/ogg/mp3/flac, e.g. an asset database blob) into a PCM sound.
+    SoundId loadSoundFromMemory(std::span<const std::byte> encoded, std::string_view debugName = {});
     SoundId createSine(f32 frequency, f32 amplitude = 0.5f);
     SoundId createNoise(NoiseType type = NoiseType::White, f32 amplitude = 0.5f, i32 seed = 1);
     void unloadSound(SoundId id);

@@ -11,9 +11,40 @@
 #include <exception>
 #include <thread>
 
+// enkiTS is a prebuilt, uninstrumented library, so ThreadSanitizer cannot see the happens-before
+// edges its lock-free pipes and completion counters create. Mirror them with explicit annotations
+// (no-ops outside TSan builds). Sync objects: the enki task object itself (JobTask::set / ::forward,
+// i.e. `this` inside the callbacks, so no field is read before the acquire) for submit -> run ->
+// completion, and the JobSystem::Impl address for "every job ran" (WaitforAll / shutdown).
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define OX_JOBS_TSAN 1
+#endif
+#endif
+#if !defined(OX_JOBS_TSAN) && defined(__SANITIZE_THREAD__)
+#define OX_JOBS_TSAN 1
+#endif
+
+#if defined(OX_JOBS_TSAN)
+extern "C" void __tsan_acquire(void* addr);
+extern "C" void __tsan_release(void* addr);
+#endif
+
 namespace ox {
 
 namespace {
+
+inline void hbRelease([[maybe_unused]] const void* sync) {
+#if defined(OX_JOBS_TSAN)
+    __tsan_release(const_cast<void*>(sync));
+#endif
+}
+
+inline void hbAcquire([[maybe_unused]] const void* sync) {
+#if defined(OX_JOBS_TSAN)
+    __tsan_acquire(const_cast<void*>(sync));
+#endif
+}
 
 // Identifies which JobSystem (if any) the current thread belongs to. gtl_threadNum inside enkiTS is
 // shared by every scheduler instance, so it cannot tell schedulers apart on its own.
@@ -38,6 +69,7 @@ struct JobTask {
     struct Set final : enki::ITaskSet {
         JobTask* owner = nullptr;
         void ExecuteRange(enki::TaskSetPartition range, uint32_t threadNum) override {
+            hbAcquire(this);
             t_owner = owner->system;
             t_threadIndex = threadNum;
             if (owner->single) {
@@ -45,6 +77,9 @@ struct JobTask {
             } else {
                 runGuarded(owner->range, range.start, range.end, threadNum);
             }
+            // Partitions accumulate: whoever observes completion acquires all of them.
+            hbRelease(owner->system);
+            hbRelease(this);
         }
     };
     // Forwards a submission from a thread enkiTS does not know about onto a worker thread.
@@ -52,8 +87,10 @@ struct JobTask {
         JobTask* owner = nullptr;
         enki::TaskScheduler* scheduler = nullptr;
         void Execute() override {
+            hbAcquire(this);
             t_owner = owner->system;
             t_threadIndex = threadNum;
+            hbRelease(&owner->set);
             scheduler->AddTaskSetToPipe(&owner->set);
         }
     };
@@ -70,7 +107,11 @@ struct JobTask {
         if (forwarded && !forward.GetIsComplete()) {
             return false;
         }
-        return set.GetIsComplete();
+        if (!set.GetIsComplete()) {
+            return false;
+        }
+        hbAcquire(&set);
+        return true;
     }
 };
 
@@ -105,6 +146,7 @@ struct JobSystem::Impl {
         // completion counters read as "complete" and a concurrent sweep would drop the keep-alive.
         // `task` itself keeps the object alive until then.
         if (onOwnThread()) {
+            hbRelease(&task->set);
             scheduler.AddTaskSetToPipe(&task->set);
         } else {
             task->forwarded = true;
@@ -112,6 +154,7 @@ struct JobSystem::Impl {
             task->forward.scheduler = &scheduler;
             // Thread 1 is always a worker (we create at least one), so this never needs the main thread.
             task->forward.threadNum = 1;
+            hbRelease(&task->forward);
             scheduler.AddPinnedTask(&task->forward);
         }
         track(task);
@@ -135,6 +178,7 @@ JobSystem::JobSystem(u32 numThreads) : m_impl(std::make_unique<Impl>()) {
 JobSystem::~JobSystem() {
     OX_ASSERT(std::this_thread::get_id() == m_impl->mainThread, "JobSystem must be destroyed on its main thread");
     m_impl->scheduler.WaitforAllAndShutdown();
+    hbAcquire(m_impl.get());
     {
         std::lock_guard lock(m_impl->inflightMutex);
         m_impl->inflight.clear();
@@ -184,6 +228,7 @@ void JobSystem::wait(const JobHandle& handle) {
             m_impl->scheduler.WaitforTask(&task.forward);
         }
         m_impl->scheduler.WaitforTask(&task.set);
+        hbAcquire(&task.set);
         return;
     }
     // Foreign thread: cannot help with work, so back off politely.
@@ -202,6 +247,7 @@ void JobSystem::waitAll() {
     // Jobs may submit more jobs (also via the forwarding path), so loop until nothing is in flight.
     for (;;) {
         m_impl->scheduler.WaitforAll();
+        hbAcquire(m_impl.get());
         std::lock_guard lock(m_impl->inflightMutex);
         std::erase_if(m_impl->inflight, [](const auto& t) { return t->done(); });
         if (m_impl->inflight.empty()) {

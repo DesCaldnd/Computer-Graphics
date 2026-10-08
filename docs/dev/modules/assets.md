@@ -62,6 +62,8 @@ registry.startWatching();  /* each frame: */ registry.poll();         // hot rei
 - **Dependencies**: per artifact; filtered to known assets (scene/prefab documents list every UUID they contain,
   entity ids are dropped this way). `collectDependencies(roots)` = transitive closure (imports on demand).
 - Thread-safe (one recursive mutex; imports serialise).
+- `Options::assetsDir` (default `"Assets"`, relative to the project or absolute) selects the source directory; the
+  runtime passes `ProjectSettings::assetDirs[0]`.
 
 ### Importers
 
@@ -75,6 +77,10 @@ registry.startWatching();  /* each frame: */ registry.poll();         // hot rei
 | `script` | `.lua` | Script (text) | – |
 | `audio` | wav ogg mp3 flac | Audio (OXBL passthrough + sampleRate/channels/frames/duration) | – |
 | `font`, `navmesh`, `heightmap` | ttf otf · oxnav navmesh · r8 r16 r32 raw | OXBL passthrough (heightmap: width/height/format/heightScale settings) | – |
+
+Gameplay importers (`gameplay::registerGameplayImporters(registry.importers())`, gameplay module): `.oxbt`
+behaviour trees and `.oxanimctrl` animator controllers (JSON) -> `AssetType::Raw` blobs with info
+`{"kind": "BehaviorTree" | "AnimatorController"}` (controller clip UUIDs become dependencies).
 
 Custom importers: derive `IAssetImporter` (`name`, `version`, `extensions`, `mainType`, `defaultSettings`,
 `import(ImportContext&)`), then `registry.importers().add(std::make_unique<MyImporter>())` (later registrations
@@ -244,7 +250,8 @@ has no packed occlusion, `occlusionStrength` is 0.
          u32 pathOffset, u32 pathSize
     string table (UTF-8 paths)
 ```
-Cooked layout: `assets/<uuid><ext>` per artifact + `catalog.oxcat` (JSON: uuid, type, source path, artifact entry,
+Cooked layout: `assets/<uuid><ext>` per artifact + the project's `<Name>.oxproj` file(s) at the root (the runtime
+reads it when started with only `--pak`) + `catalog.oxcat` (JSON: uuid, type, source path, artifact entry,
 dependencies). zstd per entry when it saves > 1/16; textures are stored uncompressed (range reads for mip
 streaming). Readers mmap the file on POSIX (`PakReader::view` gives zero-copy spans), verify the TOC CRC on open
 and entry CRCs on read.
@@ -256,6 +263,14 @@ source.addPak("Game.oxpak");                       // later paks override earlie
 ox::assets::AssetManager assets(source, &jobs);
 vfs.mount("game", std::make_unique<ox::assets::PakMountSource>(*ox::assets::PakReader::open("Game.oxpak")));
 ```
+
+## Engine and gameplay integration
+
+The runtime registers `AssetRegistry` (dev/editor) or `PakAssetSource` (cooked, `EngineConfig::pakPath`),
+`IAssetSource` and `AssetManager` as services, calls `update()` every frame on the game thread and serves
+`project://<assetDir>/<path>` from the pak in cooked games (runtime.md). Gameplay implements its provider
+interfaces on top of `AssetManager` (`gameplay::AssetProviders`, gameplay.md) and turns `onReloaded` into hot
+reloads of running scripts, behaviour trees, prefab instances, animators and mesh colliders.
 
 ## Tools
 

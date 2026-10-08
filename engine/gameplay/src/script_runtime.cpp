@@ -255,6 +255,24 @@ std::shared_ptr<script::ScriptAsset> ScriptRuntime::resolveAsset(const ScriptCom
     return m_vm.loadScript(path);
 }
 
+u32 ScriptRuntime::reloadChangedScripts() {
+    auto* provider = m_services ? m_services->tryGet<IScriptSourceProvider>() : nullptr;
+    if (!provider) return 0;
+    u32 reloaded = 0;
+    CallGuard guard(m_callDepth, [this] { processDeferredDestroy(); }); // on_reload runs Lua
+    for (auto& [key, asset] : m_assets) {
+        std::optional<ScriptSource> src;
+        if (key.starts_with("id:")) {
+            if (auto id = Uuid::parse(std::string_view(key).substr(3))) src = provider->scriptById(*id);
+        } else {
+            src = provider->scriptByName(key);
+        }
+        if (!src || src->source.empty() || src->source == asset->source()) continue;
+        if (m_vm.reloadScript(*asset, src->source)) ++reloaded;
+    }
+    return reloaded;
+}
+
 void ScriptRuntime::applyProperties(Entity e, script::ScriptInstance& inst) {
     const auto& c = e.get<ScriptComponent>();
     for (const auto& [name, value] : c.properties) {

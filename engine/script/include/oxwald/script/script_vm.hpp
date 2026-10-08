@@ -104,6 +104,10 @@ public:
     f64 time() const;
     // Re-runs changed script files/modules in every live instance; returns the number of assets reloaded.
     u32 pollHotReload();
+    // Hot reload of a script whose source does not come from a file (asset database, network): swaps the source of
+    // `asset` and reloads every live instance in place (same self table, on_reload). Keeps the old version and
+    // returns false when the new source does not compile.
+    bool reloadScript(ScriptAsset& asset, std::string source) { return reloadAsset(asset, std::move(source)); }
 
     ScriptEventBus& events() { return *m_events; }
     Scheduler& scheduler() { return *m_scheduler; }

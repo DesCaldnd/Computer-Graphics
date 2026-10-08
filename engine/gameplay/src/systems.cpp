@@ -1,6 +1,8 @@
 #include <oxwald/core/debug_draw.hpp>
 #include <oxwald/core/events.hpp>
+#include <oxwald/core/log.hpp>
 #include <oxwald/gameplay/gameplay.hpp>
+#include <oxwald/scene/prefab.hpp>
 #include <oxwald/scene/system.hpp>
 #include <oxwald/scene/world.hpp>
 
@@ -152,6 +154,69 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
             state->reset();
         });
 
+    // Hot reload: changes reported by asset-backed providers (GameplayAssetEvents service, emitted from
+    // AssetManager::update on the game thread) are queued and applied at the start of the next frame.
+    struct ReloadQueue {
+        std::vector<GameplayAssetChange> pending;
+        ScopedConnection connection;
+    };
+    auto reload = std::make_shared<ReloadQueue>();
+    add(
+        scheduler, systems::kAssetHotReload, SystemPhase::PreUpdate, -950, false,
+        [=](SystemContext& c) {
+            if (reload->pending.empty()) return;
+            std::vector<GameplayAssetChange> changes = std::exchange(reload->pending, {});
+            bool scripts = false;
+            entt::registry& r = c.world.registry();
+            for (const GameplayAssetChange& ch : changes) {
+                switch (ch.kind) {
+                case GameplayAssetKind::Prefab:
+                    if (auto* prefabs = c.services.tryGet<IPrefabProvider>()) {
+                        auto doc = prefabs->prefab(ch.id.toString());
+                        if (!doc && !ch.path.empty()) doc = prefabs->prefab(ch.path);
+                        const usize n = doc ? updatePrefabInstances(c.world, *doc) : 0;
+                        OX_LOG_INFO("gameplay", "prefab {} reloaded ({} instance(s))", ch.path.empty() ? ch.id.toString() : ch.path, n);
+                    }
+                    break;
+                case GameplayAssetKind::Script: scripts = true; break;
+                case GameplayAssetKind::BehaviorTree:
+                    if (aiRt) aiRt->reloadBehaviorTree(ch.id);
+                    break;
+                case GameplayAssetKind::Skeleton:
+                case GameplayAssetKind::AnimatorController:
+                    if (animRt) animRt->invalidateAssets(ch.id);
+                    break;
+                case GameplayAssetKind::AnimationClip:
+                    if (animRt) animRt->invalidateAssets(ch.id, true);
+                    break;
+                case GameplayAssetKind::Mesh: {
+                    // Patching the collider recreates its body (and shape) at the next fixed step.
+                    std::vector<entt::entity> users;
+                    for (auto [e, col] : r.view<ColliderComponent>().each()) {
+                        if (col.mesh == ch.id) users.push_back(e);
+                    }
+                    for (auto e : users) r.patch<ColliderComponent>(e, [](ColliderComponent&) {});
+                    break;
+                }
+                default: break;
+                }
+            }
+            if (scripts && scriptRt) scriptRt->reloadChangedScripts();
+        },
+        [=](World&, Services& s) {
+            reload->pending.clear();
+            if (auto* events = s.tryGet<GameplayAssetEvents>()) {
+                reload->connection = events->changed.connect(
+                    [q = std::weak_ptr<ReloadQueue>(reload)](const GameplayAssetChange& change) {
+                        if (auto queue = q.lock()) queue->pending.push_back(change);
+                    });
+            }
+        },
+        [=] {
+            reload->connection = {};
+            reload->pending.clear();
+        });
+
     // ---- PreUpdate ----
     if (netRt) add(scheduler, systems::kNetPre, SystemPhase::PreUpdate, -900, false, [=](SystemContext& c) { netRt->preUpdate(c.dt); });
     if (scriptRt) add(scheduler, systems::kScriptPre, SystemPhase::PreUpdate, 0, true, [=](SystemContext& c) { scriptRt->preUpdate(c.dt); });
@@ -163,6 +228,9 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
 
     // ---- FixedUpdate ---- (scripts decide, AI steers, physics integrates)
     if (scriptRt) add(scheduler, systems::kScriptFixed, SystemPhase::FixedUpdate, -100, true, [=](SystemContext& c) { scriptRt->fixedUpdate(c.dt); });
+    if (netRt && config.prediction) {
+        add(scheduler, systems::kNetPredict, SystemPhase::FixedUpdate, -90, true, [=](SystemContext& c) { netRt->fixedUpdate(c.dt); });
+    }
     if (aiRt) {
         add(scheduler, systems::kPerception, SystemPhase::FixedUpdate, -70, true, [=](SystemContext& c) { aiRt->updatePerception(c.dt); });
         add(scheduler, systems::kBehaviorTrees, SystemPhase::FixedUpdate, -60, true, [=](SystemContext& c) { aiRt->updateBehaviorTrees(c.dt); });
@@ -184,6 +252,16 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
     if (physicsRt) add(scheduler, systems::kPhysicsInterpolate, SystemPhase::PostUpdate, -1100, true, [=](SystemContext& c) { physicsRt->interpolate(c.alpha); });
     if (audioRt) add(scheduler, systems::kAudio, SystemPhase::PostUpdate, 100, false, [=](SystemContext& c) { audioRt->update(c.dt); });
     if (netRt) add(scheduler, systems::kNetPost, SystemPhase::PostUpdate, 200, false, [=](SystemContext& c) { netRt->postUpdate(c.dt); });
+
+#if defined(OX_GAMEPLAY_HAS_WORLD)
+    // Terrain, vegetation, sky/time of day, water, wind, buoyancy, streaming + WorldRenderData (Extract).
+    if (config.world) {
+        WorldSystemsConfig wc = config.worldSystems;
+        wc.physics = wc.physics && config.physics;
+        wc.bindLua = wc.bindLua && config.scripting;
+        addWorldSystems(scheduler, services, wc);
+    }
+#endif
 
     // ---- Extract ---- debug visualisation (editor-visible in edit mode too)
     add(scheduler, systems::kDebugDraw, SystemPhase::Extract, 0, false, [=](SystemContext& c) {

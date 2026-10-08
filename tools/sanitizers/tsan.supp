@@ -1,0 +1,17 @@
+# ThreadSanitizer suppressions for OxwaldEngine.
+#
+# Usage (from the repo root):
+#   TSAN_OPTIONS="suppressions=$PWD/tools/sanitizers/tsan.supp" ./build/<tsan-dir>/bin/ox_core_tests
+#
+# Currently no suppressions are needed. enkiTS (ox::JobSystem's backend) is a prebuilt,
+# NON-instrumented vcpkg library, so the happens-before edges it creates (lock-free task pipes,
+# m_RunningCount acquire/release, semaphores) are invisible to TSan. engine/core/src/jobs.cpp
+# mirrors them with __tsan_release/__tsan_acquire annotations (compiled only under TSan): submit ->
+# ExecuteRange/Forward::Execute -> completion (done()/wait()/waitAll()/shutdown). Without those
+# annotations every job hand-off was reported as a (false-positive) race.
+#
+# This file is kept so scripts that reference it keep working. The former blanket suppressions are
+# left commented out for reference; do not re-enable them, as they also hide real races between job
+# bodies. If a new enkiTS-internal report appears, add a narrowly scoped line with an explanation.
+#race:enki::TaskScheduler::TryRunTask
+#race:enki::TaskScheduler::RunPinnedTasks

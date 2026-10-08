@@ -45,7 +45,9 @@ struct ProjectSettings {
     std::string version = "0.1.0"; // game version (stored in save headers)
     std::string company;
     std::string startupScene;                    // e.g. "project://levels/main.oxscene"
-    std::vector<std::string> assetDirs{"assets"}; // relative to the project root
+    // Relative to the project root. The first one is the asset database root (AssetRegistry, "Assets/" by
+    // convention; asset paths and project://<dir>/... URIs are relative to it).
+    std::vector<std::string> assetDirs{"Assets"};
     std::map<std::string, bool> modules;          // module toggles ("physics": true); missing = enabled
     u32 saveVersion = 1;                          // current save-game data version (migrations upgrade to it)
     InputMappingConfig input;                     // default input mappings

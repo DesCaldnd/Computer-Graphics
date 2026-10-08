@@ -18,6 +18,7 @@ namespace ox::gameplay {
 
 // Owner id of an entity's coroutines (CoroutineScheduler::cancelOwner). Runtime-only, never persisted.
 [[nodiscard]] inline u64 coroutineOwner(const Entity& e) { return toRuntimeId(e); }
+[[nodiscard]] constexpr u64 coroutineOwner(entt::entity e) { return entityRuntimeId(e); }
 
 // Unity-style helpers: the coroutine is cancelled (unwound, destructors run) when the entity is destroyed.
 // Use the CoroutineScheduler registered in `services`; invalid handle when there is none.

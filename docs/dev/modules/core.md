@@ -123,6 +123,10 @@ Cvars registered after a level was chosen start at that level.
 - **file_watcher.hpp** — polling `FileWatcher` (mtime + size, debounce): `watchFile`, `watchDirectory(dir, cb, recursive,
   {".glsl"})`, `poll()` on the calling thread or `start(interval)` background scanning.
 
+**ThreadSanitizer**: enkiTS is a prebuilt, uninstrumented library, so `jobs.cpp` mirrors its hand-offs with
+`__tsan_release/__tsan_acquire` (submit -> run -> completion/wait/waitAll/shutdown; compiled only under TSan).
+TSan runs need no suppressions (`tools/sanitizers/tsan.supp` documents this).
+
 ## Limits / TODO
 - JSON cannot represent NaN payload bits (NaN/±inf are written as strings `"nan"`, `"inf"`); object keys `"$type"` are reserved.
 - Arrays in the value tree are homogeneous; heterogeneous hand-written JSON arrays are rejected.

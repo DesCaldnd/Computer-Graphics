@@ -465,6 +465,7 @@ void PhysicsRuntime::syncBodiesIn(f32 dt) {
             if (!samePosition(wt.position, rec.writtenPosition)) {
                 m_physics.setCharacterTransform(rec.character, wt.position, rot);
             }
+            if (r.all_of<ExternalCharacterMotionTag>(handle)) continue;
             physics::CharacterMoveInput in;
             in.desiredVelocity = cc.desiredVelocity;
             in.jump = cc.jump;

@@ -76,6 +76,10 @@ public:
     [[nodiscard]] sol::table self(Entity e) const;
     void sendEvent(Entity e, std::string_view name, const sol::object& payload);
     void sendEvent(Entity e, std::string_view name, const script::ScriptValue& payload = {});
+    // Hot reload of provider-backed scripts (IScriptSourceProvider): re-resolves every script source in use and
+    // reloads running instances in place (ScriptVM::reloadScript) when it changed. File scripts are reloaded by the
+    // VM itself. Returns the number of scripts reloaded.
+    u32 reloadChangedScripts();
     // Spawns a prefab by name/path through IPrefabProvider (or a document file). Returns the instance root.
     Entity spawnPrefab(std::string_view nameOrPath, const glm::vec3* position = nullptr,
                        const glm::quat* rotation = nullptr, Entity parent = {});
