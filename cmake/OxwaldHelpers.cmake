@@ -57,6 +57,7 @@ function(ox_add_module name)
                 OX_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
             ox_set_warnings(ox_${name}_tests)
             set(_labels ${name} ${M_TEST_LABELS})
+            string(REPLACE ";" "\\;" _labels "${_labels}")
             gtest_discover_tests(ox_${name}_tests
                 DISCOVERY_TIMEOUT 60
                 PROPERTIES LABELS "${_labels}"
