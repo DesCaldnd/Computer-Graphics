@@ -1,0 +1,9 @@
+{
+  "name": "moltenvk",
+  "version": "1.4.2",
+  "port-version": 1,
+  "description": "Prebuilt MoltenVK (Vulkan on Metal) ICD driver for macOS, from the official Khronos release",
+  "homepage": "https://github.com/KhronosGroup/MoltenVK",
+  "license": "Apache-2.0",
+  "supports": "osx"
+}

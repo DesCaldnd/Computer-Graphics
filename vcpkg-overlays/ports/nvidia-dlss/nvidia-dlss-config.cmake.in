@@ -1,0 +1,21 @@
+# Provides target NVIDIA::DLSSHeaders always, and NVIDIA::DLSS (NGX) when the runtime exists.
+get_filename_component(_DLSS_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+set(NVIDIA_DLSS_HAS_RUNTIME @DLSS_HAS_RUNTIME@)
+if(NOT TARGET NVIDIA::DLSSHeaders)
+    add_library(NVIDIA::DLSSHeaders INTERFACE IMPORTED)
+    set_target_properties(NVIDIA::DLSSHeaders PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${_DLSS_PREFIX}/include/nvidia-dlss")
+endif()
+if(NVIDIA_DLSS_HAS_RUNTIME AND NOT TARGET NVIDIA::DLSS)
+    add_library(NVIDIA::DLSS INTERFACE IMPORTED)
+    if(WIN32)
+        set(_ngx_lib "$<IF:$<CONFIG:Debug>,${_DLSS_PREFIX}/debug/lib/nvsdk_ngx_d_dbg.lib,${_DLSS_PREFIX}/lib/nvsdk_ngx_d.lib>")
+        file(GLOB NVIDIA_DLSS_RUNTIME_FILES "${_DLSS_PREFIX}/bin/*.dll")
+    else()
+        set(_ngx_lib "${_DLSS_PREFIX}/lib/libnvsdk_ngx.a")
+        file(GLOB NVIDIA_DLSS_RUNTIME_FILES "${_DLSS_PREFIX}/lib/libnvidia-ngx-*.so.*")
+    endif()
+    set_target_properties(NVIDIA::DLSS PROPERTIES
+        INTERFACE_LINK_LIBRARIES "NVIDIA::DLSSHeaders;${_ngx_lib};${CMAKE_DL_LIBS}")
+endif()
+set(nvidia-dlss_FOUND TRUE)

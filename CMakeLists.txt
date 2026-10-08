@@ -1,56 +1,58 @@
-cmake_minimum_required(VERSION 3.24)
-project(DesEngine)
+cmake_minimum_required(VERSION 3.25)
 
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
+# On macOS all vcpkg dependencies are built with AppleClang (see vcpkg-overlays/triplets/arm64-osx.cmake).
+# Use the same compiler and libc++ for the engine, even if the shell exports another toolchain
+# (e.g. Homebrew LLVM in CC/CXX/LDFLAGS). Opt out with -DOX_USE_APPLE_CLANG=OFF.
+option(OX_USE_APPLE_CLANG "Force AppleClang on macOS to match vcpkg-built dependencies" ON)
+if(CMAKE_HOST_APPLE AND OX_USE_APPLE_CLANG AND NOT DEFINED CMAKE_CXX_COMPILER)
+    set(CMAKE_C_COMPILER /usr/bin/clang)
+    set(CMAKE_CXX_COMPILER /usr/bin/clang++)
+    set(CMAKE_OBJC_COMPILER /usr/bin/clang)
+    set(CMAKE_OBJCXX_COMPILER /usr/bin/clang++)
+    foreach(var CPPFLAGS CFLAGS CXXFLAGS LDFLAGS)
+        if("$ENV{${var}}" MATCHES "homebrew/opt/llvm")
+            set(ENV{${var}} "")
+        endif()
+    endforeach()
+endif()
 
-find_package(Bullet CONFIG REQUIRED)
+project(OxwaldEngine VERSION 0.1.0 LANGUAGES C CXX)
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 
-include(FetchContent)
-FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.2/json.tar.xz)
-FetchContent_MakeAvailable(json)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-set(CMAKE_PREFIX_PATH "C:/Qt/6.7.0/mingw_64/lib/cmake")
+option(OX_BUILD_TESTS  "Build unit/integration tests" ON)
+option(OX_BUILD_EDITOR "Build the Qt editor" ON)
+option(OX_ENABLE_TRACY "Enable Tracy profiler zones" ON)
+option(OX_ENABLE_DLSS  "Build the NVIDIA DLSS upscaler backend where the SDK runtime exists" ON)
+option(OX_WARNINGS_AS_ERRORS "Treat warnings as errors in engine code" OFF)
+# Optional allow-list of modules/top-level dirs to configure, e.g. -DOX_MODULES="core;rhi".
+# Empty = everything. Lets several people/agents build their part while others are mid-edit.
+set(OX_MODULES "" CACHE STRING "Restrict configured engine modules and top-level dirs (editor, apps, tools, samples)")
 
-find_package(Qt6 COMPONENTS
-        Core
-        Gui
-        Widgets
-        OpenGLWidgets
-        REQUIRED)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(OxwaldHelpers)
 
-add_subdirectory(DesEngine)
-add_subdirectory(Tasks)
-add_subdirectory(Test)
+if(OX_BUILD_TESTS)
+    enable_testing()
+    find_package(GTest CONFIG REQUIRED)
+    include(GoogleTest)
+endif()
 
-
-#if (WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
-#    set(DEBUG_SUFFIX)
-#    if (MSVC AND CMAKE_BUILD_TYPE MATCHES "Debug")
-#        set(DEBUG_SUFFIX "d")
-#    endif ()
-#    set(QT_INSTALL_PATH "${CMAKE_PREFIX_PATH}")
-#    if (NOT EXISTS "${QT_INSTALL_PATH}/bin")
-#        set(QT_INSTALL_PATH "${QT_INSTALL_PATH}/..")
-#        if (NOT EXISTS "${QT_INSTALL_PATH}/bin")
-#            set(QT_INSTALL_PATH "${QT_INSTALL_PATH}/..")
-#        endif ()
-#    endif ()
-#    if (EXISTS "${QT_INSTALL_PATH}/plugins/platforms/qwindows${DEBUG_SUFFIX}.dll")
-#        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-#                COMMAND ${CMAKE_COMMAND} -E make_directory
-#                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/platforms/")
-#        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-#                COMMAND ${CMAKE_COMMAND} -E copy
-#                "${QT_INSTALL_PATH}/plugins/platforms/qwindows${DEBUG_SUFFIX}.dll"
-#                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/plugins/platforms/")
-#    endif ()
-#    foreach (QT_LIB Core Gui Widgets OpenGLWidgets)
-#        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-#                COMMAND ${CMAKE_COMMAND} -E copy
-#                "${QT_INSTALL_PATH}/bin/Qt6${QT_LIB}${DEBUG_SUFFIX}.dll"
-#                "$<TARGET_FILE_DIR:${PROJECT_NAME}>")
-#    endforeach (QT_LIB)
-#endif ()
+add_subdirectory(engine)
+foreach(dir editor apps tools samples)
+    if(OX_MODULES AND NOT dir IN_LIST OX_MODULES)
+        continue()
+    endif()
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${dir}/CMakeLists.txt)
+        add_subdirectory(${dir})
+    endif()
+endforeach()

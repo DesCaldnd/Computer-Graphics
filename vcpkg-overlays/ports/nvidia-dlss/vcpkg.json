@@ -1,0 +1,7 @@
+{
+  "name": "nvidia-dlss",
+  "version": "310.9.1",
+  "description": "NVIDIA DLSS (NGX) SDK. Headers on every platform (for compile checks); libraries + runtime on Windows/Linux x64 only",
+  "homepage": "https://github.com/NVIDIA/DLSS",
+  "license": null
+}

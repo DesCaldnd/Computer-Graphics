@@ -1,3 +1,11 @@
-cmake-*
-.vs
-.idea
+build/
+vcpkg_installed/
+cmake-*/
+.vs/
+.idea/
+.vscode/
+.cache/
+*.DS_Store
+imgui.ini
+/samples/**/Saved/
+/samples/**/.oxcache/

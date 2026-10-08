@@ -1,0 +1,109 @@
+#version 460
+// Compute skinning (vertex pulling). One invocation per vertex.
+//
+// Self-contained: all buffers are passed as buffer device addresses in push constants
+// (VK_KHR_buffer_device_address, GL_EXT_buffer_reference), matching the engine's bindless model where
+// buffers are never bound through descriptors. Switch to "common/bindless.glsl" once it exists.
+//
+// Inputs (scalar block layout, tightly packed):
+//   inVertices  : SkinVertex[vertexCount]           bind-pose position / normal / tangent
+//   influences  : uint[vertexCount * influences/2]  joint indices, two u16 per uint (low half first)
+//   weights     : float[vertexCount * influences]   normalised weights (sum = 1)
+//   palette     : mat4[jointCount]                  model * inverseBind   (mode 0, linear blend)
+//                 vec4[jointCount * 2]               dual quats real, dual (mode 1, DQ skinning)
+// Output:
+//   outVertices : SkinVertex[vertexCount]           skinned position / normal / tangent
+//
+// The CPU reference is ox::anim::skinMesh (engine/animation/src/skinning.cpp).
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 64) in;
+
+struct SkinVertex {
+    vec3 position;
+    vec3 normal;
+    vec4 tangent; // xyz + handedness
+};
+
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer VertexIn { SkinVertex v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) writeonly buffer VertexOut { SkinVertex v[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer JointBuffer { uint j[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer WeightBuffer { float w[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer MatrixPalette { mat4 m[]; };
+layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer DualQuatPalette { vec4 dq[]; };
+
+layout(push_constant, scalar) uniform PushConstants {
+    VertexIn inVertices;
+    JointBuffer joints;
+    WeightBuffer weights;
+    uint64_t palette;      // MatrixPalette or DualQuatPalette depending on `mode`
+    VertexOut outVertices;
+    uint vertexCount;
+    uint influences;       // 4 or 8
+    uint mode;             // 0 = linear blend, 1 = dual quaternion
+} pc;
+
+uint jointIndex(uint vertex, uint i) {
+    uint idx = vertex * pc.influences + i;
+    uint word = pc.joints.j[idx >> 1];
+    return (idx & 1u) == 0u ? (word & 0xFFFFu) : (word >> 16);
+}
+
+vec3 quatRotate(vec4 q, vec3 v) {
+    vec3 t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+void main() {
+    uint vid = gl_GlobalInvocationID.x;
+    if (vid >= pc.vertexCount) {
+        return;
+    }
+    SkinVertex src = pc.inVertices.v[vid];
+    SkinVertex dst;
+    dst.tangent.w = src.tangent.w;
+
+    if (pc.mode == 0u) {
+        MatrixPalette palette = MatrixPalette(pc.palette);
+        mat4 skin = mat4(0.0);
+        for (uint i = 0u; i < pc.influences; ++i) {
+            float w = pc.weights.w[vid * pc.influences + i];
+            if (w > 0.0) {
+                skin += palette.m[jointIndex(vid, i)] * w;
+            }
+        }
+        mat3 skin3 = mat3(skin);
+        dst.position = (skin * vec4(src.position, 1.0)).xyz;
+        dst.normal = normalize(skin3 * src.normal);
+        dst.tangent.xyz = normalize(skin3 * src.tangent.xyz);
+    } else {
+        DualQuatPalette palette = DualQuatPalette(pc.palette);
+        uint j0 = jointIndex(vid, 0u);
+        vec4 pivot = palette.dq[j0 * 2u];
+        vec4 real = vec4(0.0);
+        vec4 dual = vec4(0.0);
+        for (uint i = 0u; i < pc.influences; ++i) {
+            float w = pc.weights.w[vid * pc.influences + i];
+            if (w > 0.0) {
+                uint j = jointIndex(vid, i);
+                vec4 r = palette.dq[j * 2u];
+                vec4 d = palette.dq[j * 2u + 1u];
+                float s = dot(pivot, r) < 0.0 ? -w : w; // antipodality
+                real += r * s;
+                dual += d * s;
+            }
+        }
+        float len = length(real);
+        real /= len;
+        dual /= len;
+        // translation = 2 * dual * conj(real)
+        vec3 t = 2.0 * (real.w * dual.xyz - dual.w * real.xyz + cross(real.xyz, dual.xyz));
+        dst.position = quatRotate(real, src.position) + t;
+        dst.normal = normalize(quatRotate(real, src.normal));
+        dst.tangent.xyz = normalize(quatRotate(real, src.tangent.xyz));
+    }
+    pc.outVertices.v[vid] = dst;
+}

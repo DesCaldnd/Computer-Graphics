@@ -1,0 +1,97 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "oxwald-engine",
+  "version-semver": "0.1.0",
+  "description": "OxwaldEngine \u2014 Vulkan game engine with Qt editor, raster + ray traced rendering",
+  "builtin-baseline": "0b88aacde46a853151730fbe7d0b7ee45f4b6864",
+  "dependencies": [
+    "vulkan-headers",
+    "vulkan-loader",
+    {
+      "name": "moltenvk",
+      "platform": "osx"
+    },
+    "vulkan-validationlayers",
+    "volk",
+    "vulkan-memory-allocator",
+    "vk-bootstrap",
+    "spirv-reflect",
+    "shaderc",
+    "glm",
+    "entt",
+    "nlohmann-json",
+    "enkits",
+    {
+      "name": "tracy",
+      "default-features": false
+    },
+    "joltphysics",
+    "assimp",
+    "fastgltf",
+    "meshoptimizer",
+    {
+      "name": "ktx",
+      "default-features": false
+    },
+    "stb",
+    "tinyexr",
+    {
+      "name": "imgui",
+      "features": [
+        "docking-experimental",
+        "glfw-binding"
+      ]
+    },
+    "imguizmo",
+    {
+      "name": "rmlui",
+      "features": [
+        "freetype"
+      ]
+    },
+    "glfw3",
+    "lua",
+    "sol2",
+    "miniaudio",
+    "recastnavigation",
+    "enet",
+    "nvidia-dlss",
+    "gtest"
+  ],
+  "overrides": [
+    {
+      "name": "lua",
+      "version": "5.4.8"
+    }
+  ],
+  "default-features": [
+    "editor"
+  ],
+  "features": {
+    "editor": {
+      "description": "Qt-based OxwaldEditor",
+      "dependencies": [
+        {
+          "name": "qtbase",
+          "default-features": false,
+          "features": [
+            "gui",
+            "widgets",
+            "vulkan",
+            "png",
+            "jpeg",
+            "freetype",
+            "harfbuzz",
+            "concurrent",
+            "thread",
+            "testlib",
+            "doubleconversion",
+            "pcre2",
+            "zstd"
+          ]
+        },
+        "qtsvg"
+      ]
+    }
+  }
+}
