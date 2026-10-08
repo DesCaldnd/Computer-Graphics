@@ -109,7 +109,7 @@ private Q_SLOTS:
         QVERIFY(p->save());
 #if OX_EDITOR_HAS_RUNTIME
         // The runtime reads exactly what the editor wrote.
-        auto rt = ox::Project::load(file.toStdString());
+        auto rt = ox::Project::load(fsPath(file));
         QVERIFY(rt);
         QCOMPARE(rt->settings.name, std::string("RoundTrip"));
         QCOMPARE(rt->settings.version, std::string("1.2.3"));
@@ -221,7 +221,7 @@ private Q_SLOTS:
         QCOMPARE(info->type, QStringLiteral("Texture"));
         QCOMPARE(info->importer, QStringLiteral("texture"));
         QVERIFY(info->imported);
-        auto meta = assets::readMeta((imported + QStringLiteral(".meta")).toStdString());
+        auto meta = assets::readMeta(fsPath(imported + QStringLiteral(".meta")));
         QVERIFY(meta);
         QCOMPARE(meta->uuid, info->uuid);
         // thumbnail (memory + disk cache)
@@ -236,7 +236,7 @@ private Q_SLOTS:
         QVERIFY(inspector.settingsEditor());
         QVERIFY(inspector.settingsEditor()->setField("maxSize", serial::Value::makeInt(16)));
         QVERIFY(inspector.applyImportSettings());
-        QCOMPARE(assets::readMeta((imported + QStringLiteral(".meta")).toStdString())->settings["maxSize"].get<int>(), 16);
+        QCOMPARE(assets::readMeta(fsPath(imported + QStringLiteral(".meta")))->settings["maxSize"].get<int>(), 16);
         // dependency-aware delete: a material referencing the texture
         const QString mat = QDir(ctx->project()->contentDir()).filePath(QStringLiteral("Materials/Brick.oxmat"));
         writeText(mat, QStringLiteral(R"({"oxmat":1,"albedoTexture":"%1"})").arg(qs(info->uuid.toString())).toUtf8());
@@ -364,7 +364,7 @@ function onUpdate(self, dt) end
         const auto j = nlohmann::json::parse(f.readAll().toStdString());
         QCOMPARE(j["editor"]["network"]["port"].get<int>(), 9001); // editor-only data kept in the same file
 #if OX_EDITOR_HAS_RUNTIME
-        auto rt = ox::Project::load(ctx->project()->projectFile().toStdString());
+        auto rt = ox::Project::load(fsPath(ctx->project()->projectFile()));
         QVERIFY(rt);
         QCOMPARE(rt->settings.physics.fixedRate, 90.0f);
         QVERIFY(!rt->settings.moduleEnabled("ai"));

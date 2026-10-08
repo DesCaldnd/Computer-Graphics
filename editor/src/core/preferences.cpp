@@ -1,5 +1,6 @@
 #include "core/preferences.hpp"
 
+#include "core/common.hpp"
 #include "i18n/translator.hpp"
 
 #include <oxwald/core/paths.hpp>
@@ -131,7 +132,7 @@ bool PreferenceValues::operator==(const PreferenceValues& o) const { return toJs
 
 EditorPreferences::EditorPreferences(QObject* parent) : QObject(parent) {
     m_dir = qEnvironmentVariableIsSet("OX_EDITOR_PREFS_DIR") ? qEnvironmentVariable("OX_EDITOR_PREFS_DIR")
-                                                              : QString::fromStdString(paths::userDataDir("OxwaldEditor").string());
+                                                              : qsPath(paths::userDataDir("OxwaldEditor"));
 }
 
 void EditorPreferences::setValues(const PreferenceValues& v) {

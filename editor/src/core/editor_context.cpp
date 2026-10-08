@@ -150,7 +150,7 @@ void EditorContext::newScene(bool withDefaults) {
 
 bool EditorContext::openScene(const QString& path, QString* error) {
     auto w = std::make_unique<World>();
-    auto st = loadScene(*w, path.toStdString());
+    auto st = loadScene(*w, fsPath(path));
     if (!st) {
         if (error) *error = QString::fromStdString(st.error().message);
         OX_LOG_ERROR("editor", "cannot open scene {}: {}", path.toStdString(), st.error().message);
@@ -171,7 +171,7 @@ bool EditorContext::saveScene(const QString& path, QString* error) {
         return false;
     }
     QDir().mkpath(QFileInfo(target).absolutePath());
-    auto st = ox::saveScene(editWorld(), target.toStdString());
+    auto st = ox::saveScene(editWorld(), fsPath(target));
     if (!st) {
         if (error) *error = QString::fromStdString(st.error().message);
         OX_LOG_ERROR("editor", "cannot save scene {}: {}", target.toStdString(), st.error().message);
@@ -191,7 +191,7 @@ bool EditorContext::autosave() {
     QDir().mkpath(dir);
     const QString file = QDir(dir).filePath(QStringLiteral("%1-%2.oxscene")
                                                 .arg(sceneName(), QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss")));
-    if (!ox::saveScene(editWorld(), file.toStdString())) return false;
+    if (!ox::saveScene(editWorld(), fsPath(file))) return false;
     QFileInfoList backups = QDir(dir).entryInfoList({sceneName() + QStringLiteral("-*.oxscene")}, QDir::Files, QDir::Time);
     for (int i = std::max(1, m_prefs.values().autosaveBackups); i < backups.size(); ++i) QFile::remove(backups[i].absoluteFilePath());
     Q_EMIT statusMessage(tr("Autosaved to %1").arg(QFileInfo(file).fileName()), 2500);
@@ -447,7 +447,7 @@ bool EditorContext::createPrefab(const Uuid& rootId, const QString& path, QStrin
     auto before = snapshotRoots({rootId});
     serial::Document doc = ox::createPrefab(editWorld(), root);
     QDir().mkpath(QFileInfo(path).absolutePath());
-    auto st = serial::saveDocument(path.toStdString(), doc, serial::formatForPath(path.toStdString()));
+    auto st = serial::saveDocument(fsPath(path), doc, serial::formatForPath(fsPath(path)));
     if (!st) {
         if (error) *error = QString::fromStdString(st.error().message);
         return false;
@@ -529,7 +529,7 @@ bool EditorContext::applyPrefab(const Uuid& instanceEntity, QString* error) {
     }
     serial::Document updated = applyInstanceToPrefab(editWorld(), root, asset->document);
     const QString path = asset->path;
-    auto st = serial::saveDocument(path.toStdString(), updated, serial::formatForPath(path.toStdString()));
+    auto st = serial::saveDocument(fsPath(path), updated, serial::formatForPath(fsPath(path)));
     if (!st) {
         if (error) *error = QString::fromStdString(st.error().message);
         return false;

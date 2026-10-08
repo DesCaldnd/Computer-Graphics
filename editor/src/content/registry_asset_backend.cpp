@@ -1,5 +1,7 @@
 #include "content/registry_asset_backend.hpp"
 
+#include "core/common.hpp"
+
 #if OX_EDITOR_HAS_ASSETS
 
 #include <oxwald/assets/asset_manager.hpp>
@@ -53,7 +55,7 @@ float toDisplay(float linear) { return std::pow(std::max(0.0f, linear) / (1.0f +
 
 RegistryAssetBackend::RegistryAssetBackend(assets::AssetRegistry& registry, assets::AssetManager* manager)
     : m_registry(registry), m_manager(manager),
-      m_root(QDir::cleanPath(QString::fromStdString(registry.assetsDir().string()))) {}
+      m_root(QDir::cleanPath(qsPath(registry.assetsDir()))) {}
 
 QString RegistryAssetBackend::editorTypeName(int assetType, const QString& importer, const QString& kind) {
     if (importer == QLatin1String("model")) return QStringLiteral("Model");
@@ -94,7 +96,7 @@ std::optional<AssetInfo> RegistryAssetBackend::infoForUuid(const Uuid& id) const
     a.uuid = id;
     a.isSubAsset = ai->parent.isValid();
     const Uuid source = a.isSubAsset ? ai->parent : id;
-    a.path = QDir::cleanPath(QString::fromStdString(m_registry.absolutePath(source).string()));
+    a.path = QDir::cleanPath(qsPath(m_registry.absolutePath(source)));
     a.relativePath = QString::fromStdString(ai->path);
     a.importer = QString::fromStdString(ai->importer);
     a.imported = ai->imported;
@@ -366,7 +368,7 @@ std::optional<serial::Document> RegistryAssetBackend::loadPrefabDocument(const Q
 }
 
 QString RegistryAssetBackend::thumbnailCacheDir() const {
-    return QDir(QString::fromStdString(m_registry.cacheDir().string())).filePath(QStringLiteral("thumbnails"));
+    return QDir(qsPath(m_registry.cacheDir())).filePath(QStringLiteral("thumbnails"));
 }
 
 Uuid RegistryAssetBackend::resolveReference(const Uuid& id, const QString& assetType, const QString& wantedType) const {

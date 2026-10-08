@@ -59,9 +59,10 @@ QString levelIcon(int level) {
     }
 }
 
-// "path/to/file.lua:42" inside a log message (Lua errors and tracebacks).
+// "path/to/file.lua:42" inside a log message (Lua errors and tracebacks); also "C:\path\to\file.lua:42" on Windows.
 const QRegularExpression& sourceLinkPattern() {
-    static const QRegularExpression re(QStringLiteral(R"(([A-Za-z0-9_\-./]+\.(?:lua|glsl|vert|frag|comp|oxbt|cpp|hpp)):(\d+))"));
+    static const QRegularExpression re(
+        QStringLiteral(R"(((?:\b[A-Za-z]:(?=[\\/]))?[A-Za-z0-9_\-./\\]+\.(?:lua|glsl|vert|frag|comp|oxbt|cpp|hpp)):(\d+))"));
     return re;
 }
 

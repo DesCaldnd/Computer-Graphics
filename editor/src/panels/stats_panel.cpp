@@ -19,6 +19,15 @@
 #elif defined(__linux__)
 #include <cstdio>
 #include <unistd.h>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <psapi.h>
 #endif
 
 namespace ox::editor {
@@ -38,6 +47,11 @@ quint64 processMemoryBytes() {
         std::fclose(f);
     }
     return quint64(rss) * quint64(sysconf(_SC_PAGESIZE));
+#elif defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc{};
+    pmc.cb = sizeof(pmc);
+    // K32 variant: exported by kernel32, no psapi.lib needed.
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) return quint64(pmc.WorkingSetSize);
 #endif
     return 0;
 }

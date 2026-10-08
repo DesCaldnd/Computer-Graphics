@@ -7,6 +7,7 @@
 #include <QMetaType>
 #include <QString>
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,6 +29,11 @@ enum class EditPhase {
 
 inline QString qs(std::string_view s) { return QString::fromUtf8(s.data(), qsizetype(s.size())); }
 inline std::string ss(const QString& s) { return s.toStdString(); }
+
+// QString <-> std::filesystem::path. Paths never go through a narrow std::string: on Windows that is the ANSI code
+// page, not UTF-8, so non-ASCII project/user directories would break. qsPath() returns '/' separators (Qt style).
+inline std::filesystem::path fsPath(const QString& s) { return std::filesystem::path(s.toStdU16String()); }
+inline QString qsPath(const std::filesystem::path& p) { return QString::fromStdU16String(p.generic_u16string()); }
 
 // "verticalFov" -> "Vertical Fov", "castShadows" -> "Cast Shadows", "r.Shadows" stays.
 QString prettifyName(std::string_view name);

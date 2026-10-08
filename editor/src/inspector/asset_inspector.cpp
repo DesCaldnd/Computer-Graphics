@@ -248,7 +248,7 @@ void AssetInspector::rebuild() {
     // ---- material values (.oxmat) ----
 #if OX_EDITOR_HAS_ASSETS
     if (a.type == QLatin1String("Material") && !a.isSubAsset && a.path.endsWith(QLatin1String(".oxmat"), Qt::CaseInsensitive)) {
-        if (auto mat = assets::loadMaterialFile(a.path.toStdString())) {
+        if (auto mat = assets::loadMaterialFile(fsPath(a.path))) {
             auto* sec = new CollapsibleSection(tr("Material"), QStringLiteral("material"), m_body);
             auto* body = new QWidget(sec);
             auto* l = new QVBoxLayout(body);
@@ -333,7 +333,7 @@ bool AssetInspector::saveMaterial() {
     if (!m_asset || !m_material) return false;
     assets::MaterialAsset mat;
     serial::fromValue(m_material->value(), mat);
-    if (auto st = assets::saveMaterial(mat, m_asset->path.toStdString()); !st) {
+    if (auto st = assets::saveMaterial(mat, fsPath(m_asset->path)); !st) {
         Q_EMIT m_ctx->statusMessage(tr("Cannot save material: %1").arg(QString::fromStdString(st.error().message)), 5000);
         return false;
     }

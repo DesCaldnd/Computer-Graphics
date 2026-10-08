@@ -324,7 +324,7 @@ std::unique_ptr<IViewportRenderer> RenderIntegration::createRenderer(rhi::Device
     QPointer<RenderIntegration> self(this);
     r->core().setBakedDataReader([self](const std::string& file) -> std::optional<std::vector<u8>> {
         if (!self || !self->m_ctx.project()) return std::nullopt;
-        const std::filesystem::path path = std::filesystem::path(self->m_ctx.project()->rootDir().toStdString()) /
+        const std::filesystem::path path = fsPath(self->m_ctx.project()->rootDir()) /
                                            std::string(render::reflections::kBakedDataDirectory) / file;
         std::ifstream in(path, std::ios::binary);
         if (!in) return std::nullopt;
@@ -391,7 +391,7 @@ bool RenderIntegration::bakeProbes(QString& message) {
         message = tr("Probe bake did not finish");
         return false;
     }
-    const std::filesystem::path dir = std::filesystem::path(m_ctx.project()->rootDir().toStdString()) /
+    const std::filesystem::path dir = fsPath(m_ctx.project()->rootDir()) /
                                       std::string(render::reflections::kBakedDataDirectory);
     auto written = render::reflections::saveBakedData(core.renderer(), dir);
     if (!written) {

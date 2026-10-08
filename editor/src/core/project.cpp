@@ -1,5 +1,6 @@
 #include "core/project.hpp"
 
+#include "core/common.hpp"
 #include "core/scene_templates.hpp"
 
 #include <oxwald/core/cvar.hpp>
@@ -176,7 +177,7 @@ std::unique_ptr<Project> Project::create(const QString& parentDir, const QString
             populateDefaultScene(world);
         }
         const QString scene = QDir(p->contentDir()).filePath(QStringLiteral("Scenes/Main.oxscene"));
-        (void)saveScene(world, scene.toStdString());
+        (void)saveScene(world, fsPath(scene));
         p->setSetting("startupScene", p->uriForPath(scene).toStdString());
         p->setSetting("editor.maps.editorStartupMap", "Scenes/Main.oxscene");
         p->setSetting("editor.maps.gameDefaultMap", "Scenes/Main.oxscene");

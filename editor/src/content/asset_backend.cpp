@@ -1,5 +1,7 @@
 #include "content/asset_backend.hpp"
 
+#include "core/common.hpp"
+
 #include <oxwald/core/serial/format.hpp>
 #include <oxwald/scene/prefab.hpp>
 #include <oxwald/scene/scene_serializer.hpp>
@@ -50,7 +52,7 @@ QList<AssetInfo> IAssetBackend::allOfType(const QString& type) const {
 }
 
 std::optional<serial::Document> IAssetBackend::loadPrefabDocument(const QString& path, QString* error) const {
-    auto doc = serial::loadDocument(path.toStdString());
+    auto doc = serial::loadDocument(fsPath(path));
     if (!doc) {
         if (error) *error = QString::fromStdString(doc.error().message);
         return std::nullopt;
@@ -173,13 +175,13 @@ QString FileSystemAssetBackend::writeNewAsset(const QString& dir, const QString&
     if (type == QLatin1String("Scene")) {
         path = uniquePath(dir, name, QStringLiteral(".oxscene"));
         World empty;
-        ok = saveScene(empty, path.toStdString()).hasValue();
+        ok = saveScene(empty, fsPath(path)).hasValue();
     } else if (type == QLatin1String("Prefab")) {
         path = uniquePath(dir, name, QStringLiteral(".oxprefab"));
         World w;
         Entity root = w.create(name.toStdString());
         auto doc = createPrefab(w, root, {.linkSource = false});
-        ok = serial::saveDocument(path.toStdString(), doc, serial::Format::Binary).hasValue();
+        ok = serial::saveDocument(fsPath(path), doc, serial::Format::Binary).hasValue();
     } else if (type == QLatin1String("Material")) {
         // Runtime material format (assets MaterialAsset as plain JSON, see docs/dev/modules/assets.md).
         path = uniquePath(dir, name, QStringLiteral(".oxmat"));

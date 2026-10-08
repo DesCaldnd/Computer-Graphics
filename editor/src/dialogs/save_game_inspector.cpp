@@ -145,7 +145,7 @@ SaveGameInspector::SaveGameInspector(EditorContext* ctx, QWidget* parent) : QDia
 
 QString SaveGameInspector::savesDir() const {
 #if OX_EDITOR_HAS_RUNTIME
-    if (Engine* e = m_ctx->engine()) return QString::fromStdString(e->saves().slotPath("slot").parent_path().string());
+    if (Engine* e = m_ctx->engine()) return qsPath(e->saves().slotPath("slot").parent_path());
 #endif
     return m_ctx->project() ? QDir(m_ctx->project()->savedDir()).filePath(QStringLiteral("SaveGames")) : QString();
 }
@@ -160,7 +160,7 @@ void SaveGameInspector::refresh() {
         for (const SaveSlotInfo& s : e->saves().listSlots()) {
             auto* it = new QTreeWidgetItem();
             it->setText(0, QString::fromStdString(s.header.slot));
-            it->setData(0, Qt::UserRole, QString::fromStdString(s.path.string()));
+            it->setData(0, Qt::UserRole, qsPath(s.path));
             it->setIcon(0, Icons::get(s.corrupted ? QStringLiteral("warning") : QStringLiteral("save-game")));
             it->setText(1, QString::fromStdString(s.header.displayName));
             it->setText(2, QFileInfo(QString::fromStdString(s.header.level)).fileName());
@@ -199,7 +199,7 @@ bool SaveGameInspector::showFile(const QString& path) {
         m_header->setText(QFileInfo(path).fileName());
         return true;
     }
-    auto bytes = serial::readFileBytes(path.toStdString());
+    auto bytes = serial::readFileBytes(fsPath(path));
     if (!bytes) {
         m_json->clear();
         m_header->setText(QString::fromStdString(bytes.error().message));

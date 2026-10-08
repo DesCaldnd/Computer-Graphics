@@ -1,5 +1,6 @@
 #include "integration/runtime_host.hpp"
 
+#include "core/common.hpp"
 #include "core/project.hpp"
 
 #include <oxwald/core/debug_draw.hpp>
@@ -82,9 +83,9 @@ bool RuntimeHost::start(const Project* project, std::unique_ptr<World> world, QS
     cfg.loadUserSettings = false;  // project defaults drive the editor session; user settings are edited explicitly
     cfg.saveUserSettingsOnShutdown = false;
     cfg.fileWatching = true;
-    if (project) cfg.projectPath = project->projectFile().toStdString();
+    if (project) cfg.projectPath = fsPath(project->projectFile());
     if (const QString userDir = qEnvironmentVariable("OX_EDITOR_USER_DIR"); !userDir.isEmpty()) {
-        cfg.userDir = QDir(userDir).filePath(project ? project->name() : QStringLiteral("NoProject")).toStdString();
+        cfg.userDir = fsPath(QDir(userDir).filePath(project ? project->name() : QStringLiteral("NoProject")));
     }
     auto engine = std::make_unique<Engine>();
     if (auto st = engine->init(cfg); !st) {

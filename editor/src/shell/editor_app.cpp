@@ -15,7 +15,7 @@
 namespace ox::editor {
 
 void applyUiScaleFromPreferences() {
-    const QString file = QDir(QString::fromStdString(paths::userDataDir("OxwaldEditor").string())).filePath(QStringLiteral("EditorPreferences.json"));
+    const QString file = QDir(qsPath(paths::userDataDir("OxwaldEditor"))).filePath(QStringLiteral("EditorPreferences.json"));
     QFile f(file);
     if (!f.open(QIODevice::ReadOnly)) return;
     const double scale = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("appearance")).toObject().value(QStringLiteral("uiScale")).toDouble(1.0);

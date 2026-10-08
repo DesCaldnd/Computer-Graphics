@@ -53,7 +53,42 @@ void VulkanViewportHub::setDevice(rhi::Device* d) { g_device = d; }
 
 #include <cstring>
 
+// Native surface glue. volk is built without VK_USE_PLATFORM_*, so the platform headers are included here and the
+// create functions are resolved through the loader (same as the Metal path). <windows.h> comes last on purpose: no
+// Qt or engine header is parsed after its macros.
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+#elif defined(__linux__)
+#include <QGuiApplication>
+#include <QtGui/qtguiglobal.h>
+#if QT_CONFIG(xcb)
+// Only the handle types vulkan_xcb.h needs (identical to <xcb/xcb.h>, which is not required to build the editor).
+struct xcb_connection_t;
+typedef uint32_t xcb_window_t;
+typedef uint32_t xcb_visualid_t;
+#include <vulkan/vulkan_xcb.h>
+#endif
+#endif
+
 namespace ox::editor {
+
+#if defined(__linux__) && QT_CONFIG(xcb)
+namespace {
+// X11 connection of the running Qt platform plugin (nullptr on Wayland and other platforms).
+xcb_connection_t* xcbConnection() {
+    if (QGuiApplication::platformName() != QLatin1String("xcb")) return nullptr;
+    auto* x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
+    return x11 ? x11->connection() : nullptr;
+}
+} // namespace
+#endif
 
 // ISurfaceProvider for the QWindow + the per-viewport GPU objects.
 class VulkanSurfaceBridge final : public rhi::ISurfaceProvider {
@@ -64,6 +99,11 @@ public:
     [[nodiscard]] std::vector<const char*> requiredInstanceExtensions() const override {
 #if defined(__APPLE__)
         return {"VK_KHR_surface", "VK_EXT_metal_surface"};
+#elif defined(_WIN32)
+        return {"VK_KHR_surface", "VK_KHR_win32_surface"};
+#elif defined(__linux__) && QT_CONFIG(xcb)
+        if (xcbConnection()) return {"VK_KHR_surface", "VK_KHR_xcb_surface"};
+        return {"VK_KHR_surface"};
 #else
         return {"VK_KHR_surface"};
 #endif
@@ -81,14 +121,49 @@ public:
         VkSurfaceKHR surface = VK_NULL_HANDLE;
         if (create(instance, &info, nullptr, &surface) != VK_SUCCESS) return VK_NULL_HANDLE;
         return surface;
+#elif defined(_WIN32)
+        const HWND hwnd = reinterpret_cast<HWND>(m_window->winId());
+        if (!hwnd) return VK_NULL_HANDLE;
+        auto create = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(rhi::loaderGetInstanceProcAddr()(instance, "vkCreateWin32SurfaceKHR"));
+        if (!create) return VK_NULL_HANDLE;
+        VkWin32SurfaceCreateInfoKHR info{};
+        info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        info.hinstance = GetModuleHandleW(nullptr);
+        info.hwnd = hwnd;
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        if (create(instance, &info, nullptr, &surface) != VK_SUCCESS) return VK_NULL_HANDLE;
+        return surface;
+#elif defined(__linux__) && QT_CONFIG(xcb)
+        xcb_connection_t* connection = xcbConnection();
+        if (!connection) {
+            // Wayland needs the wl_surface, which Qt only exposes through private API.
+            OX_LOG_WARN("editor", "No Vulkan surface for the Qt platform '{}' (run with QT_QPA_PLATFORM=xcb)", QGuiApplication::platformName().toStdString());
+            return VK_NULL_HANDLE;
+        }
+        auto create = reinterpret_cast<PFN_vkCreateXcbSurfaceKHR>(rhi::loaderGetInstanceProcAddr()(instance, "vkCreateXcbSurfaceKHR"));
+        if (!create) return VK_NULL_HANDLE;
+        VkXcbSurfaceCreateInfoKHR info{};
+        info.sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
+        info.connection = connection;
+        info.window = xcb_window_t(m_window->winId());
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        if (create(instance, &info, nullptr, &surface) != VK_SUCCESS) return VK_NULL_HANDLE;
+        return surface;
 #else
         (void)instance;
-        // TODO(editor): xcb / wayland / win32 surfaces for Linux and Windows editor builds.
         return VK_NULL_HANDLE;
 #endif
     }
 
     [[nodiscard]] VkExtent2D framebufferSize() const override {
+#if defined(_WIN32)
+        // The real client area in physical pixels: width() * devicePixelRatio() can be one pixel off at fractional
+        // scale factors (125 %, 150 %).
+        RECT rc{};
+        if (m_window->handle() && GetClientRect(reinterpret_cast<HWND>(m_window->winId()), &rc)) {
+            return {u32(std::max<LONG>(0, rc.right - rc.left)), u32(std::max<LONG>(0, rc.bottom - rc.top))};
+        }
+#endif
         const qreal dpr = m_window->devicePixelRatio();
         return {u32(std::max(0.0, m_window->width() * dpr)), u32(std::max(0.0, m_window->height() * dpr))};
     }
@@ -146,6 +221,9 @@ public:
 VulkanViewportWindow::VulkanViewportWindow(ViewportPanel* panel) : m_panel(panel), m_bridge(std::make_unique<VulkanSurfaceBridge>(this)) {
 #if defined(__APPLE__)
     setSurfaceType(QSurface::MetalSurface);
+#else
+    // Win32 / xcb: a plain native window that Qt never paints into (no backing store, no GL visual).
+    setSurfaceType(QSurface::VulkanSurface);
 #endif
 }
 

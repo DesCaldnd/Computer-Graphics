@@ -20,6 +20,11 @@
 
 int main(int argc, char** argv) {
     using namespace ox::editor;
+#if defined(__linux__)
+    // The Vulkan viewport creates an xcb surface (the wl_surface of a QWindow is private Qt API), so prefer
+    // xcb / XWayland and keep Wayland as the fallback for systems without the xcb plugin.
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) qputenv("QT_QPA_PLATFORM", "xcb;wayland");
+#endif
     applyUiScaleFromPreferences();
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("OxwaldEditor"));

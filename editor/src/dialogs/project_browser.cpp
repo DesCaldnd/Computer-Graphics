@@ -41,7 +41,7 @@ QPixmap projectThumb(const QString& projectFile, const QString& name, QSize size
     if (!img.isNull()) {
         p.drawImage(QRectF(0, 0, size.width(), size.height()), img.scaled(size * 2, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
     } else {
-        const uint h = qHash(name);
+        const uint h = uint(qHash(name));
         const QColor a = QColor::fromHsv(int(h % 360), 120, 150), b = QColor::fromHsv(int((h / 7) % 360), 140, 70);
         QLinearGradient g(0, 0, size.width(), size.height());
         g.setColorAt(0, a);

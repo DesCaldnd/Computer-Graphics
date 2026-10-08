@@ -1,6 +1,6 @@
 # OxwaldEditor — Qt 6 Widgets editor.
 #   ox_editor        static library with every panel/dialog/command (tests link it)
-#   OxwaldEditor     macOS app bundle / executable
+#   OxwaldEditor     macOS app bundle / executable (console application on Windows)
 #   ox_editor_tests  Qt Test based tests (label "editor", run with QT_QPA_PLATFORM=offscreen)
 #
 # Optional engine modules are integrated when their targets exist (OX_EDITOR_HAS_<MODULE> defines), so the
@@ -17,6 +17,45 @@ endif()
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
+
+# MSVC: /W4 reports far more than the -Wall -Wextra set the editor is kept clean against (unused parameters are
+# switched off there too; 64->32 bit narrowing and local shadowing are not part of it), and with
+# OX_WARNINGS_AS_ERRORS every one of them is fatal. Keep both compilers on the same set.
+function(ox_editor_compile_options target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /bigobj /wd4100 /wd4244 /wd4267 /wd4456 /wd4457 /wd4458 /wd4459)
+    endif()
+endfunction()
+
+# Shared Qt on Windows (vcpkg x64-windows): the applocal step copies the Qt DLLs next to the executable but not the
+# plugins, and Qt looks for those in <exe dir>/<plugin type>/. Without platforms/qwindows.dll the editor does not
+# start, without qoffscreen.dll the tests and --screenshots do not. The imported plugin targets resolve to the
+# debug or release file of the active configuration.
+function(ox_editor_deploy_qt_plugins target)
+    if(NOT WIN32)
+        return()
+    endif()
+    get_target_property(_qt_type Qt6::Core TYPE)
+    if(NOT _qt_type STREQUAL "SHARED_LIBRARY")
+        return()
+    endif()
+    if(NOT TARGET Qt6::QWindowsIntegrationPlugin)
+        message(WARNING "OxwaldEditor: Qt6::QWindowsIntegrationPlugin not found - deploy the Qt 'platforms' plugins "
+                        "next to ${target} manually")
+    endif()
+    foreach(_plugin platforms/QWindowsIntegrationPlugin platforms/QOffscreenIntegrationPlugin
+                    styles/QModernWindowsStylePlugin styles/QWindowsVistaStylePlugin
+                    imageformats/QSvgPlugin iconengines/QSvgIconPlugin)
+        get_filename_component(_type ${_plugin} DIRECTORY)
+        get_filename_component(_name ${_plugin} NAME)
+        if(TARGET Qt6::${_name})
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${target}>/${_type}
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:Qt6::${_name}> $<TARGET_FILE_DIR:${target}>/${_type}
+                VERBATIM)
+        endif()
+    endforeach()
+endfunction()
 
 file(GLOB_RECURSE _ed_srcs CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
@@ -36,6 +75,7 @@ target_compile_definitions(ox_editor PUBLIC QT_NO_KEYWORDS
     OX_EDITOR_VERSION="${PROJECT_VERSION}"
     OX_EDITOR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 ox_set_warnings(ox_editor)
+ox_editor_compile_options(ox_editor)
 set_target_properties(ox_editor PROPERTIES FOLDER "editor")
 
 # Icons, theme and images (globbed so new icons need no list maintenance).
@@ -64,9 +104,13 @@ endforeach()
 
 # ---- application ---------------------------------------------------------------------------------------------
 set(_app_icon "")
+# No WIN32_EXECUTABLE: on Windows the editor stays a console application, the engine log, --screenshots and
+# --smoke-seconds report on stdout.
 add_executable(OxwaldEditor MACOSX_BUNDLE ${CMAKE_CURRENT_SOURCE_DIR}/src/app/main.cpp)
 target_link_libraries(OxwaldEditor PRIVATE ox_editor)
 ox_set_warnings(OxwaldEditor)
+ox_editor_compile_options(OxwaldEditor)
+ox_editor_deploy_qt_plugins(OxwaldEditor)
 set_target_properties(OxwaldEditor PROPERTIES
     FOLDER "editor"
     MACOSX_BUNDLE_BUNDLE_NAME "OxwaldEditor"
@@ -105,6 +149,8 @@ if(OX_BUILD_TESTS)
         target_link_libraries(ox_editor_tests PRIVATE ox_editor Qt6::Test)
         target_include_directories(ox_editor_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
         ox_set_warnings(ox_editor_tests)
+        ox_editor_compile_options(ox_editor_tests)
+        ox_editor_deploy_qt_plugins(ox_editor_tests)
         set_target_properties(ox_editor_tests PROPERTIES FOLDER "editor")
         if(TARGET Qt6::QOffscreenIntegrationPlugin)
             qt_import_plugins(ox_editor_tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
