@@ -2,6 +2,7 @@
 
 #include <oxwald/core/log.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 namespace ox::physics {

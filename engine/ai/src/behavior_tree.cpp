@@ -1,6 +1,7 @@
 #include <oxwald/ai/behavior_tree.hpp>
 #include <oxwald/core/log.hpp>
 
+#include <exception>
 #include <fstream>
 #include <utility>
 
@@ -704,7 +705,7 @@ nlohmann::json BTFactory::save(const BTNode& node) {
 }
 
 bool BTFactory::saveFile(const BTNode& root, const std::filesystem::path& path) {
-    std::ofstream f(path);
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
     if (!f) {
         return false;
     }

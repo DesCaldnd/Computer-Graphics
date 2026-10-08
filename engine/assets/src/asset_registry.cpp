@@ -5,9 +5,11 @@
 
 #include "internal.hpp"
 
+#include <exception>
 #include <fstream>
 #include <map>
 #include <queue>
+#include <tuple>
 
 namespace fs = std::filesystem;
 

@@ -2,6 +2,7 @@
 #include <oxwald/core/reflect.hpp>
 #include <oxwald/core/serial/convert.hpp>
 
+#include <cstdlib>
 #include <cstring>
 
 namespace ox::serial {

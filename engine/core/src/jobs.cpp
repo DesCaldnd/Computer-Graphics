@@ -10,6 +10,7 @@
 #include <chrono>
 #include <exception>
 #include <thread>
+#include <utility>
 
 // enkiTS is a prebuilt, uninstrumented library, so ThreadSanitizer cannot see the happens-before
 // edges its lock-free pipes and completion counters create. Mirror them with explicit annotations

@@ -2,7 +2,9 @@
 
 #include <glm/common.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace ox::world {
 

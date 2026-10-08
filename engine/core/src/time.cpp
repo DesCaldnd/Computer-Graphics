@@ -4,12 +4,46 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+#endif
 
 namespace ox {
 
 f64 Clock::now() {
     static const TimePoint kEpoch = Base::now();
     return seconds(Base::now() - kEpoch);
+}
+
+void Clock::sleepUntil(TimePoint deadline) {
+#if defined(_WIN32)
+    // Sleep() and std::this_thread::sleep_until round up to the scheduler tick (15.6 ms by default); a
+    // high-resolution waitable timer (Windows 10 1803+) does not.
+    thread_local const HANDLE timer =
+        CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    const Duration remaining = deadline - Base::now();
+    if (remaining <= Duration::zero()) return;
+    if (timer) {
+        LARGE_INTEGER due{};
+        due.QuadPart = -std::max<i64>(1, std::chrono::duration_cast<std::chrono::nanoseconds>(remaining).count() / 100);
+        if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+            WaitForSingleObject(timer, INFINITE);
+            return;
+        }
+    }
+#endif
+    std::this_thread::sleep_until(deadline);
 }
 
 // ---------------------------------------------------------------------------------------------

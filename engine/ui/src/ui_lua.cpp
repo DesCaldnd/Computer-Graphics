@@ -3,6 +3,9 @@
 
 #include "lua_state.hpp"
 
+#include <cfloat>
+#include <tuple>
+
 #if OX_UI_HAS_SCRIPT
 
 #include <oxwald/core/log.hpp>

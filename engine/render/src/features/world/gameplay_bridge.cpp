@@ -6,6 +6,8 @@
 // heightfields and splat maps are copied here (once per version) into immutable snapshots.
 #include "world_internal.hpp"
 
+#include <iterator>
+
 #if OX_RENDER_HAS_GAMEPLAY && OX_RENDER_HAS_WORLD && OX_GAMEPLAY_HAS_WORLD
 
 #include <oxwald/core/hash.hpp>

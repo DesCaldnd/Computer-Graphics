@@ -1,5 +1,7 @@
 #include <oxwald/render/frame_resources.hpp>
 
+#include <algorithm>
+
 namespace ox::render {
 
 void FrameResources::setTexture(std::string_view name, rhi::RGTexture t) {

@@ -5,6 +5,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
+
 using namespace ox;
 using namespace ox::ai;
 

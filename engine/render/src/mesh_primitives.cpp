@@ -1,6 +1,7 @@
 #include <oxwald/core/uuid.hpp>
 #include <oxwald/render/mesh_primitives.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 namespace ox::render {

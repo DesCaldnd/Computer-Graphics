@@ -8,10 +8,16 @@
 #include <oxwald/core/serial/format.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 namespace {
 
@@ -39,6 +45,9 @@ int dumpJson(const std::string& input, const std::string& output, int indent) {
     if (!doc) return fail(input + ": " + doc.error().message);
     const std::string json = serial::toJsonString(*doc, indent) + "\n";
     if (output.empty()) {
+#if defined(_WIN32)
+        _setmode(_fileno(stdout), _O_BINARY); // no LF -> CRLF translation: redirected output matches -o byte for byte
+#endif
         std::fwrite(json.data(), 1, json.size(), stdout);
         return 0;
     }

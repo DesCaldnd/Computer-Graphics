@@ -8,6 +8,7 @@
 #include <assimp/scene.h>
 
 #include <algorithm>
+#include <exception>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>

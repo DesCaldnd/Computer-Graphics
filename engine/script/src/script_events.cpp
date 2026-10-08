@@ -3,6 +3,7 @@
 #include <oxwald/script/script_events.hpp>
 
 #include <algorithm>
+#include <exception>
 
 namespace ox::script {
 

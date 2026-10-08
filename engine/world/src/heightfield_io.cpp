@@ -7,10 +7,12 @@
 #include <glm/common.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 
 // stb is header-only; STB_*_STATIC keeps the symbols private to this TU so other modules (assets) can
 // compile their own copies without duplicate-symbol clashes.

@@ -2,6 +2,8 @@
 
 #include <oxwald/rhi/render_graph.hpp>
 
+#include <cstdio>
+
 using namespace ox;
 using namespace ox::rhi;
 using namespace ox::rhi::test;

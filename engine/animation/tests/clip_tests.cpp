@@ -1,5 +1,7 @@
 #include "test_helpers.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <random>
 
 using namespace ox;

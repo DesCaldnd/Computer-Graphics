@@ -1,5 +1,6 @@
 #include "test_helpers.hpp"
 
+#include <cmath>
 #include <numeric>
 
 using namespace ox;

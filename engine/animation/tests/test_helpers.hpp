@@ -6,6 +6,7 @@
 
 #include <glm/gtc/constants.hpp>
 
+#include <cmath>
 #include <memory>
 
 namespace ox::anim::test {

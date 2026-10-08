@@ -6,6 +6,7 @@
 #include <glm/geometric.hpp>
 #include <glm/trigonometric.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <sstream>

@@ -16,6 +16,7 @@
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <set>
 
 #ifndef OX_RHI_VALIDATION_DEFAULT

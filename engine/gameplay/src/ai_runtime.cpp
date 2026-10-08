@@ -11,6 +11,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/norm.hpp>
 
+#include <exception>
+
 namespace ox::gameplay {
 
 namespace {

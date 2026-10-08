@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <system_error>
 
 namespace ox {
 
@@ -341,7 +342,7 @@ void CVarRegistry::loadOverrides(const nlohmann::json& overrides) {
 }
 
 Status CVarRegistry::saveOverridesToFile(const std::string& path, bool allChanged) const {
-    std::ofstream out(path, std::ios::trunc);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) return makeError("cannot write '{}'", path);
     out << saveOverrides(allChanged).dump(2) << "\n";
     return out ? Status{} : Status(makeError("write failed for '{}'", path));

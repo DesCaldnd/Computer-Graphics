@@ -8,6 +8,8 @@
 #include <oxwald/rhi/shader_compiler.hpp>
 #include <oxwald/rhi/swapchain.hpp>
 
+#include <algorithm>
+
 namespace ox::rhi {
 
 using namespace detail;

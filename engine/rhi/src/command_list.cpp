@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <iterator>
 
 namespace ox::rhi {
 

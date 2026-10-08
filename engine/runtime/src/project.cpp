@@ -4,6 +4,7 @@
 #include <oxwald/runtime/project.hpp>
 
 #include <algorithm>
+#include <iterator>
 
 namespace ox {
 

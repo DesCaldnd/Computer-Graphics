@@ -34,7 +34,11 @@ std::string formatTimestamp(i64 unixSeconds) {
     if (unixSeconds <= 0) return "—";
     std::time_t t = std::time_t(unixSeconds);
     std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
     localtime_r(&t, &tm);
+#endif
     char buf[32];
     std::strftime(buf, sizeof buf, "%d.%m.%Y %H:%M", &tm);
     return buf;

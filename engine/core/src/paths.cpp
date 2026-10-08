@@ -2,7 +2,9 @@
 
 #include <oxwald/core/log.hpp>
 
+#include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -32,7 +34,8 @@ namespace ox::paths {
 
 namespace {
 
-std::string envVar(const char* name) {
+// Returned as a path: on Windows the value is UTF-16 and may not be representable in the ANSI code page.
+std::filesystem::path envVar(const char* name) {
 #if defined(_WIN32)
     wchar_t buffer[32768];
     std::wstring wname(name, name + std::char_traits<char>::length(name));
@@ -40,16 +43,16 @@ std::string envVar(const char* name) {
     if (n == 0 || n >= std::size(buffer)) {
         return {};
     }
-    return std::filesystem::path(std::wstring(buffer, n)).string();
+    return std::filesystem::path(std::wstring(buffer, n));
 #else
     const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
+    return v ? std::filesystem::path(v) : std::filesystem::path();
 #endif
 }
 
 #if !defined(_WIN32)
 std::filesystem::path homeDir() {
-    std::string home = envVar("HOME");
+    std::filesystem::path home = envVar("HOME");
     if (!home.empty()) {
         return home;
     }
@@ -63,8 +66,8 @@ std::filesystem::path homeDir() {
 } // namespace
 
 std::filesystem::path engineSourceDir() {
-    if (std::string env = envVar("OXWALD_SOURCE_DIR"); !env.empty()) {
-        return std::filesystem::path(env).lexically_normal();
+    if (std::filesystem::path env = envVar("OXWALD_SOURCE_DIR"); !env.empty()) {
+        return env.lexically_normal();
     }
     return std::filesystem::path(OX_ENGINE_SOURCE_DIR).lexically_normal();
 }
@@ -105,16 +108,16 @@ std::filesystem::path executableDir() { return executablePath().parent_path(); }
 std::filesystem::path userDataDir(std::string_view appName) {
     const std::filesystem::path app{std::string(appName)};
 #if defined(_WIN32)
-    std::string base = envVar("APPDATA");
+    std::filesystem::path base = envVar("APPDATA");
     if (base.empty()) {
         base = envVar("USERPROFILE");
     }
-    return std::filesystem::path(base) / app;
+    return base / app;
 #elif defined(__APPLE__)
     return homeDir() / "Library" / "Application Support" / app;
 #else
-    if (std::string xdg = envVar("XDG_DATA_HOME"); !xdg.empty()) {
-        return std::filesystem::path(xdg) / app;
+    if (std::filesystem::path xdg = envVar("XDG_DATA_HOME"); !xdg.empty()) {
+        return xdg / app;
     }
     return homeDir() / ".local" / "share" / app;
 #endif

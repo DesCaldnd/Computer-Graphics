@@ -2,6 +2,8 @@
 
 #include <oxwald/rhi/swapchain.hpp>
 
+#include <cstdio>
+#include <cstring>
 #include <numeric>
 
 using namespace ox;

@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <random>

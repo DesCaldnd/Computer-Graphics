@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <fstream>
+#include <iterator>
 #include <thread>
 
 using namespace ox;

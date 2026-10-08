@@ -12,6 +12,7 @@
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
+#include <exception>
 #include <map>
 
 namespace ox::assets {

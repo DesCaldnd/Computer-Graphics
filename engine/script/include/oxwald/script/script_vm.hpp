@@ -5,6 +5,7 @@
 #include <oxwald/script/script_value.hpp>
 #include <oxwald/script/sol_glm.hpp>
 
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>

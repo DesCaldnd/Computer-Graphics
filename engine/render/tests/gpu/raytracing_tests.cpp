@@ -17,6 +17,7 @@
 #include <glm/gtc/packing.hpp>
 
 #include <cmath>
+#include <cstdio>
 
 using namespace ox;
 using namespace ox::render;

@@ -4,6 +4,7 @@
 
 #include <oxwald/physics/physics_world.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <memory>

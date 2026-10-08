@@ -7,7 +7,10 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <iterator>
 
 namespace ox::ui {
 

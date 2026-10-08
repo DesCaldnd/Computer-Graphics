@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <ostream>
 
 using namespace ox;
 using namespace ox::render;

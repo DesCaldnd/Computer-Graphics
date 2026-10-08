@@ -9,7 +9,9 @@
 #include <glm/geometric.hpp>
 #include <glm/trigonometric.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <mutex>

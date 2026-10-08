@@ -190,8 +190,8 @@ std::vector<VkDeviceAddress> uploadWater(FeatureContext& ctx, const Translucency
         if (!unbounded) {
             const glm::vec2 h = w.size * 0.5f;
             centre = glm::clamp(centre, w.center - h, w.center + h);
-            const glm::vec2 far = glm::max(glm::abs(centre - (w.center - h)), glm::abs(centre - (w.center + h)));
-            extent = std::max(far.x, far.y) + 0.01f;
+            const glm::vec2 farCorner = glm::max(glm::abs(centre - (w.center - h)), glm::abs(centre - (w.center + h)));
+            extent = std::max(farCorner.x, farCorner.y) + 0.01f;
         }
         constexpr f32 kNearCell = 0.1f; // metres
         const f32 alpha = std::clamp(kNearCell * f32(cells) / (2.0f * extent), 0.02f, 1.0f);

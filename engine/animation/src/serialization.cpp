@@ -2,6 +2,9 @@
 
 #include <oxwald/core/log.hpp>
 
+#include <algorithm>
+#include <utility>
+
 namespace ox::anim {
 
 namespace {

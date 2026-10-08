@@ -22,6 +22,7 @@
 
 #include <glm/gtc/type_ptr.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 
@@ -195,8 +196,22 @@ int RmlSystem::TranslateString(Rml::String& translated, const Rml::String& input
     return 0;
 }
 
-void RmlSystem::JoinPath(Rml::String& translated, const Rml::String& documentPath, const Rml::String& path) {
-    if (path.find("://") != Rml::String::npos || (!path.empty() && path.front() == '/')) {
+void RmlSystem::JoinPath(Rml::String& translated, const Rml::String& documentPathIn, const Rml::String& pathIn) {
+#if defined(_WIN32)
+    // Native paths arrive with mixed separators ("C:\dir\ui/menu.rml"); URIs are left alone.
+    auto generic = [](Rml::String s) {
+        if (s.find("://") == Rml::String::npos) std::replace(s.begin(), s.end(), '\\', '/');
+        return s;
+    };
+    const Rml::String documentPath = generic(documentPathIn);
+    const Rml::String path = generic(pathIn);
+    const bool drive = path.size() > 1 && path[1] == ':';
+#else
+    const Rml::String& documentPath = documentPathIn;
+    const Rml::String& path = pathIn;
+    const bool drive = false;
+#endif
+    if (drive || path.find("://") != Rml::String::npos || (!path.empty() && path.front() == '/')) {
         translated = normalizeJoined(path);
         return;
     }

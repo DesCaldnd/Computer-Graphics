@@ -1,5 +1,7 @@
 #include <oxwald/rhi/access.hpp>
 
+#include <iterator>
+
 namespace ox::rhi {
 
 namespace {

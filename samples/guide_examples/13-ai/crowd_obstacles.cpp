@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 using namespace ox;
 using namespace ox::ai;
 

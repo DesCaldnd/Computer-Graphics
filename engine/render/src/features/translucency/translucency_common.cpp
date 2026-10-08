@@ -4,6 +4,7 @@
 #include <oxwald/core/paths.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>

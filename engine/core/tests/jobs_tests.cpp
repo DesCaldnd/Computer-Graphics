@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 

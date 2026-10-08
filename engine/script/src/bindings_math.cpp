@@ -7,6 +7,7 @@
 #include <glm/mat4x4.hpp>
 
 #include <format>
+#include <tuple>
 
 namespace ox::script {
 

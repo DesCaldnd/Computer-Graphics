@@ -15,6 +15,7 @@
 #include <imgui.h>
 
 #include <atomic>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 

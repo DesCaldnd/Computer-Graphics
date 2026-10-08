@@ -20,7 +20,9 @@
 #endif
 
 #include <algorithm>
+#include <cstdlib>
 #include <format>
+#include <iterator>
 #include <thread>
 
 namespace ox {
@@ -565,7 +567,7 @@ void Engine::pace(Clock::TimePoint frameStart) {
     const auto deadline = frameStart + std::chrono::duration_cast<Clock::Duration>(std::chrono::duration<f64>(1.0 / fps));
     // Coarse sleep, then yield for the last millisecond (sleep granularity is ~1 ms on most OSes).
     const auto coarse = deadline - std::chrono::milliseconds(1);
-    if (Clock::timePoint() < coarse) std::this_thread::sleep_until(coarse);
+    if (Clock::timePoint() < coarse) Clock::sleepUntil(coarse);
     while (Clock::timePoint() < deadline) std::this_thread::yield();
 }
 

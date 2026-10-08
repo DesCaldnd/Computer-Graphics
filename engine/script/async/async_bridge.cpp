@@ -2,6 +2,7 @@
 #include <oxwald/script/script_events.hpp>
 
 #include <limits>
+#include <tuple>
 
 namespace ox::script {
 

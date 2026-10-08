@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <cmath>
+#include <tuple>
 
 namespace ox::audio {
 

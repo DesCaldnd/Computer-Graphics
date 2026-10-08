@@ -7,7 +7,11 @@
 #include <oxwald/gameplay/asset_providers.hpp>
 #include <oxwald/scene/prefab.hpp>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -24,12 +28,20 @@ namespace fs = std::filesystem;
 
 namespace {
 
+int processId() {
+#if defined(_WIN32)
+    return ::_getpid();
+#else
+    return int(::getpid());
+#endif
+}
+
 class TempProject {
 public:
     TempProject() {
         static std::atomic<int> counter{0};
         m_path = fs::temp_directory_path() /
-                 ("oxgameplay_assets_" + std::to_string(::getpid()) + "_" + std::to_string(counter++));
+                 ("oxgameplay_assets_" + std::to_string(processId()) + "_" + std::to_string(counter++));
         fs::remove_all(m_path);
         fs::create_directories(m_path / "Assets");
     }

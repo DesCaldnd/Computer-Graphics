@@ -7,6 +7,7 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/constants.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <random>

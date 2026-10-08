@@ -17,6 +17,8 @@ public:
     [[nodiscard]] static f64 now();
     [[nodiscard]] static f64 seconds(Duration d) { return std::chrono::duration<f64>(d).count(); }
     [[nodiscard]] static f64 secondsBetween(TimePoint a, TimePoint b) { return seconds(b - a); }
+    // Blocks the calling thread until `deadline` with sub-millisecond granularity where the OS allows it.
+    static void sleepUntil(TimePoint deadline);
 };
 
 // Accumulating stopwatch. Starts stopped unless constructed with start = true.

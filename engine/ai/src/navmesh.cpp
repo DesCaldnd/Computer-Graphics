@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <tuple>
 #include <type_traits>
 
 namespace ox::ai {

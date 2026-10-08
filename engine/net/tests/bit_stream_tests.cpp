@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <glm/gtc/quaternion.hpp>
 #include <random>
 

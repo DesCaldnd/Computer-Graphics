@@ -5,6 +5,7 @@
 #include <glm/vec4.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <concepts>
 #include <map>
 #include <string>

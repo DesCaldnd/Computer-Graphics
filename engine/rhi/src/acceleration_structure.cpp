@@ -5,6 +5,7 @@
 #include <oxwald/core/assert.hpp>
 #include <oxwald/core/log.hpp>
 
+#include <algorithm>
 #include <cstring>
 
 namespace ox::rhi {

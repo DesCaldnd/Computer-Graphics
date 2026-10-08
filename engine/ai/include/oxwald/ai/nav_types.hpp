@@ -6,6 +6,7 @@
 
 #include <array>
 #include <functional>
+#include <utility>
 #include <vector>
 
 namespace ox::ai {

@@ -14,7 +14,10 @@
 #include <oxwald/rhi/device.hpp>
 #include <oxwald/rhi/vulkan.hpp>
 
-// The NGX headers include <vulkan/vulkan.h>; volk (VK_NO_PROTOTYPES) was included first, so no prototypes leak.
+// The NGX headers rely on the Vulkan types volk (VK_NO_PROTOTYPES) has already declared.
+#if defined(_MSC_VER)
+#pragma warning(disable : 4389) // NVSDK_NGX_FAILED/SUCCEED compare an unsigned mask with an enumerator
+#endif
 #include <nvsdk_ngx_helpers.h>
 #include <nvsdk_ngx_helpers_vk.h>
 #include <nvsdk_ngx_vk.h>
@@ -23,6 +26,8 @@
 #include <filesystem>
 #include <format>
 #include <mutex>
+#include <string>
+#include <string_view>
 
 namespace ox::render::dlss {
 
@@ -99,7 +104,12 @@ void requiredExtensions(std::vector<std::string>& instanceExtensions, std::vecto
     const char** dev = nullptr;
     if (NVSDK_NGX_FAILED(NVSDK_NGX_VULKAN_RequiredExtensions(&instCount, &inst, &devCount, &dev))) return;
     for (unsigned int i = 0; i < instCount; ++i) instanceExtensions.emplace_back(inst[i]);
-    for (unsigned int i = 0; i < devCount; ++i) deviceExtensions.emplace_back(dev[i]);
+    for (unsigned int i = 0; i < devCount; ++i) {
+        // rhi enables the core 1.2 bufferDeviceAddress feature, which must not be combined with the EXT extension
+        // (VUID-VkDeviceCreateInfo-pNext-04748).
+        if (std::string_view(dev[i]) == "VK_EXT_buffer_device_address") continue;
+        deviceExtensions.emplace_back(dev[i]);
+    }
 }
 
 Status probe(rhi::Device& device) {

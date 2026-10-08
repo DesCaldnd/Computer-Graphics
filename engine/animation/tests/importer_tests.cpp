@@ -3,9 +3,11 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <sstream>
 
@@ -260,9 +262,12 @@ TEST(AnimShaders, SkinningComputeCompilesToSpirv) {
     fs::create_directories(out.parent_path());
     const std::string exe = OX_GLSLC_EXECUTABLE;
     const bool isGlslang = exe.find("glslangValidator") != std::string::npos;
-    const std::string cmd = isGlslang
+    std::string cmd = isGlslang
         ? std::format("\"{}\" -V --target-env vulkan1.3 \"{}\" -o \"{}\"", exe, src.string(), out.string())
         : std::format("\"{}\" --target-env=vulkan1.3 \"{}\" -o \"{}\"", exe, src.string(), out.string());
+#if defined(_WIN32)
+    cmd = "\"" + cmd + "\""; // cmd.exe strips the outermost quote pair of a command line that starts with a quote
+#endif
     ASSERT_EQ(std::system(cmd.c_str()), 0) << cmd;
     EXPECT_GT(fs::file_size(out), 0u);
 #else

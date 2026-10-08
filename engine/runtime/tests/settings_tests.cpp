@@ -10,6 +10,8 @@
 
 #include <gtest/gtest.h>
 
+#include <iterator>
+
 using namespace ox;
 
 namespace {

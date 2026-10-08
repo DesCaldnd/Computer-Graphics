@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <thread>
 
 namespace ox::physics {

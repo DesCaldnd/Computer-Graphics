@@ -4,6 +4,7 @@
 #include <oxwald/rhi/format.hpp>
 
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 using namespace ox;

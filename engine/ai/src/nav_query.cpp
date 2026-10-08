@@ -7,6 +7,7 @@
 #include <DetourNavMesh.h>
 #include <DetourNavMeshQuery.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstring>

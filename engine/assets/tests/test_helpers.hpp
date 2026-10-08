@@ -1,7 +1,12 @@
 #pragma once
 
 #include <oxwald/assets/assets.hpp>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <gtest/gtest.h>
 
@@ -10,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 
@@ -19,6 +25,14 @@ namespace fs = std::filesystem;
 using namespace ox;
 using namespace ox::assets;
 
+inline int processId() {
+#if defined(_WIN32)
+    return ::_getpid();
+#else
+    return int(::getpid());
+#endif
+}
+
 // Fresh directory per test, removed on destruction.
 class TempDir {
 public:
@@ -26,7 +40,7 @@ public:
         static std::atomic<int> counter{0};
         const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
         std::string name = info ? std::string(info->test_suite_name()) + "_" + info->name() : "test";
-        m_path = fs::temp_directory_path() / ("oxassets_" + name + "_" + std::to_string(::getpid()) + "_" +
+        m_path = fs::temp_directory_path() / ("oxassets_" + name + "_" + std::to_string(processId()) + "_" +
                                               std::to_string(counter++));
         fs::remove_all(m_path);
         fs::create_directories(m_path);

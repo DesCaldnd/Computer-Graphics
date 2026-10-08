@@ -8,6 +8,8 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <type_traits>
+
 // Must be visible in every translation unit that moves glm values through sol2 (included by script_vm.hpp).
 // glm types expose value_type/length()/operator[] which can make sol2 treat them as containers or try to
 // "automagically" bind members; they are plain value usertypes.

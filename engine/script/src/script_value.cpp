@@ -1,6 +1,7 @@
 #include <oxwald/script/script_value.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 
 namespace ox::script {

@@ -2,6 +2,8 @@
 
 #include <oxwald/core/assert.hpp>
 
+#include <algorithm>
+
 namespace ox::anim {
 
 JointMask JointMask::all(const Skeleton& skeleton, f32 weight) {

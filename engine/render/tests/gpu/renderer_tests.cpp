@@ -4,7 +4,9 @@
 #include <oxwald/render/quality.hpp>
 
 #include <chrono>
+#include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <thread>
 
 using namespace ox;

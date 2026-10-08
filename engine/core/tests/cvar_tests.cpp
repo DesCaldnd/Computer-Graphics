@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -154,7 +155,7 @@ TEST_F(CVars, SaveAndLoadOverrides) {
     EXPECT_EQ(persisted.lastSource(), CVarSource::Config);
     EXPECT_TRUE(reg.saveOverrides().contains("test.PersistStr")) << "pending values survive a save";
 
-    const auto path = (std::filesystem::temp_directory_path() / ("ox_cvars_" + std::to_string(::getpid()) + ".json")).string();
+    const auto path = (std::filesystem::temp_directory_path() / ("ox_cvars_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json")).string();
     persisted.set(9);
     ASSERT_TRUE(reg.saveOverridesToFile(path));
     persisted.set(1);

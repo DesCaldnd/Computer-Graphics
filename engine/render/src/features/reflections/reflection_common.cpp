@@ -4,6 +4,7 @@
 #include <oxwald/core/hash.hpp>
 
 #include <cstring>
+#include <iterator>
 #include <span>
 #include <fstream>
 

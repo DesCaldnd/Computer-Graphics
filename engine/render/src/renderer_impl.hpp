@@ -12,6 +12,7 @@
 #include <oxwald/rhi/device.hpp>
 #include <oxwald/rhi/render_graph.hpp>
 
+#include <chrono>
 #include <map>
 #include <mutex>
 #include <typeindex>

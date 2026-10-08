@@ -17,6 +17,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #define OX_PAK_MMAP 1
+#elif defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 namespace ox::assets {
@@ -109,7 +117,7 @@ Result<std::shared_ptr<PakReader>> PakReader::open(const std::filesystem::path& 
     r->m_path = path;
     std::vector<std::byte> tail;
     PakHeader h{};
-#if OX_PAK_MMAP
+#if defined(OX_PAK_MMAP)
     r->m_fd = ::open(path.c_str(), O_RDONLY);
     if (r->m_fd < 0) return makeError("cannot open {}", path.string());
     struct stat st {};
@@ -119,6 +127,24 @@ Result<std::shared_ptr<PakReader>> PakReader::open(const std::filesystem::path& 
         void* p = mmap(nullptr, r->m_fileSize, PROT_READ, MAP_PRIVATE, r->m_fd, 0);
         if (p != MAP_FAILED) r->m_mapped = static_cast<const std::byte*>(p);
     }
+#elif defined(_WIN32)
+    // The view keeps the section alive, so the file and mapping handles are closed right away.
+    const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return makeError("cannot open {}", path.string());
+    LARGE_INTEGER fileSize{};
+    if (!GetFileSizeEx(file, &fileSize)) {
+        CloseHandle(file);
+        return makeError("cannot stat {}", path.string());
+    }
+    r->m_fileSize = u64(fileSize.QuadPart);
+    if (r->m_fileSize >= sizeof(PakHeader)) {
+        if (const HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr)) {
+            r->m_mapped = static_cast<const std::byte*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
+            CloseHandle(mapping);
+        }
+    }
+    CloseHandle(file);
 #endif
     auto readAt = [&](u64 offset, u64 size) -> Result<std::vector<std::byte>> {
         if (offset > r->m_fileSize || size > r->m_fileSize - offset) return makeError("pak read out of range");
@@ -171,9 +197,11 @@ Result<std::shared_ptr<PakReader>> PakReader::open(const std::filesystem::path& 
 }
 
 PakReader::~PakReader() {
-#if OX_PAK_MMAP
+#if defined(OX_PAK_MMAP)
     if (m_mapped) munmap(const_cast<std::byte*>(m_mapped), m_fileSize);
     if (m_fd >= 0) ::close(m_fd);
+#elif defined(_WIN32)
+    if (m_mapped) UnmapViewOfFile(m_mapped);
 #endif
 }
 

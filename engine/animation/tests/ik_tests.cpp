@@ -1,5 +1,7 @@
 #include "test_helpers.hpp"
 
+#include <cmath>
+
 using namespace ox;
 using namespace ox::anim;
 using namespace ox::anim::test;

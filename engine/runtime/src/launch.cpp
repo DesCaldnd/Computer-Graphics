@@ -1,6 +1,7 @@
 #include <oxwald/core/scalability.hpp>
 #include <oxwald/runtime/launch.hpp>
 
+#include <cctype>
 #include <charconv>
 
 namespace ox {

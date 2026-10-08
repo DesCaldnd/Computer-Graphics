@@ -2,6 +2,8 @@
 #include <oxwald/core/hash.hpp>
 #include <oxwald/render/render_settings.hpp>
 
+#include <iterator>
+
 namespace ox::render {
 
 namespace {

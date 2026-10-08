@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <stdexcept>
 
 using namespace ox;
 

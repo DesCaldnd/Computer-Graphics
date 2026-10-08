@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 // Simple little-endian byte stream used until the engine-wide archive system (ox::serial) lands.

@@ -12,6 +12,7 @@
 #include <RmlUi/Debugger.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <set>
 

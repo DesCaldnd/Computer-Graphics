@@ -2,6 +2,8 @@
 
 #include <oxwald/core/log.hpp>
 
+#include <algorithm>
+
 namespace ox::physics {
 
 using detail::toGlm;

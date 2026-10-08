@@ -2,8 +2,12 @@
 
 #include <charconv>
 #include <cstdlib>
-#include <cxxabi.h>
 #include <new>
+#include <system_error>
+
+#if !defined(_MSC_VER)
+#include <cxxabi.h>
+#endif
 
 namespace ox::reflect {
 
@@ -84,11 +88,30 @@ std::vector<const TypeInfo*> TypeRegistry::registeredStructs() const {
 
 namespace detail {
 std::string defaultTypeName(const std::type_info& ti) {
+#if defined(_MSC_VER)
+    // MSVC names are readable but carry elaborated-type keywords ("struct ox::Foo"); drop them to match the
+    // demangled Itanium form.
+    std::string name = ti.name();
+    for (std::string_view kw : {std::string_view("struct "), std::string_view("class "), std::string_view("enum "),
+                                std::string_view("union ")}) {
+        for (usize pos = 0; (pos = name.find(kw, pos)) != std::string::npos;) {
+            const char prev = pos == 0 ? ' ' : name[pos - 1];
+            const bool ident = (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') || (prev >= '0' && prev <= '9') || prev == '_';
+            if (ident) {
+                pos += kw.size();
+            } else {
+                name.erase(pos, kw.size());
+            }
+        }
+    }
+    return name;
+#else
     int status = 0;
     char* demangled = abi::__cxa_demangle(ti.name(), nullptr, nullptr, &status);
     std::string name = (status == 0 && demangled) ? demangled : ti.name();
     std::free(demangled);
     return name;
+#endif
 }
 } // namespace detail
 

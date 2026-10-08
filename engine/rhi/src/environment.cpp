@@ -1,6 +1,7 @@
 #include <oxwald/core/log.hpp>
 #include <oxwald/rhi/environment.hpp>
 
+#include <cstdint>
 #include <cstdlib>
 #include <mutex>
 #include <vector>

@@ -513,8 +513,8 @@ std::shared_ptr<VegetationSystem::ViewData> VegetationSystem::prepare(FeatureCon
                 const f32 dmin = std::sqrt(world::distanceSq(box, lodCamera));
                 if (dmin > L.lod.cullDistance) continue;
                 if (!frustum.intersects(box)) continue;
-                const glm::vec3 far = glm::max(glm::abs(box.min - lodCamera), glm::abs(box.max - lodCamera));
-                const f32 dmax = glm::length(far);
+                const glm::vec3 farCorner = glm::max(glm::abs(box.min - lodCamera), glm::abs(box.max - lodCamera));
+                const f32 dmax = glm::length(farCorner);
                 const u32 l0 = lodAt(L.lod, L.impostors, dmin);
                 u32 l1 = lodAt(L.lod, L.impostors, dmax);
                 if (l1 >= 4) l1 = L.impostors ? 3u : 2u;

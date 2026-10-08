@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 namespace ox::render {
 
