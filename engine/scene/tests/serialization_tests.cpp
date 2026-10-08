@@ -331,3 +331,62 @@ TEST_F(SceneSerialization, WriteSampleScene) {
     for (const auto& c : info->chunks) EXPECT_TRUE(c.crcValid);
     if (!out) std::filesystem::remove_all(path.parent_path());
 }
+
+namespace {
+struct EnemyTag {};
+} // namespace
+
+TEST(TagComponents, EmptyStructsAreFullComponents) {
+    registerSceneTypes();
+    OX_REFLECT_TYPE(EnemyTag, "Test.EnemyTag").attributes(attr::Category{"Gameplay"});
+    const ComponentInfo& info = ComponentRegistry::instance().add<EnemyTag>();
+    EXPECT_EQ(info.name, "Test.EnemyTag");
+
+    World w;
+    Entity goblin = w.create("Goblin");
+    Entity tree = w.create("Tree");
+    goblin.add<EnemyTag>();
+    EXPECT_TRUE(goblin.has<EnemyTag>());
+    EXPECT_NE(goblin.tryGet<EnemyTag>(), nullptr);
+    EXPECT_EQ(tree.tryGet<EnemyTag>(), nullptr);
+    EXPECT_TRUE(info.has(w, goblin.handle()));
+    EXPECT_NE(info.get(w, goblin.handle()), nullptr);
+    EXPECT_EQ(info.get(w, tree.handle()), nullptr);
+    EXPECT_EQ(w.registry().view<EnemyTag>().size(), 1u);
+
+    // Binary and JSON round trips keep the tag.
+    const serial::Document doc = serializeWorld(w);
+    for (const auto& bytes : {serial::encodeBinary(doc), [&] {
+             const std::string j = serial::toJsonString(doc);
+             return std::vector<std::byte>(reinterpret_cast<const std::byte*>(j.data()),
+                                           reinterpret_cast<const std::byte*>(j.data()) + j.size());
+         }()}) {
+        auto decoded = serial::decodeAny(bytes);
+        ASSERT_TRUE(decoded) << decoded.error().message;
+        World loaded;
+        ASSERT_TRUE(deserializeWorld(loaded, *decoded));
+        EXPECT_TRUE(loaded.find(goblin.uuid()).has<EnemyTag>());
+        EXPECT_FALSE(loaded.find(tree.uuid()).has<EnemyTag>());
+    }
+
+    // Cloning (play mode) and registry-driven add/remove (editor inspector).
+    auto copy = w.clone();
+    EXPECT_TRUE(copy->find(goblin.uuid()).has<EnemyTag>());
+    EXPECT_NE(info.add(w, tree.handle()), nullptr);
+    EXPECT_TRUE(tree.has<EnemyTag>());
+    info.remove(w, goblin.handle());
+    EXPECT_FALSE(goblin.has<EnemyTag>());
+}
+
+TEST(Prefabs, CreatePrefabIsDeterministic) {
+    registerSceneTypes();
+    auto make = [] {
+        World w;
+        Entity root = w.create("Root");
+        w.create("ChildA", root);
+        Entity b = w.create("ChildB", root);
+        w.create("Grandchild", b);
+        return serial::encodeBinary(createPrefab(w, root, {.prefabId = Uuid::fromName("test.prefab"), .linkSource = false}));
+    };
+    EXPECT_EQ(make(), make()) << "same subtree + prefab id => byte-identical prefab";
+}

@@ -236,12 +236,17 @@ void registerAnimation(ComponentRegistry& reg) {
         .field("name", &AnimatorParameterDesc::name)
         .field("type", &AnimatorParameterDesc::type)
         .field("defaultValue", &AnimatorParameterDesc::defaultValue);
+    OX_REFLECT_TYPE(AnimatorBlendSample, "AnimatorBlendSample")
+        .field("clip", &AnimatorBlendSample::clip, attr::AssetRef{"AnimationClip"})
+        .field("position", &AnimatorBlendSample::position);
     OX_REFLECT_TYPE(AnimatorStateDesc, "AnimatorStateDesc")
         .field("name", &AnimatorStateDesc::name)
         .field("clip", &AnimatorStateDesc::clip, attr::AssetRef{"AnimationClip"})
         .field("speed", &AnimatorStateDesc::speed, Range{-10.0, 10.0})
         .field("speedParameter", &AnimatorStateDesc::speedParameter)
-        .field("loop", &AnimatorStateDesc::loop);
+        .field("loop", &AnimatorStateDesc::loop)
+        .field("blendParameter", &AnimatorStateDesc::blendParameter, Tooltip{"Float parameter of a 1D blend space"})
+        .field("blendSamples", &AnimatorStateDesc::blendSamples);
     OX_REFLECT_TYPE(AnimatorTransitionDesc, "AnimatorTransitionDesc")
         .field("from", &AnimatorTransitionDesc::from, Tooltip{"State name; empty or * = any state"})
         .field("to", &AnimatorTransitionDesc::to)

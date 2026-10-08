@@ -74,9 +74,9 @@ TEST_F(QualityGroups, MixLevelsPerGroup) {
     EXPECT_EQ(sc::overallLevel(), QualityLevel::Custom);
 
     // Ручная правка cvar'а делает группу Custom; повторный выбор уровня возвращает табличные значения.
-    CVarRegistry::instance().execute("r.Shadows.CSM.Distance 400");
+    ASSERT_TRUE(CVarRegistry::instance().execute("r.Shadows.CSM.Distance 400"));
     EXPECT_EQ(sc::currentLevel(Scalability::Shadows), QualityLevel::Custom);
-    CVarRegistry::instance().execute("sg.Shadows High"); // уровень группы — тоже cvar
+    ASSERT_TRUE(CVarRegistry::instance().execute("sg.Shadows High")); // уровень группы — тоже cvar
     EXPECT_EQ(sc::currentLevel(Scalability::Shadows), QualityLevel::High);
     EXPECT_FLOAT_EQ(render::RenderSettings::fromCVars().csmDistance, 150.0f);
 }

@@ -8,6 +8,9 @@
 #include <oxwald/render/features/postprocess/postprocess.hpp>
 #include <oxwald/render/render_feature.hpp>
 #include <oxwald/render/render_settings.hpp>
+#include <oxwald/render/snapshot.hpp>
+#include <oxwald/scene/components.hpp>
+#include <oxwald/scene/scene.hpp>
 #include <oxwald/rhi/device.hpp>
 
 #include <gtest/gtest.h>
@@ -254,4 +257,39 @@ TEST(PostProcessCpu, VolumeComponentIsReflected) {
     back.settings.bloomIntensity = 0.0f;
     serial::fromValue(v, back);
     EXPECT_FLOAT_EQ(back.settings.bloomIntensity, 0.5f);
+}
+
+TEST(PostProcessCpu, CameraDepthOfFieldIsTheBaseForVolumes) {
+    RenderSnapshot snapshot;
+    RenderSettings rs;
+    CameraComponent camera;
+    camera.focusDistance = 3.0f;
+    camera.focalLength = 85.0f;
+    const PostProcessSettings fromCamera = resolvePostProcessSettings(snapshot, rs, glm::vec3(0.0f), &camera);
+    EXPECT_FLOAT_EQ(fromCamera.focusDistance, 3.0f);
+    EXPECT_FLOAT_EQ(fromCamera.focalLength, 85.0f);
+    const PostProcessSettings noCamera = resolvePostProcessSettings(snapshot, rs, glm::vec3(0.0f));
+    EXPECT_FLOAT_EQ(noCamera.focusDistance, 0.0f) << "no camera: DoF stays off";
+
+    // A volume overriding depth of field wins over the camera (cinematics), others leave it alone.
+    PostProcessVolumeSnapshot dof;
+    dof.unbound = true;
+    dof.blendWeight = 1.0f;
+    dof.settings.overrideDepthOfField = true;
+    dof.settings.focusDistance = 10.0f;
+    dof.settings.focalLength = 50.0f;
+    PostProcessVolumeSnapshot bloomOnly = dof;
+    bloomOnly.settings.overrideDepthOfField = false;
+    bloomOnly.settings.overrideBloom = true;
+    const std::vector<PostProcessVolumeSnapshot> withDof{dof};
+    const std::vector<PostProcessVolumeSnapshot> withBloom{bloomOnly};
+    EXPECT_FLOAT_EQ(blendPostProcessVolumes(fromCamera, withDof, glm::vec3(0.0f)).focusDistance, 10.0f);
+    EXPECT_FLOAT_EQ(blendPostProcessVolumes(fromCamera, withDof, glm::vec3(0.0f)).focalLength, 50.0f);
+    EXPECT_FLOAT_EQ(blendPostProcessVolumes(fromCamera, withBloom, glm::vec3(0.0f)).focusDistance, 3.0f);
+
+    // Reflected for the inspector / scene files.
+    registerSceneTypes();
+    const reflect::TypeInfo& t = reflect::typeOf<CameraComponent>();
+    EXPECT_NE(t.findField("focusDistance"), nullptr);
+    EXPECT_NE(t.findField("focalLength"), nullptr);
 }

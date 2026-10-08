@@ -378,3 +378,35 @@ TEST(Input, LuaInputTable) {
     EXPECT_TRUE(r.value.as<bool>());
 }
 #endif
+
+TEST(InputValidation, ReportsTyposAndDanglingReferences) {
+    InputMappingConfig cfg;
+    cfg.actions = {{.name = "Jump"}, {.name = "Fire"}, {.name = "Jump"}};
+    InputContextDesc ctx;
+    ctx.name = "Gameplay";
+    ctx.bindings.push_back({.action = "Jump", .source = "Key.Space"});
+    ctx.bindings.push_back({.action = "Jump", .source = "Key.Spcae"});
+    ctx.bindings.push_back({.action = "Shoot", .source = "Mouse.Left"});
+    InputBinding chord{.action = "Fire", .source = "Key.F"};
+    chord.triggers.push_back(InputTrigger::chord("Sprint"));
+    ctx.bindings.push_back(chord);
+    cfg.contexts = {ctx};
+    cfg.activeContexts = {"Gameplay", "Menu"};
+    const auto problems = validateInputMappings(cfg);
+    auto has = [&](std::string_view needle) {
+        return std::any_of(problems.begin(), problems.end(), [&](const std::string& p) { return p.find(needle) != std::string::npos; });
+    };
+    EXPECT_EQ(problems.size(), 5u);
+    EXPECT_TRUE(has("'Jump' is declared twice"));
+    EXPECT_TRUE(has("unknown input source 'Key.Spcae'"));
+    EXPECT_TRUE(has("undeclared action 'Shoot'"));
+    EXPECT_TRUE(has("undeclared action 'Sprint'"));
+    EXPECT_TRUE(has("active context 'Menu'"));
+
+    cfg.actions.pop_back();
+    cfg.actions.push_back({.name = "Shoot"});
+    cfg.actions.push_back({.name = "Sprint"});
+    cfg.contexts[0].bindings[1].source = "Key.E";
+    cfg.activeContexts = {"Gameplay"};
+    EXPECT_TRUE(validateInputMappings(cfg).empty()) << validateInputMappings(cfg).front();
+}

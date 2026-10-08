@@ -90,6 +90,8 @@ struct Light {
     float spotOffset;
     int shadowIndex;
     uint entityId;
+    float volumetric;  // scattering multiplier in volumetric fog (0 = the light does not light the fog)
+    float pad0, pad1, pad2;
 };
 
 struct Shadow {

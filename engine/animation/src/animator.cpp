@@ -113,8 +113,13 @@ TransitionDesc& AnimatorController::addTransition(u32 layer, i32 from, i32 to, f
 // ---- Animator ----
 
 Animator::Animator(const Skeleton& skeleton, std::shared_ptr<const AnimatorController> controller)
-    : m_skeleton(&skeleton), m_controller(std::move(controller)) {
+    : Animator(std::shared_ptr<const Skeleton>(std::shared_ptr<const Skeleton>{}, &skeleton), std::move(controller)) {}
+
+Animator::Animator(std::shared_ptr<const Skeleton> skeletonPtr, std::shared_ptr<const AnimatorController> controller)
+    : m_skeleton(std::move(skeletonPtr)), m_controller(std::move(controller)) {
+    OX_ASSERT(m_skeleton != nullptr, "Animator needs a skeleton");
     OX_ASSERT(m_controller != nullptr, "Animator needs a controller");
+    const Skeleton& skeleton = *m_skeleton;
     for (const auto& p : m_controller->parameters()) {
         m_params.push_back(p.defaultValue);
     }

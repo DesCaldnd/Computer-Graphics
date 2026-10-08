@@ -11,8 +11,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <set>
 
@@ -232,16 +234,39 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
         .prefer_gpu_device_type(desc.preferDiscreteGpu ? vkb::PreferredDeviceType::discrete
                                                        : vkb::PreferredDeviceType::integrated)
         .allow_any_gpu_device_type(true);
-    if (s.surface) {
-        selector.set_surface(s.surface).require_present(true).add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    }
-    auto physRet = selector.select();
-    if (!physRet) {
+    // Present support is checked here with volk (loaded for *this* instance) instead of selector.set_surface():
+    // vk-bootstrap caches instance-level function pointers process-wide from the first instance it creates, so
+    // after a headless device (instance without surface extensions) its vkGetPhysicalDeviceSurfaceSupportKHR is
+    // null and a later windowed device crashed in get_present_queue_index.
+    if (s.surface) selector.add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    auto physRet = selector.select_devices();
+    if (!physRet || physRet->empty()) {
         error = "no suitable GPU (needs Vulkan 1.2 + descriptor indexing, BDA, timeline semaphores, scalar layout): " +
-                physRet.error().message();
+                (physRet ? std::string("none found") : physRet.error().message());
         return false;
     }
-    vkb::PhysicalDevice vkbPhys = physRet.value();
+    auto canPresent = [&](VkPhysicalDevice pd) {
+        if (!s.surface) return true;
+        u32 count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(pd, &count, nullptr);
+        for (u32 i = 0; i < count; ++i) {
+            VkBool32 ok = VK_FALSE;
+            if (vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, s.surface, &ok) == VK_SUCCESS && ok) return true;
+        }
+        return false;
+    };
+    const vkb::PhysicalDevice* chosen = nullptr;
+    for (const vkb::PhysicalDevice& pd : *physRet) { // ordered best first by the selector's preferences
+        if (canPresent(pd.physical_device)) {
+            chosen = &pd;
+            break;
+        }
+    }
+    if (!chosen) {
+        error = "no GPU can present to the window surface";
+        return false;
+    }
+    vkb::PhysicalDevice vkbPhys = *chosen;
     s.physical = vkbPhys.physical_device;
 
     VkPhysicalDeviceProperties props{};
@@ -1196,9 +1221,23 @@ bool Device::savePipelineCache() {
     vkGetPipelineCacheData(s.device, s.pipelineCache, &size, data.data());
     std::error_code ec;
     fs::create_directories(s.desc.pipelineCachePath.parent_path(), ec);
-    std::ofstream f(s.desc.pipelineCachePath, std::ios::binary | std::ios::trunc);
-    f.write(reinterpret_cast<const char*>(data.data()), std::streamsize(size));
-    return bool(f);
+    // Temp file + rename: several processes (editor, player, test runs) may share one cache file, and a reader
+    // must never see a torn write.
+    fs::path tmp = s.desc.pipelineCachePath;
+    tmp += std::format(".{:x}.tmp", reinterpret_cast<uintptr_t>(this) ^ u64(std::chrono::steady_clock::now().time_since_epoch().count()));
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f.write(reinterpret_cast<const char*>(data.data()), std::streamsize(size));
+        if (!f) {
+            f.close();
+            fs::remove(tmp, ec);
+            return false;
+        }
+    }
+    fs::rename(tmp, s.desc.pipelineCachePath, ec);
+    if (!ec) return true;
+    fs::remove(tmp, ec);
+    return false;
 }
 
 GpuMemoryStats Device::memoryStats() const {

@@ -21,7 +21,12 @@
 #include <oxwald/render/snapshot.hpp>
 
 #include <filesystem>
+#include <functional>
+#include <optional>
+#include <span>
+#include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace ox::render {
@@ -119,8 +124,28 @@ void setBakedVolume(Renderer& renderer, const Uuid& volume, BakedIrradianceVolum
 // Render-owned binary containers: ".oxcube" (probe) and ".oxirr" (irradiance volume). Little endian, magic + version.
 Status saveOxCube(const std::filesystem::path& path, const BakedCubemap& cube);
 Result<BakedCubemap> loadOxCube(const std::filesystem::path& path);
+Result<BakedCubemap> decodeOxCube(std::span<const u8> bytes, std::string_view name = "oxcube");
 Status saveOxIrradiance(const std::filesystem::path& path, const BakedIrradianceVolume& volume);
 Result<BakedIrradianceVolume> loadOxIrradiance(const std::filesystem::path& path);
+Result<BakedIrradianceVolume> decodeOxIrradiance(std::span<const u8> bytes, std::string_view name = "oxirr");
+
+// --- baked data on disk -----------------------------------------------------------------------------------------
+// Convention: <project>/Baked/<entity uuid>.oxcube (reflection probe) and .oxirr (irradiance volume); the runtime
+// reads them as project://Baked/... (oxpack stores the Baked/ directory as loose files). Keyed by the entity UUID,
+// so one flat directory serves every scene.
+inline constexpr std::string_view kBakedDataDirectory = "Baked";
+[[nodiscard]] std::string bakedProbeFileName(const Uuid& probe);   // "<uuid>.oxcube"
+[[nodiscard]] std::string bakedVolumeFileName(const Uuid& volume); // "<uuid>.oxirr"
+// Returns the file content or nullopt when there is no such file.
+using BakedFileReader = std::function<std::optional<std::vector<u8>>(const std::string& fileName)>;
+// Installs baked data for the snapshot's Baked probes / volumes whose UUID is not in `attempted` yet (each UUID is
+// tried once; clear the set after a re-bake or project switch). Call between frames on the render thread.
+// Returns the number of probes + volumes installed.
+usize installBakedData(Renderer& renderer, const RenderSnapshot& snapshot, const BakedFileReader& read,
+                       std::unordered_set<Uuid>& attempted);
+// Reads back every probe / volume (after a finished bake, see requestBake) and writes them to `directory`.
+// Returns the number of files written.
+Result<usize> saveBakedData(Renderer& renderer, const std::filesystem::path& directory);
 
 // --- math shared with the shaders (exposed for tests) ------------------------------------------------------------
 

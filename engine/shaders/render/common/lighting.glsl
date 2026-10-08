@@ -22,6 +22,8 @@ struct OxLightingInputs {
     uint reflections;       // RGBA16F: rgb specular radiance (not pre-exposed), a = weight
     uint indirectDiffuse;   // RGBA16F: rgb diffuse radiance of a white surface (irradiance / π)
     bool receiveShadows;
+    float clearcoat;          // 0..1 strength of a dielectric (F0 0.04) coat layer over the base BRDF
+    float clearcoatRoughness; // perceptual roughness of the coat
 };
 
 OxLightingInputs oxDefaultLightingInputs() {
@@ -33,7 +35,21 @@ OxLightingInputs oxDefaultLightingInputs() {
     i.reflections = OX_INVALID_INDEX;
     i.indirectDiffuse = OX_INVALID_INDEX;
     i.receiveShadows = true;
+    i.clearcoat = 0.0;
+    i.clearcoatRoughness = 0.0;
     return i;
+}
+
+// Clear coat lobe (Filament): GGX with a Kelemen visibility term and a fixed IOR 1.5 Fresnel. Returns the coat
+// specular × NdotL for light direction L; `Fc` is the coat Fresnel used to attenuate the base layer.
+float oxClearcoatDirect(vec3 N, vec3 V, vec3 L, float a, out float Fc) {
+    vec3 H = normalize(V + L);
+    float NdotL = clamp(dot(N, L), 0.0, 1.0);
+    float NdotH = clamp(dot(N, H), 0.0, 1.0);
+    float LdotH = clamp(dot(L, H), 0.0, 1.0);
+    Fc = 0.04 + 0.96 * oxPow5(1.0 - LdotH);
+    float Vis = 0.25 / max(LdotH * LdotH, 1e-4);
+    return oxDGGX(NdotH, a) * Vis * Fc * NdotL;
 }
 
 struct OxLightingResult {
@@ -68,6 +84,9 @@ OxLightingResult oxEvaluateLighting(ViewBuffer vb, SceneBuffer sb, OxSurface s, 
     vec3 energyComp = vec3(1.0);
     if (vb.v.brdfLut != OX_INVALID_INDEX) energyComp = 1.0 + s.f0 * (1.0 / max(dfg.x + dfg.y, 1e-3) - 1.0);
 
+    float ccPerceptual = clamp(inputs.clearcoatRoughness, OX_MIN_PERCEPTUAL_ROUGHNESS, 1.0);
+    float ccA = ccPerceptual * ccPerceptual;
+
     LightBuffer lights = sb.s.lights;
     ShadowBuffer shadows = sb.s.shadows;
     uint dirCount = sb.s.directionalLightCount;
@@ -92,7 +111,15 @@ OxLightingResult oxEvaluateLighting(ViewBuffer vb, SceneBuffer sb, OxSurface s, 
             }
             r.sunShadow = vis;
         }
-        if (vis > 0.0) r.direct += oxBrdfDirect(s, L, energyComp) * l.color * (visColor.r >= 0.0 ? visColor : vec3(vis));
+        if (vis > 0.0) {
+            vec3 brdf = oxBrdfDirect(s, L, energyComp);
+            if (inputs.clearcoat > 0.0) {
+                float Fc;
+                float coat = oxClearcoatDirect(s.normal, s.view, L, ccA, Fc) * inputs.clearcoat;
+                brdf = brdf * (1.0 - Fc * inputs.clearcoat) + vec3(coat);
+            }
+            r.direct += brdf * l.color * (visColor.r >= 0.0 ? visColor : vec3(vis));
+        }
     }
 
     if (vb.v.lightClusterCount > 0u) {
@@ -122,7 +149,13 @@ OxLightingResult oxEvaluateLighting(ViewBuffer vb, SceneBuffer sb, OxSurface s, 
                                         : oxSpotShadow(vb, sh, s.position, s.geometricNormal, pixel);
                 }
             }
-            r.direct += oxBrdfDirect(s, L, energyComp) * l.color * (att * vis);
+            vec3 brdf = oxBrdfDirect(s, L, energyComp);
+            if (inputs.clearcoat > 0.0) {
+                float Fc;
+                float coat = oxClearcoatDirect(s.normal, s.view, L, ccA, Fc) * inputs.clearcoat;
+                brdf = brdf * (1.0 - Fc * inputs.clearcoat) + vec3(coat);
+            }
+            r.direct += brdf * l.color * (att * vis);
         }
     }
 
@@ -156,6 +189,12 @@ OxLightingResult oxEvaluateLighting(ViewBuffer vb, SceneBuffer sb, OxSurface s, 
     float specOcclusion = oxSpecularOcclusion(s.NdotV, ao, s.roughness);
     vec3 kd = s.diffuseColor * (1.0 - specWeight);
     r.indirect = diffuseRadiance * kd * ao + specRadiance * specWeight * specOcclusion;
+    if (inputs.clearcoat > 0.0) {
+        // Coat reflection of the environment (its own roughness), base layer seen through the coat.
+        float Fc = (0.04 + 0.96 * oxPow5(1.0 - s.NdotV)) * inputs.clearcoat;
+        vec3 coatRadiance = oxSamplePrefiltered(vb, R, ccPerceptual) * vb.v.iblIntensity;
+        r.indirect = r.indirect * (1.0 - Fc) + coatRadiance * Fc * specOcclusion;
+    }
     return r;
 }
 

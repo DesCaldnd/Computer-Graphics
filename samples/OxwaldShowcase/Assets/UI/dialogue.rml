@@ -1,0 +1,14 @@
+<rml>
+<head>
+    <title>Dialogue</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<body class="hud">
+    <div class="dialogue">
+        <div class="speaker" id="speaker">—</div>
+        <div class="line" id="line">—</div>
+        <div id="choices"></div>
+    </div>
+</body>
+</rml>

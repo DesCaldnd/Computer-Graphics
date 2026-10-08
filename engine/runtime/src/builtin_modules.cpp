@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <unordered_map>
 
 // Built-in integrations of the optional CPU modules. They only create/own the services and their per-frame
@@ -228,13 +229,22 @@ public:
     }
 
 private:
+    // Only volumes whose user setting changed are pushed to the mixer: game code may drive buses itself (ducking,
+    // pause menus), and an unrelated settings change (e.g. the master slider) must not reset them.
     void applyVolumes() {
         if (!m_audio || !m_audio->initialized()) return;
-        if (auto* master = m_audio->master()) master->setVolume(m_settings->user().audio.masterVolume);
+        auto apply = [&](const std::string& name, audio::AudioBus* bus, f32 value) {
+            auto it = m_applied.find(name);
+            if (!bus || (it != m_applied.end() && it->second == value)) return;
+            bus->setVolume(value);
+            m_applied[name] = value;
+        };
+        apply("", m_audio->master(), m_settings->user().audio.masterVolume);
         for (const char* bus : {"Music", "SFX", "Voice", "UI", "Ambience"}) {
-            if (auto* b = m_audio->bus(bus)) b->setVolume(m_settings->busVolume(bus));
+            apply(bus, m_audio->bus(bus), m_settings->busVolume(bus));
         }
     }
+    std::map<std::string, f32> m_applied; // last user-setting value pushed per bus ("" = master)
     audio::AudioEngine* m_audio = nullptr;
     Settings* m_settings = nullptr;
     ScopedConnection m_connection;

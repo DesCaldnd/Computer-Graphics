@@ -1,0 +1,2 @@
+# Asset database cache (imported artifacts, thumbnails) — rebuilt on demand.
+.oxcache/

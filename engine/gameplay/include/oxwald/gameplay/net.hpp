@@ -133,6 +133,7 @@ private:
     void serverAdd(Entity e);
     void onIdentityDestroyed(entt::registry& r, entt::entity e);
     void onIdentityConstructed(entt::registry& r, entt::entity e);
+    void serverSyncWorld();
     void applyInterpolation();
 
     World* m_world = nullptr;

@@ -7,8 +7,10 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/constants.hpp>
 
+#include <atomic>
 #include <cmath>
 #include <random>
+#include <thread>
 #include <vector>
 
 using namespace ox;
@@ -406,4 +408,30 @@ TEST(Spline, DebugDrawEmitsLines) {
     opt.frameSpacing = 0.0f;
     drawSpline(s, cb, opt);
     EXPECT_EQ(lines, 5 * 10 + 6 * 3 + 6 * 2);
+}
+
+TEST(SplineThreads, ConcurrentConstQueriesOnAFreshSpline) {
+    Spline reference(SplineType::CatmullRom, true);
+    for (int i = 0; i < 12; ++i) {
+        const f32 a = f32(i) / 12.0f * 6.2831853f;
+        reference.addPoint(glm::vec3(std::cos(a) * 10.0f, f32(i % 3), std::sin(a) * 10.0f));
+    }
+    const f32 expectedLength = reference.length();
+    const glm::vec3 expectedMid = reference.evaluateAtDistance(expectedLength * 0.5f).position;
+
+    for (int round = 0; round < 20; ++round) {
+        const Spline shared = reference; // copies start without a cache: the threads race to build it
+        std::vector<std::thread> threads;
+        std::atomic<int> mismatches{0};
+        for (int t = 0; t < 8; ++t) {
+            threads.emplace_back([&] {
+                if (std::abs(shared.length() - expectedLength) > 1e-4f) ++mismatches;
+                const glm::vec3 p = shared.evaluateAtDistance(expectedLength * 0.5f).position;
+                if (glm::distance(p, expectedMid) > 1e-4f) ++mismatches;
+                (void)shared.closestPoint(glm::vec3(3.0f, 0.0f, 3.0f));
+            });
+        }
+        for (auto& th : threads) th.join();
+        EXPECT_EQ(mismatches.load(), 0) << "round " << round;
+    }
 }

@@ -82,6 +82,16 @@ Transform and name of an instance are always instance-specific.
 runtime-only references (physics user data, coroutine owners, blackboards). Used by gameplay (`toRuntimeId`,
 `coroutineOwner`) and the runtime so owner ids always match. Never persisted.
 
+## Tag components
+Empty structs can be registered like any component (`OX_REFLECT_TYPE(EnemyTag, "EnemyTag")`,
+`ComponentRegistry::add<EnemyTag>()`): EnTT stores no instances for them, so `Entity::get/tryGet/add` and
+`ComponentInfo::get/add` return a shared dummy object while the tag is present. They serialize (empty object), clone,
+show in the inspector and work in `registry().view<EnemyTag>()`. `TagComponent` (string tags) remains for data-driven
+tags.
+
+`CameraComponent::focusDistance` / `focalLength` (Depth of Field category) drive the renderer's DoF unless a
+post-process volume overrides depth of field.
+
 ## Limits / TODO
 - Nested prefabs are flattened when a prefab is created from a subtree containing other instances.
 - Override granularity is a component field (paths into vectors such as `position.x` override the whole field).

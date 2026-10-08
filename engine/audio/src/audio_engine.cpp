@@ -2,8 +2,10 @@
 
 #include <oxwald/core/assert.hpp>
 #include <oxwald/core/log.hpp>
+#include <oxwald/core/vfs.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <cmath>
 
 namespace ox::audio {
@@ -344,6 +346,13 @@ SoundId AudioEngine::loadSound(const std::string& path, LoadMode mode) {
         return {};
     }
     EngineImpl& e = *m_impl;
+    // miniaudio's resource manager reads a freed node on its own failure path (heap-use-after-free found with ASan
+    // for missing files): reject files that cannot be opened before handing the path to it.
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(std::filesystem::path(path), ec)) {
+        OX_LOG_ERROR("audio", "failed to load sound '{}': no such file", path);
+        return {};
+    }
     auto data = std::make_unique<SoundData>();
     data->kind = SoundData::Kind::File;
     data->path = path;
@@ -368,6 +377,21 @@ SoundId AudioEngine::loadSound(const std::string& path, LoadMode mode) {
     const SoundId id{e.nextSoundId++};
     e.sounds.emplace(id.value, std::move(data));
     return id;
+}
+
+SoundId AudioEngine::loadSound(const Vfs& vfs, std::string_view uri, LoadMode mode) {
+    if (!m_impl) {
+        return {};
+    }
+    if (auto native = vfs.resolveNative(uri)) {
+        return loadSound(native->string(), mode);
+    }
+    auto bytes = vfs.readBytes(uri);
+    if (!bytes) {
+        OX_LOG_ERROR("audio", "failed to read sound '{}': {}", uri, bytes.error().message);
+        return {};
+    }
+    return loadSoundFromMemory(*bytes, uri);
 }
 
 SoundId AudioEngine::createFromPcm(std::span<const f32> interleaved, u32 channels, u32 sampleRate) {

@@ -190,6 +190,15 @@ time for soak tests; `transportFactory` swaps ENet for a `MemoryNetwork`).
 * Systems: `NetServerSystem` (poll every frame, `tick` in `FixedUpdate` at the server tick rate, viewer positions
   from player cameras), `NetClientSystem` (poll, send inputs, apply interpolation), both registered as services.
 
+`oxwald/net/net_harness.hpp`: `ox::net::MemoryHarness` (server + client over a deterministic `MemoryNetwork` with
+simulated time: `startAndConnect()`, `step()`, `run(seconds)`, `runUntil(pred, seconds)`) for game/gameplay tests;
+`pumpReal()` for ENet tests in real time.
+
+Containers replicate with the default codecs `NetCodec<std::vector<T>>`, `NetCodec<std::map<std::string, T>>` and
+`NetCodec<std::unordered_map<std::string, T>>` (count + elements, sorted keys, max 65536 elements per container); a
+change resends the whole container. Gameplay replicates reflected `attr::Replicated` arrays/maps/optionals as one
+OXB1 blob per field (entity references inside containers keep their UUIDs).
+
 ## Known limits / TODO
 
 * Ownership transfer after spawn and per-property conditions (owner-only / skip-owner) are not implemented yet.

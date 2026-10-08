@@ -3,6 +3,7 @@
 #include <oxwald/core/hash.hpp>
 #include <oxwald/core/serial/format.hpp>
 
+#include <algorithm>
 #include <cstring>
 
 namespace ox::serial {
@@ -193,7 +194,8 @@ struct DecodedSchema {
 
 class Decoder {
 public:
-    explicit Decoder(const DecodedSchema& schema) : m_schema(schema) {}
+    explicit Decoder(const DecodedSchema& schema, const std::vector<std::string>* rootFields = nullptr)
+        : m_schema(schema), m_rootFields(rootFields && !rootFields->empty() ? rootFields : nullptr) {}
 
     Result<Value> value(ByteReader& r, const TypeDesc& desc, int depth) {
         if (depth > kMaxDepth) return makeError("archive nesting too deep");
@@ -281,6 +283,10 @@ private:
             const auto& field = type.fields[usize(slot)];
             const std::byte* start = r.take(size);
             if (!field.desc) continue; // descriptor from a newer format version: skip by size
+            if (depth == 0 && m_rootFields &&
+                std::find(m_rootFields->begin(), m_rootFields->end(), field.name) == m_rootFields->end()) {
+                continue; // partial decode: not requested
+            }
             ByteReader sub(start, size);
             auto v = value(sub, *field.desc, depth + 1);
             if (!v) return v;
@@ -291,6 +297,7 @@ private:
     }
 
     const DecodedSchema& m_schema;
+    const std::vector<std::string>* m_rootFields = nullptr;
 };
 
 struct ParsedChunk {
@@ -435,7 +442,9 @@ std::vector<std::byte> encodeBinary(const Document& doc) {
     return std::move(out.buf);
 }
 
-Result<Document> decodeBinary(std::span<const std::byte> data) {
+Result<Document> decodeBinary(std::span<const std::byte> data) { return decodeBinary(data, BinaryDecodeOptions{}); }
+
+Result<Document> decodeBinary(std::span<const std::byte> data, const BinaryDecodeOptions& options) {
     auto header = parseContainer(data);
     if (!header) return header.error();
     for (const auto& c : header->chunks) {
@@ -460,7 +469,7 @@ Result<Document> decodeBinary(std::span<const std::byte> data) {
     if (!r.ok() || rootDescIndex >= schema->strings.size()) return makeError("OXB1 DATA chunk malformed");
     auto rootDesc = TypeDesc::parse(schema->strings[usize(rootDescIndex)]);
     if (!rootDesc) return makeError("OXB1 root type '{}' not supported", schema->strings[usize(rootDescIndex)]);
-    auto root = Decoder(*schema).value(r, *rootDesc, 0);
+    auto root = Decoder(*schema, &options.rootFields).value(r, *rootDesc, 0);
     if (!root) return root.error();
     if (r.remaining() != 0) return makeError("OXB1 DATA chunk has trailing bytes");
     doc.root = std::move(*root);

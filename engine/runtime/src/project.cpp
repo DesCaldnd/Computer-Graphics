@@ -12,6 +12,17 @@ bool ProjectSettings::moduleEnabled(std::string_view module) const {
     return it == modules.end() || it->second;
 }
 
+std::vector<std::string> ProjectSettings::unknownModules(std::span<const std::string> registered) const {
+    std::vector<std::string> out;
+    for (const auto& [name, enabled] : modules) {
+        const bool engine = std::find(std::begin(kEngineModuleNames), std::end(kEngineModuleNames), name) !=
+                            std::end(kEngineModuleNames);
+        const bool game = std::find(registered.begin(), registered.end(), name) != registered.end();
+        if (!engine && !game) out.push_back(name);
+    }
+    return out;
+}
+
 void registerProjectTypes() {
     registerInputTypes();
     OX_REFLECT_TYPE(ProjectPhysicsSettings, "ProjectPhysicsSettings")

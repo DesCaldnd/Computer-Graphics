@@ -246,7 +246,7 @@ Apple M4 Pro набирает около 112 баллов → High, нативн
 
 | Категория (флаг) | Поля (по умолчанию) |
 | --- | --- |
-| Экспозиция (`overrideExposure`) | `autoExposure` (false), `exposureCompensation` (0 EV, сверх `r.Exposure.Compensation`), `minEV100` (−4), `maxEV100` (20), `adaptationSpeedUp` (3 EV/с), `adaptationSpeedDown` (1 EV/с), `histogramLowPercent` (70), `histogramHighPercent` (95) |
+| Экспозиция (`overrideExposure`) | `autoExposure` (false), `exposureCompensation` (0 EV, сверх `r.Exposure.Compensation`), `minEV100` (−4), `maxEV100` (20), `adaptationSpeedUp` (3 EV/с), `adaptationSpeedDown` (1 EV/с), `histogramLowPercent` (50), `histogramHighPercent` (90); среднее между ними экспонируется как средний серый 18 % |
 | Bloom (`overrideBloom`) | `bloomIntensity` (0.04), `bloomDirtTexture` (—), `bloomDirtIntensity` (0) |
 | Глубина резкости (`overrideDepthOfField`) | `focusDistance` (0 = выкл.), `aperture` (0 = из камеры), `focalLength` (0 = из FOV), `maxBokehSize` (1.5 %) |
 | Размытие в движении (`overrideMotionBlur`) | `motionBlurAmount` (0.5), `motionBlurMax` (5 %) |
@@ -303,7 +303,9 @@ PostProcessSettings s2 = resolvePostProcessSettings(snapshot, settings, cameraPo
 - **Ghosting за частицами и прозрачными объектами.** Они не пишут векторы движения (реактивной маски пока нет). Уменьшите размер быстрых частиц или используйте `StretchedBillboard` ([глава 23](23-transparency-water-particles.md)).
 - **Тонкие провода «рвутся» в TAAU 50 %.** Субпиксельные детали TAAU сохраняет частично. Поднимите режим или используйте DLSS.
 - **DLSS «включён», но работает TAAU.** Это фолбэк: смотрите `upscalerAvailability(UpscalerType::DLSS, &device).reason`. Частая причина на Windows — `nvngx_dlss.dll` нет в *рабочем каталоге* процесса.
-- **`r.Upscaler.Quality DLAA` не работает.** Значение enum-cvar'а называется `Native`. Строку `DLAA` cvar не принимает (а `UserSettings::graphics.upscalerQuality` в комментарии упоминает именно `DLAA`).
+- **`DLAA` и `Native` — одно и то же.** Канонически значение называется `Native` (так его печатают консоль и
+  `toString()`), но cvar принимает и синоним `DLAA` (`r.Upscaler.Quality DLAA`) — им пользуются меню и
+  `UserSettings::graphics.upscalerQuality`.
 - **DoF не появляется.** У `CameraComponent` нет дистанции фокуса: задайте `focusDistance` в объёме с `overrideDepthOfField`, и включите `r.DepthOfField`.
 - **Эффекты есть в игре, но нет в тестах.** В коде bloom, DoF и motion blur выключены по умолчанию — включите их cvar'ами или уровнем PostProcess.
 - **Грязь на линзе и LUT появляются с задержкой.** Текстуры берутся из кэша ресурсов, только когда загружены.

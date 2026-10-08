@@ -58,6 +58,7 @@ struct EngineConfig {
     bool fileWatching = false;   // poll the FileWatcher each frame (editor/hot reload)
     std::optional<QualityLevel> quality; // command line --quality (after user settings)
     std::vector<std::string> cvars;      // "name=value" / "name value" applied last
+    std::vector<std::string> gameArgs;   // command line arguments after "--", for game code (Lua engine.args())
     RenderSurface surface;       // when no platform is attached
 };
 
@@ -201,6 +202,8 @@ public:
     // Applies graphics settings to the platform (window) and renderer (on its thread). Called automatically when
     // Settings::changed(Graphics) fires or a r.* cvar changes from the console.
     void applyGraphicsSettings();
+    // Applies r.*/sg.* cvar changes made from the console/registry/Lua since the last frame (called by frame()).
+    void applyPendingGraphicsCVars();
 
     Signal<const std::string&> levelLoaded;    // after the new world is active
     Signal<const std::string&> levelUnloading; // before the old world is destroyed
@@ -232,6 +235,8 @@ private:
     EngineConfig m_config;
     bool m_initialized = false;
     std::atomic<bool> m_quit{false};
+    std::atomic<bool> m_graphicsCVarsDirty{false};
+    usize m_cvarListener = 0;
 
     Services m_services;
     std::vector<std::unique_ptr<IEngineModule>> m_modules;

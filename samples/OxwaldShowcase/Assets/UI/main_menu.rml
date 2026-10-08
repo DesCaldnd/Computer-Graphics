@@ -1,0 +1,24 @@
+<rml>
+<head>
+    <title>Main menu</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+    <style>
+        body.menu { background-color: #00000000; }
+        .panel { left: 90dp; margin-left: 0; top: 50%; margin-top: -230dp; width: 400dp; background-color: #0b0f17d0; }
+    </style>
+</head>
+<body class="menu" data-model="menu">
+    <div class="panel">
+        <div class="title">OXWALD</div>
+        <div class="subtitle">Showcase · экскурсия по возможностям движка</div>
+        <button id="continue" class="primary" data-attrif-disabled="!canContinue">Продолжить</button>
+        <button id="newtour">Новая экскурсия</button>
+        <button id="guided">Экскурсия с гидом (тур)</button>
+        <button id="load">Загрузить</button>
+        <button id="settings">Настройки</button>
+        <button id="quit">Выход</button>
+        <div class="version">{{version}}</div>
+    </div>
+</body>
+</rml>

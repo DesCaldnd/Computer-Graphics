@@ -73,6 +73,9 @@ struct CameraComponent {
     f32 shutterSpeed = 1.0f / 125; // seconds
     f32 iso = 100.0f;
     f32 exposureCompensation = 0.0f; // EV
+    // Depth of field (physical lens, used by the renderer's DoF unless a post-process volume overrides it).
+    f32 focusDistance = 0.0f; // metres; 0 = no depth of field from the camera
+    f32 focalLength = 0.0f;   // millimetres; 0 = derived from verticalFov on a 24 mm (full frame) sensor
     bool primary = false;
 
     // Reversed-Z projection (depth 1 at near, 0 at far).
@@ -114,6 +117,9 @@ struct MeshRendererComponent {
 struct EnvironmentComponent {
     Uuid skybox; // HDRI / cubemap asset (Texture)
     f32 skyIntensity = 1.0f;
+    // Luminance (cd/m²) of a white texel of an 8-bit (LDR) skybox — LDR images store display values, not radiance.
+    // 0 = the r.Sky.LdrLuminance default (5000, a bright daylight sky). HDR (float / BC6H) skyboxes ignore it.
+    f32 ldrSkyLuminance = 0.0f;
     EntityRef sun; // directional light driving the sky
     f32 ambientIntensity = 1.0f;
     bool fogEnabled = false;

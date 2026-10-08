@@ -1,5 +1,7 @@
 #include "script_test_utils.hpp"
 
+#include <oxwald/core/cvar.hpp>
+
 #include <glm/gtc/quaternion.hpp>
 
 using namespace ox;
@@ -199,4 +201,72 @@ TEST(ScriptApi, BindApiExtensionPoint) {
     EXPECT_EQ(calls, 2);
     sol::environment env = vm.createEnvironment();
     EXPECT_FALSE(vm.runString("physics.gravity = 0", "x", &env).ok);
+}
+
+TEST(ScriptApi, BindApiReachesEnvironmentsCreatedEarlier) {
+    ScriptVM vm;
+    sol::environment early = vm.createEnvironment();
+    ASSERT_TRUE(vm.runString("own = 'mine'; late = 'script global'", "early", &early).ok);
+    vm.bindApi("late", [](sol::state_view, sol::table& api) { api["value"] = 1; });
+    vm.bindApi("own2", [](sol::state_view, sol::table& api) { api["value"] = 2; });
+    // The script's own global of the same name wins over a new API...
+    EXPECT_EQ(early["late"].get<std::string>(), "script global");
+    auto r = vm.runString("return own2.value", "early", &early);
+    ASSERT_TRUE(r.ok);
+    EXPECT_EQ(r.value.as<int>(), 2);
+    // ...but a rebound API replaces the previous version everywhere.
+    vm.bindApi("own2", [](sol::state_view, sol::table& api) { api["value"] = 3; });
+    r = vm.runString("return own2.value", "early", &early);
+    ASSERT_TRUE(r.ok);
+    EXPECT_EQ(r.value.as<int>(), 3);
+    EXPECT_FALSE(vm.runString("own2.value = 0", "early", &early).ok) << "read-only like APIs bound before creation";
+}
+
+TEST(ScriptApi, LogHonoursMinLevel) {
+    ScriptVM vm;
+    std::vector<std::string> got;
+    const int id = log::addSink([&](const log::Record& r) { got.emplace_back(r.message); });
+    log::setMinLevel(log::Level::Warn);
+    sol::environment env = vm.createEnvironment();
+    ASSERT_TRUE(vm.runString("log.info('hidden'); print('hidden too'); log.warn('shown')", "lvl", &env).ok);
+    log::setMinLevel(log::Level::Info);
+    log::removeSink(id);
+    ASSERT_EQ(got.size(), 1u);
+    EXPECT_NE(got[0].find("shown"), std::string::npos);
+}
+
+TEST(ScriptApi, CVarBindings) {
+    CVar<bool> b("test.lua.Bool", true, "a bool");
+    CVar<int> i("test.lua.Int", 3, "an int", CVarEnum{"Off", "Low", "High", "Max"});
+    CVar<float> f("test.lua.Float", 0.5f, "a float");
+    CVar<std::string> s("test.lua.Str", "abc", "a string");
+    CVar<int> ro("test.lua.ReadOnly", 7, "read only", CVarFlags::ReadOnly);
+    ScriptVM vm;
+    sol::environment env = vm.createEnvironment();
+    auto run = [&](const char* code) {
+        auto r = vm.runString(code, "cvar", &env);
+        EXPECT_TRUE(r.ok) << r.error;
+        return r.value;
+    };
+    EXPECT_TRUE(run("return cvar.get('test.lua.Bool') == true and cvar.get('TEST.LUA.INT') == 3 and "
+                    "math.abs(cvar.get('test.lua.Float') - 0.5) < 1e-6 and cvar.get('test.lua.Str') == 'abc' and "
+                    "cvar.get('nope') == nil and cvar.getString('test.lua.Int') == 'Max'")
+                    .as<bool>());
+    EXPECT_TRUE(run("return cvar.set('test.lua.Bool', false) and cvar.set('test.lua.Int', 'Low') and "
+                    "cvar.set('test.lua.Float', 2.25) and cvar.set('test.lua.Str', 'x y')")
+                    .as<bool>());
+    EXPECT_FALSE(b.get());
+    EXPECT_EQ(i.get(), 1);
+    EXPECT_FLOAT_EQ(f.get(), 2.25f);
+    EXPECT_EQ(s.get(), "x y");
+    EXPECT_TRUE(run("return cvar.set('test.lua.Int', 2)").as<bool>());
+    EXPECT_EQ(i.get(), 2);
+    EXPECT_FALSE(run("return cvar.set('test.lua.ReadOnly', 1)").as<bool>());
+    EXPECT_FALSE(run("return cvar.set('nope', 1)").as<bool>());
+    EXPECT_EQ(ro.get(), 7);
+    EXPECT_TRUE(run("return cvar.exists('test.lua.Str') and not cvar.exists('nope') and "
+                    "cvar.description('test.lua.Float') == 'a float'")
+                    .as<bool>());
+    EXPECT_TRUE(run("return cvar.reset('test.lua.Str')").as<bool>());
+    EXPECT_EQ(s.get(), "abc");
 }

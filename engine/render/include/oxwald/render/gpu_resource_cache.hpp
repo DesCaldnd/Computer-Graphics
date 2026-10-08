@@ -19,6 +19,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <thread>
 #include <vector>
 
 namespace ox {
@@ -65,6 +66,9 @@ public:
     void setProvider(AssetProvider provider, JobSystem* jobs = nullptr);
 
     // Direct registration (procedural meshes, editor previews, tests). Replaces existing entries (hot reload).
+    // Thread-safe: on the render thread (the thread calling update()) or before the first update() the data is
+    // applied immediately; from any other thread (game code with a threaded renderer) it is copied and applied at
+    // the start of the next update().
     void addMesh(const Uuid& id, const assets::MeshData& mesh);
     void addTexture(const Uuid& id, const assets::TextureData& texture);
     void addMaterial(const Uuid& id, const assets::MaterialAsset& material);
@@ -130,6 +134,7 @@ private:
         u8 kind = 0; // 0 mesh, 1 texture, 2 material
     };
 
+    [[nodiscard]] bool onOwnerThread() const;
     void requestLoad(const Uuid& id, u8 kind);
     void applyMesh(const Uuid& id, const assets::MeshData& mesh);
     void applyTexture(const Uuid& id, const assets::TextureData& texture,
@@ -149,7 +154,9 @@ private:
     std::unordered_map<Uuid, MaterialEntry> m_materialsById;
     mutable std::mutex m_mutex;
     std::vector<Completed> m_completed;
+    std::vector<Completed> m_queuedAdds; // add*() from other threads, applied in update()
     std::vector<Uuid> m_invalidations;
+    std::atomic<std::thread::id> m_ownerThread{}; // render thread (last update() caller)
     std::atomic<u32> m_inFlight{0};
     i32 m_anisotropy = 8;
     f32 m_mipBias = 0.0f;

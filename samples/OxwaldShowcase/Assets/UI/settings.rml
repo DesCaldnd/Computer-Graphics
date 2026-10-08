@@ -1,0 +1,99 @@
+<rml>
+<head>
+    <title>Settings</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+    <style>
+        .panel.wide { width: 1020dp; margin-left: -510dp; margin-top: -350dp; }
+        .row .label { width: 170dp; }
+        .hint { margin-left: 170dp; }
+        h2 { margin-top: 10dp; }
+        .col { width: 49%; }
+        .grp { display: block; height: 26dp; font-size: 14dp; }
+        .grp .gl { display: inline-block; width: 150dp; color: #aab8cc; }
+        .bindrow { display: block; height: 28dp; font-size: 14dp; }
+        .bindrow .bl { display: inline-block; width: 170dp; color: #aab8cc; }
+    </style>
+</head>
+<!-- "settings" is the engine's data model (ui::GameUI::bindSettingsMenu over ox::Settings); the per-group levels,
+     upscaler quality, screen percentage and key bindings are filled by Scripts/settings_menu.lua. -->
+<body class="menu" data-model="settings">
+    <div class="panel wide">
+        <h1>Настройки</h1>
+        <div class="columns">
+        <div class="col">
+            <h2>Графика</h2>
+            <div class="row">
+                <span class="label">Качество</span>
+                <div class="choices">
+                    <button class="choice quality" data-for="q : qualities" data-attr-id="'quality-' + q"
+                            data-class-selected="q == quality" data-event-click="set_quality(q)">{{q}}</button>
+                </div>
+            </div>
+            <div class="row hint" data-if="autoStatus != ''">{{autoStatus}}</div>
+            <div id="groups"></div>
+            <div class="row">
+                <span class="label">Окно</span>
+                <div class="choices">
+                    <button class="choice" data-for="m, i : windowModes" data-class-selected="i == windowMode"
+                            data-event-click="set_window_mode(i)">{{m}}</button>
+                </div>
+            </div>
+            <div class="row">
+                <span class="label">Разрешение</span>
+                <select id="resolution" data-value="resolution">
+                    <option data-for="r : resolutions" data-attr-value="r">{{r}}</option>
+                </select>
+            </div>
+            <div class="row">
+                <span class="label">VSync</span>
+                <input id="vsync" type="checkbox" data-checked="vsync"/>
+            </div>
+            <div class="row">
+                <span class="label">Трассировка лучей</span>
+                <input id="raytracing" type="checkbox" data-checked="rayTracing" data-attrif-disabled="!rtAvailable"/>
+            </div>
+            <div class="row hint" data-if="!rtAvailable">{{rtReason}}</div>
+            <div class="row">
+                <span class="label">Апскейлер</span>
+                <div class="choices">
+                    <button class="choice upscaler" data-for="u : upscalers" data-attr-id="'upscaler-' + u.name"
+                            data-class-selected="u.name == upscaler" data-class-unavailable="!u.available"
+                            data-attr-title="u.reason" data-event-click="set_upscaler(u.name)">{{u.name}}</button>
+                </div>
+            </div>
+            <div class="row hint" data-if="upscalerReason != ''">{{upscalerReason}}</div>
+            <div id="upscalerQuality"></div>
+        </div>
+        <div class="col">
+            <h2>Звук</h2>
+            <div class="row">
+                <span class="label">Общая</span>
+                <input id="master" type="range" min="0" max="1" step="0.05" data-value="masterVolume"/>
+                {{ masterVolume * 100 | format(0) }}%
+            </div>
+            <div class="row">
+                <span class="label">Музыка</span>
+                <input id="music" type="range" min="0" max="1" step="0.05" data-value="musicVolume"/>
+                {{ musicVolume * 100 | format(0) }}%
+            </div>
+            <div class="row">
+                <span class="label">Эффекты</span>
+                <input id="sfx" type="range" min="0" max="1" step="0.05" data-value="sfxVolume"/>
+                {{ sfxVolume * 100 | format(0) }}%
+            </div>
+            <h2>Управление</h2>
+            <div id="controls"></div>
+            <div class="status" id="controlsHint">Нажмите на клавишу действия, затем новую клавишу (Esc — отмена).</div>
+        </div>
+        </div>
+        <div class="buttons">
+            <button id="save" class="primary" data-event-click="save">Сохранить</button>
+            <button id="revert" data-event-click="revert">Отменить</button>
+            <button id="resetkeys">Сбросить клавиши</button>
+            <button id="back">Назад</button>
+        </div>
+        <div class="status">{{status}}</div>
+    </div>
+</body>
+</rml>

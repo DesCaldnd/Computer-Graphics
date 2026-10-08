@@ -279,7 +279,12 @@ bool assign(const LuaComponent& c, const std::string& path, const sol::object& v
         throw std::runtime_error("cannot assign " + std::string(sol::type_name(value.lua_state(), value.get_type())) +
                                  " to " + c.info->name + "." + path + " (" + ref.type->name + ")");
     }
-    c.info->notifyChanged(*c.owner.world, c.owner.handle);
+    // Runtime (NoSerialize) fields such as CharacterController.desiredVelocity/jump are per-frame inputs, not
+    // configuration: notifying would make the physics runtime recreate the character every step.
+    const reflect::FieldInfo* field = c.info->type && path.find_first_of(".[") == std::string::npos
+                                          ? c.info->type->findField(path)
+                                          : nullptr;
+    if (!field || !field->attributes.noSerialize) c.info->notifyChanged(*c.owner.world, c.owner.handle);
     return true;
 }
 

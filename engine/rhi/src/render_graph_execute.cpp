@@ -197,11 +197,15 @@ void updateTracking(RenderGraph::Impl& g, Device& device) {
 
 } // namespace
 
-void RenderGraph::Impl::recordPass(CommandList& cmd, Device& device, const RGPlannedPass& planned, bool timestamps) {
+void RenderGraph::Impl::recordPass(CommandList& cmd, Device& device, const RGPlannedPass& planned, bool timestamps,
+                                   std::string_view timestampPrefix) {
     const RGPassDecl& decl = passes[planned.pass];
     static constexpr f32 kColors[4][4] = {{0.4f, 0.8f, 0.4f, 1.f}, {0.4f, 0.6f, 1.f, 1.f}, {1.f, 0.8f, 0.3f, 1.f}, {0.9f, 0.4f, 0.9f, 1.f}};
     cmd.beginLabel(decl.name, kColors[u32(decl.type) & 3]);
-    if (timestamps) cmd.beginTimestamp(decl.name);
+    if (timestamps) {
+        if (timestampPrefix.empty()) cmd.beginTimestamp(decl.name);
+        else cmd.beginTimestamp(std::string(timestampPrefix) + decl.name);
+    }
     void* zone = tracyZoneBegin(device.state(), cmd.vk(), cmd.queue(), decl.name);
 
     emitBarriers(*this, device, cmd, planned.before);
@@ -262,12 +266,12 @@ void RenderGraph::Impl::recordPass(CommandList& cmd, Device& device, const RGPla
     cmd.endLabel();
 }
 
-void RenderGraph::execute(CommandList& cmd) {
+void RenderGraph::execute(CommandList& cmd, std::string_view timestampPrefix) {
     Device& device = cmd.device();
     compile(compileOptionsFor(device, false));
     ensurePhysical(*this, *m_impl, device);
     for (const RGPlannedPass& p : m_impl->plan.passes) {
-        m_impl->recordPass(cmd, device, p, true);
+        m_impl->recordPass(cmd, device, p, true, timestampPrefix);
     }
     updateTracking(*m_impl, device);
 }
@@ -291,7 +295,7 @@ void RenderGraph::execute(Device& device, const RGExecuteOptions& options) {
     for (u32 b = 0; b < plan.batches.size(); ++b) {
         const RGBatch& batch = plan.batches[b];
         CommandList& cmd = device.commandList(batch.queue, std::format("rendergraph.batch{}", b));
-        for (u32 pi : batch.passes) g.recordPass(cmd, device, plan.passes[pi], options.timestamps);
+        for (u32 pi : batch.passes) g.recordPass(cmd, device, plan.passes[pi], options.timestamps, options.timestampPrefix);
         SubmitInfo si;
         for (u32 w : batch.waitBatches) si.waits.push_back(points[w]);
         if (b == 0) si.waits.insert(si.waits.end(), options.waits.begin(), options.waits.end());

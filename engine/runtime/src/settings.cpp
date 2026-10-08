@@ -154,6 +154,15 @@ void Settings::applyProjectDefaults() {
         }
     }
     if (m_project.rendering.upscaler != "Off") setByName("r.Upscaler", m_project.rendering.upscaler);
+    // The renderer ignores r.RayTracing on GPUs without ray queries, which makes this "if supported".
+    if (m_project.rendering.rayTracingIfSupported) setByName("r.RayTracing", true);
+}
+
+void Settings::seedUserFromProject() {
+    captureFromCVars();
+    GraphicsSettings& g = m_user.graphics;
+    if (m_project.rendering.rayTracingIfSupported) g.rayTracing = true;
+    if (m_project.rendering.upscaler != "Off") g.upscaler = m_project.rendering.upscaler;
 }
 
 nlohmann::ordered_json Settings::toJson() { return json::toPlain(m_user); }
@@ -172,6 +181,7 @@ Status Settings::load() {
     if (!text) return text.error();
     auto j = json::parse(*text);
     if (!j || !fromJson(*j)) return makeError("settings: '{}' is not valid", m_uri);
+    m_hasUserFile = true;
     return {};
 }
 

@@ -1,0 +1,20 @@
+<rml>
+<head>
+    <title>Pause</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<body class="menu">
+    <div class="panel">
+        <div class="title">Пауза</div>
+        <div class="subtitle" id="where">—</div>
+        <button id="resume" class="primary">Продолжить</button>
+        <button id="tohub">Вернуться в хаб</button>
+        <button id="quicksave">Быстрое сохранение (F5)</button>
+        <button id="load">Загрузить…</button>
+        <button id="settings">Настройки</button>
+        <button id="mainmenu">Главное меню</button>
+        <button id="quit">Выход из игры</button>
+    </div>
+</body>
+</rml>

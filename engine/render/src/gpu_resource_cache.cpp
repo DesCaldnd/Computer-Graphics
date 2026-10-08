@@ -126,8 +126,25 @@ void GpuResourceCache::setTextureQuality(i32 anisotropy, f32 mipBias, i32 maxTex
 
 // --- registration ---
 
-void GpuResourceCache::addMesh(const Uuid& id, const assets::MeshData& mesh) { applyMesh(id, mesh); }
+bool GpuResourceCache::onOwnerThread() const {
+    const std::thread::id owner = m_ownerThread.load(std::memory_order_acquire);
+    return owner == std::thread::id{} || owner == std::this_thread::get_id();
+}
+
+void GpuResourceCache::addMesh(const Uuid& id, const assets::MeshData& mesh) {
+    if (!onOwnerThread()) {
+        std::lock_guard lock(m_mutex);
+        m_queuedAdds.push_back({id, std::make_shared<const assets::MeshData>(mesh), nullptr, nullptr, 0});
+        return;
+    }
+    applyMesh(id, mesh);
+}
 void GpuResourceCache::addTexture(const Uuid& id, const assets::TextureData& texture) {
+    if (!onOwnerThread()) {
+        std::lock_guard lock(m_mutex);
+        m_queuedAdds.push_back({id, nullptr, std::make_shared<const assets::TextureData>(texture), nullptr, 1});
+        return;
+    }
     if (m_streaming) {
         auto shared = std::make_shared<const assets::TextureData>(texture); // the streamer keeps the CPU mips
         applyTexture(id, *shared, shared);
@@ -135,7 +152,14 @@ void GpuResourceCache::addTexture(const Uuid& id, const assets::TextureData& tex
         applyTexture(id, texture);
     }
 }
-void GpuResourceCache::addMaterial(const Uuid& id, const assets::MaterialAsset& material) { applyMaterial(id, material); }
+void GpuResourceCache::addMaterial(const Uuid& id, const assets::MaterialAsset& material) {
+    if (!onOwnerThread()) {
+        std::lock_guard lock(m_mutex);
+        m_queuedAdds.push_back({id, nullptr, nullptr, std::make_shared<const assets::MaterialAsset>(material), 2});
+        return;
+    }
+    applyMaterial(id, material);
+}
 
 void GpuResourceCache::addExternalTexture(const Uuid& id, rhi::TextureHandle texture) {
     TextureEntry& e = m_textures[id];
@@ -253,12 +277,20 @@ void GpuResourceCache::queueInvalidate(const Uuid& id) {
 
 void GpuResourceCache::update() {
     OX_PROFILE_ZONE();
+    m_ownerThread.store(std::this_thread::get_id(), std::memory_order_release);
+    std::vector<Completed> queued;
     std::vector<Completed> done;
     std::vector<Uuid> invalidations;
     {
         std::lock_guard lock(m_mutex);
+        queued.swap(m_queuedAdds);
         done.swap(m_completed);
         invalidations.swap(m_invalidations);
+    }
+    for (Completed& c : queued) {
+        if (c.kind == 0) addMesh(c.id, *c.mesh);
+        else if (c.kind == 1) addTexture(c.id, *c.texture);
+        else addMaterial(c.id, *c.material);
     }
     for (const Uuid& id : invalidations) invalidate(id);
     for (Completed& c : done) {

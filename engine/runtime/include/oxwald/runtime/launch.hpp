@@ -17,6 +17,8 @@
 //   --cvar name=value (repeat)    cvar override            --fps <n>           frame limit
 //   --single-thread               no render thread         --user-dir <dir>    user:// root
 //   --fixed-rate <hz>             FixedUpdate rate         --help
+//   -- <args...>                  everything after "--" is passed to game code (EngineConfig::gameArgs)
+//   --patch-pak <file> (repeat)   patch paks over --pak (oxpack --patch <base.oxpak>)
 namespace ox {
 
 struct LaunchOptions {
@@ -36,6 +38,8 @@ struct LaunchOptions {
     std::optional<f64> fixedRate;
     bool singleThread = false;
     std::filesystem::path userDir;
+    std::vector<std::filesystem::path> patchPaks; // --patch-pak (repeatable), mounted over --pak in order
+    std::vector<std::string> gameArgs; // after "--"
     bool help = false;
 
     // Engine configuration for these options (project, scene, headless/server, threading, quality, cvars...).

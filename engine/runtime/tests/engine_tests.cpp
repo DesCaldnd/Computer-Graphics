@@ -76,6 +76,18 @@ public:
     void settingsChanged() override {}
 };
 
+class SettingsCountingRenderer final : public IRenderer {
+public:
+    std::string_view name() const override { return "SettingsCounting"; }
+    Status init(Services&, const RenderSurface&) override { return {}; }
+    void shutdown() override {}
+    void extract(const World&, const FrameContext&) override {}
+    void render(const FrameContext&) override {}
+    void resize(glm::uvec2) override {}
+    void settingsChanged() override { ++changes; }
+    std::atomic<int> changes{0};
+};
+
 class CountingSystem final : public ISystem {
 public:
     CountingSystem(SystemPhase phase, std::string name, bool playOnly = false)
@@ -345,4 +357,40 @@ TEST(Engine, RunPacesToTargetFps) {
     EXPECT_GE(sw.elapsedMs(), 85.0);
     EXPECT_LT(sw.elapsedMs(), 1000.0);
     EXPECT_EQ(engine.stats().frame, 9u);
+}
+
+TEST(Engine, GraphicsCVarChangesFromRegistryApplySettings) {
+    test::TempDir dir;
+    Engine engine;
+    auto renderer = std::make_unique<SettingsCountingRenderer>();
+    SettingsCountingRenderer* r = renderer.get();
+    engine.setRenderer(std::move(renderer));
+    EngineConfig c = testConfig(dir);
+    c.threadedRendering = false;
+    c.saveUserSettingsOnShutdown = false;
+    ASSERT_TRUE(engine.init(c));
+    ASSERT_TRUE(engine.tick(1.0 / 64.0));
+    const int before = r->changes.load();
+    auto& settings = engine.services().get<Settings>();
+    ASSERT_TRUE(settings.user().graphics.vsync);
+
+    // Not through the in-game console: plain registry calls (also what Lua cvar.set uses).
+    ASSERT_TRUE(CVarRegistry::instance().execute("r.VSync false"));
+    ASSERT_TRUE(engine.tick(1.0 / 64.0));
+    EXPECT_FALSE(settings.user().graphics.vsync) << "user settings captured from the cvar";
+    EXPECT_GT(r->changes.load(), before) << "renderer settings re-applied";
+
+    const int afterFirst = r->changes.load();
+    ASSERT_TRUE(CVarRegistry::instance().set("r.VSync", "true"));
+    ASSERT_TRUE(engine.tick(1.0 / 64.0));
+    EXPECT_TRUE(settings.user().graphics.vsync);
+    EXPECT_GT(r->changes.load(), afterFirst);
+
+    // Code-side changes are the caller's business (no implicit capture into the user settings).
+    const int afterSecond = r->changes.load();
+    CVarRegistry::instance().findAs<bool>("r.VSync")->set(false);
+    ASSERT_TRUE(engine.tick(1.0 / 64.0));
+    EXPECT_EQ(r->changes.load(), afterSecond);
+    CVarRegistry::instance().findAs<bool>("r.VSync")->set(true);
+    engine.shutdown();
 }

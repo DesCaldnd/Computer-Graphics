@@ -617,9 +617,14 @@ TEST_F(SkinningTest, DualQuaternionMatchesLinearForRigidBends) {
 TEST_F(SkinningTest, OutputsExposedForRayTracing) {
     const SkinnedRig rig = makeRig();
     environment();
-    renderRig(rig, {0.3f, 0.4f, 0.5f}, false, {.width = 64, .height = 64});
+    renderRig(rig, {0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f}, false, {.width = 64, .height = 64});
     auto* outputs = dynamic_cast<const ISkinnedOutputs*>(renderer->features().find("Skinning"));
     ASSERT_NE(outputs, nullptr);
+    bool timed = false;
+    for (const PassTiming& p : renderer->stats().passes) timed = timed || p.name.ends_with("/Skinning");
+    std::string names;
+    for (const PassTiming& p : renderer->stats().passes) names += p.name + " ";
+    EXPECT_TRUE(timed) << "the compute skinning pass reports its GPU time (\"<view>/Skinning\"): " << names;
     const SkinnedOutputs& o = outputs->skinnedOutputs();
     ASSERT_EQ(o.items.size(), 1u);
     EXPECT_TRUE(o.buffer);

@@ -151,8 +151,10 @@ struct GpuLight {
     f32 spotOffset = 1.0f; // -cos(outer) * spotScale
     i32 shadowIndex = -1;  // GpuShadow index, -1 = unshadowed
     u32 entityId = 0;
+    f32 volumetric = 1.0f; // LightComponent::volumetric ? volumetricIntensity : 0 (scattering in volumetric fog)
+    f32 pad0 = 0.0f, pad1 = 0.0f, pad2 = 0.0f;
 };
-static_assert(sizeof(GpuLight) == 64);
+static_assert(sizeof(GpuLight) == 80);
 
 enum class GpuShadowKind : u32 { Spot = 0, Point = 1 };
 

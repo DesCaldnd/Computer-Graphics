@@ -357,3 +357,69 @@ TEST_F(RendererTest, PerfReport1080p) {
     EXPECT_GT(s.gpuFrameMs, 0.0);
     EXPECT_GT(s.drawCalls, 10u);
 }
+
+TEST_F(RendererTest, UnlitMaterialsEmit) {
+    auto unlit = [&](glm::vec3 emissive) {
+        assets::MaterialAsset m;
+        m.shadingModel = assets::ShadingModel::Unlit;
+        m.baseColor = glm::vec4(0.1f, 0.1f, 0.1f, 1.0f);
+        m.emissive = emissive;
+        const Uuid id = Uuid::generate();
+        renderer->resources().addMaterial(id, m);
+        return id;
+    };
+    mesh(Primitive::Cube, unlit(glm::vec3(0.0f)), {-1.2f, 0, 0});
+    mesh(Primitive::Cube, unlit(glm::vec3(0.0f, 0.6f, 0.0f)), {1.2f, 0, 0});
+    world->updateTransforms();
+    const Image img = render(camera({0, 0, 5}, {0, 0, 0}, 12.0f), {.width = 128, .height = 128, .frames = 2});
+    const auto plain = img.at(36, 64);
+    const auto glowing = img.at(92, 64);
+    EXPECT_GT(int(glowing.g), int(plain.g) + 60) << "emissive adds to unlit base colour";
+    EXPECT_GT(int(glowing.g), int(glowing.r) + 40) << "green emission";
+}
+
+TEST_F(RendererTest, ClearcoatAddsASharpHighlight) {
+    auto mat = [&](f32 clearcoat) {
+        assets::MaterialAsset m;
+        m.baseColor = glm::vec4(0.6f, 0.1f, 0.1f, 1.0f);
+        m.roughness = 0.9f;
+        m.clearcoat = clearcoat;
+        m.clearcoatRoughness = 0.3f; // wide enough to cover several pixels at this resolution
+        const Uuid id = Uuid::generate();
+        renderer->resources().addMaterial(id, m);
+        return id;
+    };
+    mesh(Primitive::Sphere, mat(0.0f), {-1.2f, 0, 0});
+    mesh(Primitive::Sphere, mat(1.0f), {1.2f, 0, 0});
+    sun(glm::normalize(glm::vec3(0.0f, -0.3f, -1.0f)), 20000.0f);
+    environment(0.2f, 0.2f);
+    world->updateTransforms();
+    const Image img = render(camera({0, 0, 5}, {0, 0, 0}, 12.0f), {.width = 160, .height = 120, .frames = 2});
+    auto peak = [&](u32 x0, u32 x1) {
+        f32 best = 0.0f;
+        for (u32 y = 20; y < 100; ++y)
+            for (u32 x = x0; x < x1; ++x) best = std::max(best, img.luminance(x, y));
+        return best;
+    };
+    const f32 plain = peak(10, 75), coated = peak(85, 150);
+    EXPECT_GT(coated, plain + 0.15f) << "coat highlight on the rough base (plain " << plain << ", coated " << coated << ")";
+}
+
+TEST_F(RendererTest, ResourceRegistrationFromAnotherThreadIsDeferred) {
+    const Image warmup = render(camera({0, 0, 5}, {0, 0, 0}, 12.0f), {.width = 64, .height = 64}); // owner = this thread
+    (void)warmup;
+    GpuResourceCache& cache = renderer->resources();
+    std::vector<Uuid> ids(64);
+    for (Uuid& id : ids) id = Uuid::generate();
+    std::thread game([&] {
+        for (usize i = 0; i < ids.size(); ++i) {
+            assets::MaterialAsset m;
+            m.baseColor = glm::vec4(f32(i) / 64.0f, 0.5f, 0.2f, 1.0f);
+            cache.addMaterial(ids[i], m);
+        }
+    });
+    game.join();
+    EXPECT_EQ(cache.state(ids[0]), ResourceState::Unknown) << "queued until the render thread's next update()";
+    cache.update();
+    for (const Uuid& id : ids) EXPECT_EQ(cache.state(id), ResourceState::Ready);
+}

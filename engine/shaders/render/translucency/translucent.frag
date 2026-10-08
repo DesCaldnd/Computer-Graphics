@@ -49,6 +49,8 @@ void main() {
     OxLightingInputs inputs = oxDefaultLightingInputs();
     inputs.uv = uv;
     inputs.receiveShadows = (instanceFlags & OX_INSTANCE_RECEIVE_SHADOWS) != 0u;
+    inputs.clearcoat = clamp(m.clearcoat, 0.0, 1.0);
+    inputs.clearcoatRoughness = m.clearcoatRoughness;
 
 #ifdef OX_MODE_REFRACTIVE
     float ior = max(m.ior, 1.0001);
@@ -109,7 +111,7 @@ void main() {
     oxSurfaceFinalize(s);
     vec3 color;
     if (unlit) {
-        color = s.baseColor * invExposure;
+        color = (s.baseColor + s.emissive) * invExposure;
     } else {
         OxLightingResult lit = oxEvaluateLighting(pc.view, pc.scene, s, gl_FragCoord.xy, viewDepth, inputs);
         color = lit.direct + lit.indirect + s.emissive * invExposure;

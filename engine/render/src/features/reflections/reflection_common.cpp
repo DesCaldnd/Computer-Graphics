@@ -4,6 +4,7 @@
 #include <oxwald/core/hash.hpp>
 
 #include <cstring>
+#include <span>
 #include <fstream>
 
 namespace ox::render::reflections {
@@ -128,7 +129,7 @@ void put(std::vector<u8>& out, const T& v) {
 }
 
 struct Reader {
-    const std::vector<u8>& data;
+    std::span<const u8> data;
     usize offset = 0;
     template <class T>
     bool get(T& v) {
@@ -190,22 +191,26 @@ Status saveOxCube(const std::filesystem::path& path, const BakedCubemap& cube) {
     return writeFile(path, out);
 }
 
-Result<BakedCubemap> loadOxCube(const std::filesystem::path& path) {
-    auto bytes = readFile(path);
-    if (!bytes) return bytes.error();
-    Reader r{*bytes};
+Result<BakedCubemap> decodeOxCube(std::span<const u8> bytes, std::string_view name) {
+    Reader r{bytes};
     u32 magic = 0, version = 0;
     u64 n = 0;
     BakedCubemap c;
-    if (!r.get(magic) || magic != kCubeMagic) return makeError("{}: not an .oxcube file", path.string());
-    if (!r.get(version) || version != kVersion) return makeError("{}: unsupported version {}", path.string(), version);
-    if (!r.get(c.size) || !r.get(c.mips) || !r.get(n)) return makeError("{}: truncated header", path.string());
+    if (!r.get(magic) || magic != kCubeMagic) return makeError("{}: not an .oxcube file", name);
+    if (!r.get(version) || version != kVersion) return makeError("{}: unsupported version {}", name, version);
+    if (!r.get(c.size) || !r.get(c.mips) || !r.get(n)) return makeError("{}: truncated header", name);
     if (c.size == 0 || c.size > 4096 || c.mips == 0 || c.mips > 13 || n != cubeBytes(c.size, c.mips)) {
-        return makeError("{}: inconsistent header", path.string());
+        return makeError("{}: inconsistent header", name);
     }
     c.data.resize(n);
-    if (!r.bytes(c.data.data(), n)) return makeError("{}: truncated data", path.string());
+    if (!r.bytes(c.data.data(), n)) return makeError("{}: truncated data", name);
     return c;
+}
+
+Result<BakedCubemap> loadOxCube(const std::filesystem::path& path) {
+    auto bytes = readFile(path);
+    if (!bytes) return bytes.error();
+    return decodeOxCube(*bytes, path.string());
 }
 
 Status saveOxIrradiance(const std::filesystem::path& path, const BakedIrradianceVolume& v) {
@@ -223,26 +228,30 @@ Status saveOxIrradiance(const std::filesystem::path& path, const BakedIrradiance
     return writeFile(path, out);
 }
 
-Result<BakedIrradianceVolume> loadOxIrradiance(const std::filesystem::path& path) {
-    auto bytes = readFile(path);
-    if (!bytes) return bytes.error();
-    Reader r{*bytes};
+Result<BakedIrradianceVolume> decodeOxIrradiance(std::span<const u8> bytes, std::string_view name) {
+    Reader r{bytes};
     u32 magic = 0, version = 0;
     u64 probes = 0, moments = 0;
     BakedIrradianceVolume v;
-    if (!r.get(magic) || magic != kIrrMagic) return makeError("{}: not an .oxirr file", path.string());
-    if (!r.get(version) || version != kVersion) return makeError("{}: unsupported version {}", path.string(), version);
-    if (!r.get(v.probeCount) || !r.get(probes) || !r.get(moments)) return makeError("{}: truncated header", path.string());
+    if (!r.get(magic) || magic != kIrrMagic) return makeError("{}: not an .oxirr file", name);
+    if (!r.get(version) || version != kVersion) return makeError("{}: unsupported version {}", name, version);
+    if (!r.get(v.probeCount) || !r.get(probes) || !r.get(moments)) return makeError("{}: truncated header", name);
     if (glm::any(glm::lessThan(v.probeCount, glm::ivec3(1))) ||
         probes != u64(v.probeCount.x) * v.probeCount.y * v.probeCount.z || probes > (1u << 20) || moments > (1ull << 32)) {
-        return makeError("{}: inconsistent header", path.string());
+        return makeError("{}: inconsistent header", name);
     }
     v.probes.resize(probes);
     v.moments.resize(moments);
     if (!r.bytes(v.probes.data(), probes * sizeof(GpuIrradianceProbe)) || !r.bytes(v.moments.data(), moments)) {
-        return makeError("{}: truncated data", path.string());
+        return makeError("{}: truncated data", name);
     }
     return v;
+}
+
+Result<BakedIrradianceVolume> loadOxIrradiance(const std::filesystem::path& path) {
+    auto bytes = readFile(path);
+    if (!bytes) return bytes.error();
+    return decodeOxIrradiance(*bytes, path.string());
 }
 
 } // namespace ox::render::reflections

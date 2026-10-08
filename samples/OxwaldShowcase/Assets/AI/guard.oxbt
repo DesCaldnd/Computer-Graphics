@@ -1,0 +1,88 @@
+{
+  "blackboard": {
+    "searching": false
+  },
+  "root": {
+    "type": "Selector",
+    "name": "Guard",
+    "children": [
+      {
+        "type": "BlackboardCondition",
+        "name": "SeesPlayer",
+        "key": "targetVisible",
+        "op": "Equals",
+        "value": true,
+        "abort": "Both",
+        "child": {
+          "type": "Sequence",
+          "name": "Chase",
+          "children": [
+            {
+              "type": "ScriptAction",
+              "function": "onChase"
+            },
+            {
+              "type": "MoveTo",
+              "key": "target",
+              "acceptance": 1.6
+            }
+          ]
+        }
+      },
+      {
+        "type": "BlackboardCondition",
+        "name": "Searching",
+        "key": "searching",
+        "op": "Equals",
+        "value": true,
+        "abort": "Both",
+        "child": {
+          "type": "Sequence",
+          "name": "Search",
+          "children": [
+            {
+              "type": "ScriptAction",
+              "function": "onSearch"
+            },
+            {
+              "type": "MoveTo",
+              "key": "lastKnown",
+              "acceptance": 1.0
+            },
+            {
+              "type": "ScriptAction",
+              "function": "lookAround"
+            },
+            {
+              "type": "Wait",
+              "seconds": 2.5
+            },
+            {
+              "type": "ScriptAction",
+              "function": "giveUp"
+            }
+          ]
+        }
+      },
+      {
+        "type": "Sequence",
+        "name": "Patrol",
+        "children": [
+          {
+            "type": "ScriptAction",
+            "function": "nextWaypoint"
+          },
+          {
+            "type": "MoveTo",
+            "key": "waypoint",
+            "acceptance": 0.6
+          },
+          {
+            "type": "Wait",
+            "seconds": 1.2
+          }
+        ]
+      }
+    ]
+  }
+}

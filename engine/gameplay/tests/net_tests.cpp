@@ -2,6 +2,9 @@
 
 #include <oxwald/scene/prefab.hpp>
 
+#include <map>
+#include <optional>
+
 using namespace ox;
 using namespace ox::gameplay;
 using namespace ox::gameplay::test;
@@ -92,6 +95,103 @@ TEST(GameplayNet, EntityReplicatedFromServerWorldToClientWorldWithInterpolation)
         }
         return false;
     }());
+    cNet.shutdown();
+    sNet.shutdown();
+}
+
+namespace {
+struct NetInventoryComponent {
+    std::vector<std::string> items;
+    std::map<std::string, i32> counts;
+    std::optional<f32> charge;
+};
+
+void registerNetInventory() {
+    OX_REFLECT_TYPE(NetInventoryComponent, "Test.NetInventory")
+        .field("items", &NetInventoryComponent::items, attr::Replicated{})
+        .field("counts", &NetInventoryComponent::counts, attr::Replicated{})
+        .field("charge", &NetInventoryComponent::charge, attr::Replicated{});
+    ComponentRegistry::instance().add<NetInventoryComponent>();
+}
+} // namespace
+
+TEST(GameplayNet, ReflectedContainersReplicate) {
+    net::MemoryNetwork network(11);
+    GameplayHarness server; // registers the gameplay types the prefab needs
+    GameplayHarness client;
+    registerNetInventory();
+    World proto;
+    Entity root = proto.create("Bag");
+    root.add<NetworkIdentityComponent>().netType = "Bag";
+    root.add<NetInventoryComponent>();
+    const serial::Document prefab = createPrefab(proto, root, {.linkSource = false});
+    server.assets.addPrefab("Bag", prefab);
+    client.assets.addPrefab("Bag", prefab);
+    auto inst = instantiatePrefab(server.world, prefab);
+    ASSERT_TRUE(inst);
+    Entity bag = *inst;
+    auto& inv = bag.get<NetInventoryComponent>();
+    inv.items = {"sword", "rope"};
+    inv.counts = {{"arrows", 20}, {"gold", 7}};
+    inv.charge = 0.5f;
+
+    server.start();
+    client.start();
+    auto& sNet = server.runtime<NetworkRuntime>();
+    auto& cNet = client.runtime<NetworkRuntime>();
+    ASSERT_TRUE(sNet.startServer(network.createTransport(), {}));
+    ASSERT_TRUE(cNet.connect(network.createTransport(), "memory", sNet.server()->port()));
+    const f64 dt = 1.0 / 60.0;
+    Entity replica;
+    auto runUntil = [&](auto&& done) {
+        for (int i = 0; i < 240; ++i) {
+            server.tick(dt);
+            client.tick(dt);
+            if (!replica.valid()) {
+                for (auto e : client.world.view<NetworkIdentityComponent>()) replica = client.world.wrap(e);
+            }
+            if (replica.valid() && done()) return true;
+        }
+        return false;
+    };
+    ASSERT_TRUE(runUntil([&] { return replica.get<NetInventoryComponent>().items.size() == 2; }));
+    const auto& got = replica.get<NetInventoryComponent>();
+    EXPECT_EQ(got.items, inv.items);
+    EXPECT_EQ(got.counts, inv.counts);
+    ASSERT_TRUE(got.charge.has_value());
+    EXPECT_FLOAT_EQ(*got.charge, 0.5f);
+
+    inv.items.push_back("lamp");
+    inv.counts.erase("gold");
+    inv.charge.reset();
+    ASSERT_TRUE(runUntil([&] { return replica.get<NetInventoryComponent>().items.size() == 3; }));
+    EXPECT_EQ(replica.get<NetInventoryComponent>().items.back(), "lamp");
+    EXPECT_EQ(replica.get<NetInventoryComponent>().counts.size(), 1u);
+    EXPECT_FALSE(replica.get<NetInventoryComponent>().charge.has_value());
+    cNet.shutdown();
+    sNet.shutdown();
+}
+
+TEST(GameplayNet, ServerKeepsHandshakingWhileNoWorldIsAttached) {
+    net::MemoryNetwork network(13);
+    GameplayHarness server;
+    GameplayHarness client;
+    server.start();
+    client.start();
+    auto& sNet = server.runtime<NetworkRuntime>();
+    auto& cNet = client.runtime<NetworkRuntime>();
+    ASSERT_TRUE(sNet.startServer(network.createTransport(), {}));
+    sNet.detach(); // world change in the same frame: the old world is gone, the next one is not attached yet
+    ASSERT_TRUE(cNet.connect(network.createTransport(), "memory", sNet.server()->port()));
+    const f64 dt = 1.0 / 60.0;
+    bool connected = false;
+    for (int i = 0; i < 240 && !connected; ++i) {
+        sNet.preUpdate(f32(dt));
+        sNet.postUpdate(f32(dt));
+        client.tick(dt);
+        connected = cNet.client() && cNet.client()->connected();
+    }
+    EXPECT_TRUE(connected) << "the server polls its transport without a world";
     cNet.shutdown();
     sNet.shutdown();
 }

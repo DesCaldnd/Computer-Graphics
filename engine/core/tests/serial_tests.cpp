@@ -483,3 +483,26 @@ TEST_F(Serial, SaveAndLoadFilesAtomically) {
     EXPECT_FALSE(serial::loadDocument(dir / "missing.oxb"));
     std::filesystem::remove_all(dir);
 }
+
+TEST_F(Serial, PartialBinaryDecodeSkipsUnrequestedRootFields) {
+    serial::Writer w("save", 1);
+    w.beginObject("header");
+    w.value("slot", std::string("a"));
+    w.endObject();
+    w.value("everything", makeEverything());
+    w.beginArray("big");
+    for (i32 i = 0; i < 1000; ++i) w.element(std::string("entity ") + std::to_string(i));
+    w.endArray();
+    const auto bin = w.toBinary();
+
+    auto partial = serial::decodeBinary(bin, serial::BinaryDecodeOptions{{"header"}});
+    ASSERT_TRUE(partial) << partial.error().message;
+    ASSERT_NE(partial->root.find("header"), nullptr);
+    EXPECT_EQ(partial->root.find("everything"), nullptr);
+    EXPECT_EQ(partial->root.find("big"), nullptr);
+    EXPECT_EQ(partial->root.find("header")->find("slot")->getString(), "a");
+
+    auto full = serial::decodeBinary(bin, serial::BinaryDecodeOptions{});
+    ASSERT_TRUE(full);
+    EXPECT_NE(full->root.find("big"), nullptr) << "empty field list = full decode";
+}

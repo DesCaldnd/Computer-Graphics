@@ -232,8 +232,12 @@ PostProcessSettings blendPostProcessVolumes(const PostProcessSettings& base,
 }
 
 PostProcessSettings resolvePostProcessSettings(const RenderSnapshot& snapshot, const RenderSettings& settings,
-                                               const glm::vec3& position) {
-    const PostProcessSettings base = postProcessDefaults(settings);
+                                               const glm::vec3& position, const CameraComponent* camera) {
+    PostProcessSettings base = postProcessDefaults(settings);
+    if (camera) {
+        base.focusDistance = std::max(camera->focusDistance, 0.0f);
+        base.focalLength = std::max(camera->focalLength, 0.0f);
+    }
     const auto* vols = snapshot.findExtension<PostProcessVolumesSnapshot>();
     if (!vols || vols->volumes.empty()) return base;
     return blendPostProcessVolumes(base, vols->volumes, position);
@@ -241,20 +245,29 @@ PostProcessSettings resolvePostProcessSettings(const RenderSnapshot& snapshot, c
 
 namespace pp {
 
-PostProcessSettings viewSettings(FeatureContext& ctx) {
-    return resolvePostProcessSettings(ctx.snapshot(), ctx.settings(), ctx.view().camera().position());
-}
-
-f32 viewAperture(FeatureContext& ctx) {
+namespace {
+// The scene camera behind the view: matched against the snapshot cameras by transform, else the primary camera.
+const CameraComponent* viewCameraComponent(FeatureContext& ctx) {
     const RenderSnapshot& snap = ctx.snapshot();
     const glm::mat4& w = ctx.view().camera().world;
     for (const SnapshotCamera& c : snap.cameras) {
         bool same = true;
         for (int i = 0; i < 4 && same; ++i) same = glm::all(glm::epsilonEqual(c.world[i], w[i], 1e-3f));
-        if (same) return c.camera.aperture;
+        if (same) return &c.camera;
     }
-    if (const i32 p = snap.primaryCamera(); p >= 0) return snap.cameras[usize(p)].camera.aperture;
-    return 4.0f;
+    if (const i32 p = snap.primaryCamera(); p >= 0) return &snap.cameras[usize(p)].camera;
+    return nullptr;
+}
+} // namespace
+
+PostProcessSettings viewSettings(FeatureContext& ctx) {
+    return resolvePostProcessSettings(ctx.snapshot(), ctx.settings(), ctx.view().camera().position(),
+                                      viewCameraComponent(ctx));
+}
+
+f32 viewAperture(FeatureContext& ctx) {
+    const CameraComponent* c = viewCameraComponent(ctx);
+    return c ? c->aperture : 4.0f;
 }
 
 } // namespace pp

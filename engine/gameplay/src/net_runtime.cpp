@@ -1,5 +1,7 @@
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/profile.hpp>
+#include <oxwald/core/serial/convert.hpp>
+#include <oxwald/core/serial/format.hpp>
 #include <oxwald/gameplay/net.hpp>
 #include <oxwald/gameplay/physics.hpp>
 #include <oxwald/gameplay/providers.hpp>
@@ -129,6 +131,32 @@ private:
             std::move(codec));
     }
 
+    // Containers (arrays, string maps, optionals) travel as one OXB1-encoded blob of the field's serial value: a
+    // change anywhere resends the whole container. Entity references inside containers keep their UUIDs (only
+    // level entities match on both sides); top-level EntityRef fields are mapped through net ids instead.
+    void addSerialized(const ComponentInfo* info, const std::string& path) {
+        replicate<std::string>(
+            info->name + "." + path,
+            [this, info, path]() -> std::string {
+                const ValueRef r = fieldRef(info, path);
+                if (!r.valid()) return {};
+                serial::Document doc;
+                doc.kind = "net";
+                doc.root.fields().emplace_back("v", serial::toValue(r.ptr, *r.type));
+                const std::vector<std::byte> bytes = serial::encodeBinary(doc);
+                return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            },
+            [this, info, path](const std::string& blob) {
+                const ValueRef r = fieldRef(info, path);
+                if (!r.valid() || blob.empty()) return;
+                auto doc = serial::decodeBinary(std::span(reinterpret_cast<const std::byte*>(blob.data()), blob.size()));
+                const serial::Value* v = doc ? doc->root.find("v") : nullptr;
+                if (!v || !serial::fromValue(*v, r.ptr, *r.type)) {
+                    OX_LOG_WARN("gameplay", "replication: cannot apply {}.{}", info->name, path);
+                }
+            });
+    }
+
     void addField(const ComponentInfo* info, const std::string& path, const TypeInfo& t, const reflect::Attributes& a) {
         switch (t.kind) {
         case Kind::Bool: addTyped<bool>(info, path); break;
@@ -166,6 +194,9 @@ private:
             default: OX_LOG_WARN("gameplay", "replication: unsupported math field {}.{}", info->name, path); break;
             }
             break;
+        case Kind::Array:
+        case Kind::Map:
+        case Kind::Optional: addSerialized(info, path); break;
         case Kind::Custom:
             if (t.tag == serial::Tag::EntityRef) {
                 // Entity references travel as net ids (UUIDs differ between server and client instances).
@@ -372,12 +403,13 @@ void NetworkRuntime::serverAdd(Entity e) {
 
 void NetworkRuntime::preUpdate(f32 dt) {
     if (!m_externalTime) m_time += dt;
-    if (!m_world) return;
     OX_PROFILE_ZONE_N("NetworkRuntime::preUpdate");
+    // Transports are polled even without a world (level change in progress): handshakes and keep-alives must not
+    // stall while the next world loads, or clients connecting meanwhile never get past "connecting".
     if (m_server) m_server->poll(m_time);
     if (m_client) {
         m_client->poll(m_time);
-        applyInterpolation();
+        if (m_world) applyInterpolation();
     }
 }
 
@@ -388,8 +420,18 @@ void NetworkRuntime::applyInterpolation() {
 }
 
 void NetworkRuntime::postUpdate(f32) {
-    if (!m_world || !m_server) return;
+    if (!m_server) return;
     OX_PROFILE_ZONE_N("NetworkRuntime::postUpdate");
+    if (m_world) serverSyncWorld();
+    const f64 interval = 1.0 / std::max(1.f, m_server->tickRate());
+    if (m_time + 1e-9 >= m_nextTick) {
+        m_server->tick(m_time);
+        m_nextTick += interval;
+        if (m_nextTick < m_time) m_nextTick = m_time + interval; // fell behind: don't burst
+    }
+}
+
+void NetworkRuntime::serverSyncWorld() {
     if (!m_pendingSpawns.empty()) {
         std::vector<entt::entity> pending;
         pending.swap(m_pendingSpawns);
@@ -404,12 +446,6 @@ void NetworkRuntime::postUpdate(f32) {
         if (ident.viewer && ident.owner != net::kServerOwner) {
             m_server->replication().setViewerPosition(ident.owner, m_world->wrap(handle).worldPosition());
         }
-    }
-    const f64 interval = 1.0 / std::max(1.f, m_server->tickRate());
-    if (m_time + 1e-9 >= m_nextTick) {
-        m_server->tick(m_time);
-        m_nextTick += interval;
-        if (m_nextTick < m_time) m_nextTick = m_time + interval; // fell behind: don't burst
     }
 }
 

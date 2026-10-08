@@ -182,3 +182,18 @@ TEST(AnimRootMotion, AccumulatedDistance) {
     }
     expectVec(owner.translation, {1.5f * 2.5f, 0.0f, 0.0f}, 1e-3f);
 }
+
+TEST(AnimStateMachine, AnimatorSharesSkeletonOwnership) {
+    Fixture f;
+    auto skeleton = std::make_shared<const Skeleton>(f.skeleton);
+    std::weak_ptr<const Skeleton> weak = skeleton;
+    Animator a(skeleton, f.ctrl);
+    skeleton.reset(); // e.g. the asset cache dropped or hot-reloaded it
+    ASSERT_FALSE(weak.expired());
+    EXPECT_EQ(a.skeletonPtr().get(), weak.lock().get());
+    a.update(0.016f);
+    EXPECT_EQ(a.pose().size(), f.skeleton.jointCount());
+
+    Animator borrowed(f.skeleton, f.ctrl);
+    EXPECT_EQ(&borrowed.skeleton(), &f.skeleton);
+}

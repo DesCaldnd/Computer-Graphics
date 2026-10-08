@@ -201,18 +201,30 @@ QVariant LogListModel::data(const QModelIndex& index, int role) const {
     }
 }
 
-void LogFilterModel::setLevelEnabled(int level, bool on) {
-    if (on) m_mask |= 1u << level;
-    else m_mask &= ~(1u << level);
+// Qt 6.10 replaced invalidateRowsFilter() with begin/endFilterChange around the state change.
+template <class Fn>
+void LogFilterModel::changeRowFilter(Fn&& change) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    beginFilterChange();
+    change();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+    change();
     invalidateRowsFilter();
+#endif
+}
+
+void LogFilterModel::setLevelEnabled(int level, bool on) {
+    changeRowFilter([&] {
+        if (on) m_mask |= 1u << level;
+        else m_mask &= ~(1u << level);
+    });
 }
 void LogFilterModel::setCategory(const QString& c) {
-    m_category = c;
-    invalidateRowsFilter();
+    changeRowFilter([&] { m_category = c; });
 }
 void LogFilterModel::setText(const QString& t) {
-    m_text = t;
-    invalidateRowsFilter();
+    changeRowFilter([&] { m_text = t; });
 }
 
 bool LogFilterModel::filterAcceptsRow(int row, const QModelIndex& parent) const {
@@ -295,7 +307,7 @@ ConsolePanel::ConsolePanel(EditorContext* ctx, QWidget* parent) : QWidget(parent
     prompt->setPixmap(Icons::get(QStringLiteral("console"), Icons::Tint::Accent).pixmap(QSize(16, 16)));
     m_input = new QLineEdit(inputRow);
     m_input->setObjectName(QStringLiteral("ConsoleInput"));
-    m_input->setPlaceholderText(tr("Enter a console command or cvar (e.g. r.Shadows.Resolution 1024)  ·  Tab completes, ↑/↓ history"));
+    m_input->setPlaceholderText(tr("Enter a console command or cvar (e.g. r.Shadows.CSM.Resolution 2048)  ·  Tab completes, ↑/↓ history"));
     m_input->setFont(Theme::monoFont());
     m_input->installEventFilter(this);
     il->addWidget(prompt);

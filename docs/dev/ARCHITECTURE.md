@@ -22,6 +22,16 @@ The product roadmap is in `OxwaldEngine — план развития.md` (Russi
   cmake --build build/<you> --target ox_scene_tests && ctest --test-dir build/<you> -L scene
   ```
 - macOS: the project is compiled with AppleClang (`/usr/bin/clang++`), same as the vcpkg ports.
+- Dependencies: `tools/bootstrap.sh` installs everything into `vcpkg_installed`; `tools/bootstrap.sh --no-editor` skips
+  Qt (engine, player and tests only).
+- Options (top-level `CMakeLists.txt`): `OX_BUILD_TESTS` (ON), `OX_BUILD_EDITOR` (ON; declared but currently
+  unused — the editor is built whenever Qt 6 is found), `OX_ENABLE_TRACY` (ON), `OX_ENABLE_DLSS` (ON; only has an
+  effect where the NGX runtime exists), `OX_MODULES` (empty = everything; also filters the top-level dirs `editor`,
+  `apps`, `tools`, `samples`), and `OX_WARNINGS_AS_ERRORS` (option default OFF; **ON in the `dev` and `debug`
+  presets**; adds `-Werror` / `/WX` to targets using `ox_set_warnings` — all modules and their tests, the editor,
+  the player and the tools. Code under `samples/` gets the same warnings but they stay non-fatal). The `release`
+  preset turns off `OX_BUILD_TESTS` and `OX_ENABLE_TRACY`. On macOS the link step passes
+  `-no_warn_duplicate_libraries` (CMake repeats static archives on purpose; Apple's ld warned about each).
 
 ## 2. Repository layout
 
@@ -32,36 +42,52 @@ engine/<module>/                one static library per module, auto-discovered
     src/                        implementation (+ private headers)
     tests/                      GoogleTest sources → ox_<module>_tests ; tests/data for fixtures
 engine/shaders/<area>/          GLSL shaders, include root is engine/shaders (e.g. #include "common/pbr.glsl")
-editor/                         Qt editor application (OxwaldEditor)
-apps/player/                    standalone game runtime (GLFW window, no editor)
-tools/                          command line tools (asset packer, shader compiler, ...)
+editor/                         Qt editor application (OxwaldEditor) + ox_editor library + ox_editor_tests
+apps/player/                    standalone game runtime OxwaldPlayer (GLFW window or headless, no editor)
+tools/                          bootstrap.sh (vcpkg install), oxdump (binary ↔ JSON), oximport (import one asset),
+                                oxpack (cook a project into a .oxpak), rhi_window_smoke, sanitizers/ (TSan suppressions)
 samples/OxwaldShowcase/         sample project demonstrating every feature
+samples/guide_examples/         compilable/tested versions of the user guide snippets (ctest label `guide`)
 docs/guide/                     user guide (Russian) with code examples
-docs/dev/                       developer docs (this file, module notes)
-vcpkg-overlays/ports/           custom vcpkg ports
+docs/dev/                       developer docs (this file, module notes in modules/, BACKLOG, perf notes)
+vcpkg-overlays/ports/           custom vcpkg ports (moltenvk, nvidia-dlss, vulkan)
+vcpkg-overlays/triplets/        arm64-osx triplet building the ports with AppleClang
 ```
 
 Module targets: `ox_<name>` with alias `Oxwald::<name>`. Modules:
 
 | Module | Depends on | Purpose |
 | --- | --- | --- |
-| `core` | glm, nlohmann-json, enkiTS, Tracy | types, log, assert, math, hashing, UUID, time, jobs, services (DI), events, reflection, serialization, cvars & scalability, paths/VFS, file watching, frame allocator, profiling macros, debug-draw collector |
+| `core` | glm, nlohmann-json; private enkiTS; optional Tracy (`OX_ENABLE_TRACY` + package present) | types, log, assert, math, hashing, UUID, time, jobs, services (DI), events, reflection, serialization, cvars & scalability, paths/VFS, file watching, frame allocator, profiling macros, debug-draw collector |
 | `scene` | core, EnTT | ECS world, entities, core components, hierarchy/transforms, component registry, systems & phases, scene (de)serialization, prefabs |
-| `rhi` | core, volk, VMA, vk-bootstrap, shaderc, spirv-reflect | Vulkan device, swapchain, resources, bindless, command lists, render graph, shader compiler & hot reload, DeviceCaps |
-| `assets` | core, scene, (animation), assimp, fastgltf, meshoptimizer, ktx, stb, tinyexr, zstd | asset database (UUID + .meta), importers, CPU mesh/texture/material data, async loading, pak archives |
-| `render` | rhi, scene, assets | renderer, GPU scene, materials, lighting/shadows, render features, upscalers, quality settings |
-| `physics` | core (+scene for ECS glue) , Jolt | physics world, shapes, queries, character controller |
-| `animation` | core, assimp | skeletons, clips, blending, state machines, IK, root motion |
-| `spline` | core | Bézier, Catmull-Rom, B-spline, arc-length parametrisation, path following |
-| `audio` | core, miniaudio | 3D audio, buses/mixer, occlusion hooks |
-| `ai` | core, Recast/Detour | navmesh, path finding, behaviour trees, perception |
-| `net` | core, ENet | client/server transport, replication, prediction/interpolation |
-| `script` | core, Lua 5.4, sol2 | Lua VM, bindings, hot reload |
-| `async` | core | C++20 coroutines for gameplay: `Task<T>`, `Future<T>`, frame/time awaiters, thread hops, `whenAll/Any`, cancellation bound to entities, Lua `await` bridge |
-| `ui` | render, imgui, RmlUi | in-game debug UI/profiler (ImGui), game UI (RmlUi) |
-| `world` | core, scene | terrain heightfields, vegetation placement, day/night, chunk streaming (CPU side) |
-| `gameplay` | scene + physics/animation/spline/audio/ai/net/script | ECS components & systems binding the CPU modules to the world |
-| `runtime` | everything above | `Engine`, game loop, render thread, projects, settings, save games, packaging |
+| `rhi` | core, volk, Vulkan-Headers; private VMA, vk-bootstrap, shaderc, spirv-reflect. Separate `ox_rhi_glfw` (rhi + GLFW surface) | Vulkan device, swapchain, resources, bindless, command lists, render graph, shader compiler & hot reload, BLAS/TLAS, DeviceCaps |
+| `assets` | core, optional animation (`OX_ASSETS_HAS_ANIMATION`); private scene, assimp, fastgltf, meshoptimizer, KTX, stb, tinyexr, optional zstd (`OX_ASSETS_HAS_ZSTD`) | asset database (UUID + .meta), importers, CPU mesh/texture/material data, meshlets/LODs, async loading & hot reload, pak archives |
+| `render` | rhi, scene, assets (when configured, else header-only); private volk. Deferred optional links: runtime (`IRenderer` adapter, `OX_RENDER_HAS_RUNTIME`), world (`OX_RENDER_HAS_WORLD`), private gameplay (`OX_RENDER_HAS_GAMEPLAY`); NVIDIA DLSS/NGX on Windows/Linux (`OX_RENDER_HAS_DLSS`) | clustered forward+ renderer, GPU scene, extract, materials, feature extension API, picking, editor overlays, debug views, stats, quality auto-detect. Feature areas: **lighting/shadows** (PBR, IBL, CSM/spot atlas/point, PCF/PCSS); **reflections & AO** (probes, SSR, planar, GTAO); **GI** (irradiance volumes, RT DDGI); **volumetrics** (froxel fog, volumetric clouds); **translucency** (OIT, refraction, water, GPU particles); **ray tracing** (RT shadows/reflections/AO/GI/refraction, ReSTIR DI, path tracer, SVGF denoiser); **post-processing & upscalers** (auto exposure, bloom, DOF, motion blur, grading, TAA/TAAU/FXAA, FSR 1, DLSS); **GPU-driven** (GPU/HiZ culling, LODs, meshlets/mesh shaders, async compute, texture streaming, parallel recording); **world rendering** (terrain, vegetation, sky, compute skinning). See `modules/render*.md` |
+| `physics` | core; private Jolt (built with `-fno-rtti`) | physics world, shapes, queries, constraints, character controller (ECS glue lives in `gameplay`) |
+| `animation` | core; private assimp | skeletons, clips, blending, state machines, IK, root motion, skinning |
+| `spline` | core | Bézier, Catmull-Rom, B-spline/NURBS, arc-length parametrisation, path following, extrusion |
+| `audio` | core; miniaudio compiled in privately | 3D audio, buses/mixer, effects, occlusion hooks |
+| `ai` | core; private Recast/Detour/DetourCrowd/DetourTileCache | navmesh, path finding, crowds, dynamic obstacles, behaviour trees, perception, utility AI |
+| `net` | core; private ENet | client/server transport, replication, prediction/interpolation, dedicated server |
+| `script` | core, Lua 5.4, sol2; optional async (`OX_SCRIPT_HAS_ASYNC`: Lua `await` bridge) | Lua VM, sandbox, bindings, hot reload |
+| `async` | core. Separate header-only `Oxwald::async_net` (async + net) for request/response RPCs | C++20 coroutines for gameplay: `Task<T>`, `Future<T>`, frame/time awaiters, thread hops, `whenAll/Any`, cancellation bound to entities (the Lua `await` bridge lives in `script`) |
+| `ui` | render, runtime, imgui, RmlUi; private RmlUi Debugger; optional script/async/gameplay (`OX_UI_HAS_*`). Skipped when render or runtime is not configured | in-game debug UI/profiler (ImGui: stats, console, cvars/scalability, inspector, render graph, coroutines), game UI (RmlUi: data models, hot reload, Lua); own rhi backends drawn at the renderer's `Overlay` point |
+| `world` | core; private tinyexr, stb | terrain heightfields, erosion, CDLOD, vegetation placement, sky/time of day, wind/weather, water & buoyancy, chunk streaming (CPU side, ECS-agnostic; header-only physics bridge) |
+| `gameplay` | scene, physics, animation, spline, audio, ai, net, script; optional async, assets, world (`OX_GAMEPLAY_HAS_*`) | ECS components & systems binding the CPU modules to the world, Lua entity API, asset providers, world components + `WorldRenderData` |
+| `runtime` | core, scene, Threads; optional GLFW (`OX_HAS_GLFW`); deferred optional links to physics, audio, script, ai, net, animation, spline, world, assets, async, gameplay, rhi/`ox_rhi_glfw` (`OX_HAS_<MODULE>`) | `Engine`, game loop, render thread, input, projects, settings, save games, console. Does **not** link `render`/`ui`: they implement runtime interfaces (`IRenderer`) and are linked by the apps |
+
+Modules are configured in alphabetical order; links to modules configured later are resolved with
+`cmake_language(DEFER)` (render, runtime, gameplay). Optional links compile in only when the target exists, so any
+`OX_MODULES` subset that satisfies the hard dependencies builds.
+
+Outside `engine/`:
+- `editor/` (`ox_editor`, `OxwaldEditor`, macOS app bundle `build/<preset>/bin/OxwaldEditor.app`): hard deps core,
+  scene, Qt 6 (Core/Gui/Widgets/Svg/Concurrent); optionally links rhi, assets, gameplay, runtime, async, render,
+  physics, script, ai, world, spline, audio, animation (`OX_EDITOR_HAS_<MODULE>`). Built whenever Qt 6 is found (the `OX_BUILD_EDITOR`
+  option is declared but not consulted yet — leave `editor` out of `OX_MODULES` to skip it).
+- `apps/player/` (`OxwaldPlayer`): runtime, plus render and ui when configured (`OX_HAS_RENDER`, `OX_HAS_UI`); command
+  line in `<oxwald/runtime/launch.hpp>`. Headless/server smoke tests are registered with ctest (label `player`).
+- `tools/`: each tool skips itself when the modules it needs are not configured.
 
 A module never includes another module's `src/`. Only public headers.
 
@@ -140,8 +166,8 @@ One reflection-driven archive API (`ox::serial`) with two interchangeable backen
   ```
   `ox::scalability::setOverall(Level)` / `setGroup(group, level)` apply the per-level values.
 - Auto-detect: the renderer runs a short GPU benchmark (`render::benchmark`) and maps the score to levels.
-- Upscaler and ray tracing are cvars too: `r.Upscaler` (`Off, FSR1, DLSS`), `r.Upscaler.Quality`
-  (`UltraPerformance, Performance, Balanced, Quality, DLAA/Native`), `r.RayTracing` (bool; only settable when
+- Upscaler and ray tracing are cvars too: `r.Upscaler` (`Off, FSR1, DLSS, TAAU`), `r.Upscaler.Quality`
+  (`UltraPerformance, Performance, Balanced, Quality, Native` — Native = DLAA with DLSS), `r.RayTracing` (bool; only settable when
   `DeviceCaps::rayTracingSupported`), `r.RayTracing.*` per effect.
 
 ### ECS

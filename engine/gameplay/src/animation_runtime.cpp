@@ -2,6 +2,7 @@
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/profile.hpp>
 #include <oxwald/core/reflect.hpp>
+#include <oxwald/animation/blend_space.hpp>
 #include <oxwald/gameplay/animation.hpp>
 #include <oxwald/gameplay/physics.hpp>
 #include <oxwald/gameplay/providers.hpp>
@@ -59,7 +60,15 @@ std::shared_ptr<const anim::AnimatorController> buildAnimatorController(const In
     for (const auto& s : desc.states) {
         anim::StateDesc sd;
         sd.name = s.name;
-        if (s.clip.isValid() && clips) {
+        const i32 blendParam = s.blendParameter.empty() ? -1 : ctrl->findParameter(s.blendParameter);
+        if (blendParam >= 0 && !s.blendSamples.empty() && clips) {
+            auto space = std::make_shared<anim::BlendSpace1D>();
+            for (const AnimatorBlendSample& b : s.blendSamples) {
+                if (auto clip = clips->clip(b.clip)) space->addSample(b.position, std::move(clip));
+                else OX_LOG_WARN("gameplay", "animator state '{}': blend clip {} not found", s.name, b.clip.toString());
+            }
+            if (!space->samples().empty()) sd.motion = anim::Motion::fromBlendSpace(std::move(space), u32(blendParam));
+        } else if (s.clip.isValid() && clips) {
             if (auto clip = clips->clip(s.clip)) sd.motion = anim::Motion::fromClip(std::move(clip));
             else OX_LOG_WARN("gameplay", "animator state '{}': clip {} not found", s.name, s.clip.toString());
         }
@@ -116,7 +125,7 @@ AnimationRuntime::Record* AnimationRuntime::ensure(Entity e) {
             OX_LOG_WARN("gameplay", "animator of '{}': no controller", e.name());
             rec.failed = true;
         } else {
-            rec.animator = std::make_unique<anim::Animator>(*rec.skeleton, rec.controller);
+            rec.animator = std::make_unique<anim::Animator>(rec.skeleton, rec.controller);
         }
     }
     auto [ins, ok] = m_records.emplace(e.handle(), std::move(rec));

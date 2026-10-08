@@ -24,6 +24,10 @@ public:
     ~RenderIntegration() override;
 
     std::unique_ptr<IViewportRenderer> createRenderer(rhi::Device& device);
+    // Tools > Bake Lighting Probes: re-captures every reflection probe / irradiance volume of the edit world with
+    // the live GPU renderer and writes <project>/Baked/<uuid>.oxcube|.oxirr (loaded by viewports and the player).
+    bool bakeProbes(QString& message);
+    static RenderIntegration* instance();
     void rendererDestroyed(GpuViewportRenderer* r);
     // The most recently created live renderer (thumbnails), or null.
     [[nodiscard]] GpuViewportRenderer* live() const { return m_renderers.empty() ? nullptr : m_renderers.back(); }

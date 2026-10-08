@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -181,4 +182,40 @@ TEST(ShaderCompiler, CompilesEveryEngineShader) {
         EXPECT_TRUE(r.success) << shaderStageName(stage) << ": " << r.errors;
     }
     (void)compiled;
+}
+
+TEST(ShaderCompiler, InlineSourceWithPerCompileIncludeDirs) {
+    const fs::path dir = makeTempDir("incdirs");
+    writeFile(dir / "materials" / "tint.glsl", "vec3 materialTint() { return vec3(TINT_R, 0.5, 0.25); }\n");
+    const fs::path cache = dir / "cache";
+    ShaderCompiler c(options(cache));
+    ShaderCompileDesc d;
+    d.path = "generated/material_42.frag"; // display name only: no such file
+    d.stage = ShaderStage::Fragment;
+    d.defines = {{"TINT_R", "1.0"}};
+    d.source = R"(#version 460
+#include "tint.glsl"
+layout(location = 0) out vec4 color;
+void main() { color = vec4(materialTint(), 1.0); })";
+
+    ShaderCompileResult without = c.compile(d);
+    EXPECT_FALSE(without.success);
+    EXPECT_NE(without.errors.find("tint.glsl"), std::string::npos) << without.errors;
+
+    d.includeDirs = {dir / "materials"};
+    ShaderCompileResult r = c.compile(d);
+    ASSERT_TRUE(r.success) << r.errors;
+    EXPECT_NE(std::find_if(r.dependencies.begin(), r.dependencies.end(),
+                           [](const fs::path& p) { return p.filename() == "tint.glsl"; }),
+              r.dependencies.end());
+    EXPECT_NE(r.cacheKey, without.cacheKey) << "include dirs are part of the cache key";
+    // The include is validated per cache entry like any other: editing it invalidates the cached SPIR-V.
+    ShaderCompileResult cached = c.compile(d);
+    EXPECT_TRUE(cached.fromCache);
+    writeFile(dir / "materials" / "tint.glsl", "vec3 materialTint() { return vec3(TINT_R, 1.0, 0.0); }\n");
+    ShaderCompileResult changed = c.compile(d);
+    ASSERT_TRUE(changed.success) << changed.errors;
+    EXPECT_FALSE(changed.fromCache);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
 }

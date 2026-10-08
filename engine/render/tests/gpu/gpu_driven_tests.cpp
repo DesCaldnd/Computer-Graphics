@@ -457,7 +457,7 @@ TEST_F(GpuDrivenTest, AsyncComputeOverlapsGraphics) {
     std::printf("GPU wall: sync %.3f ms, async %.3f ms; async compute %.3f ms, overlapped %.3f ms\n", wall[0] / 2, wall[1] / 2,
                 asyncMs / 2, overlap / 2);
     bool hizAsync = false;
-    for (const PassTiming& p : renderer->stats().passes) hizAsync = hizAsync || (p.name == "HiZ" && p.asyncCompute);
+    for (const PassTiming& p : renderer->stats().passes) hizAsync = hizAsync || (p.name.ends_with("/HiZ") && p.asyncCompute);
     EXPECT_TRUE(hizAsync) << "HiZ should run on the async compute queue";
     EXPECT_GT(asyncMs, 0.0);
     // No overlap is asserted: MoltenVK serialises the queues (Metal hazard tracking over the bindless heap).
@@ -751,8 +751,8 @@ TEST_F(GpuDrivenTest, IndirectPaddingCost) {
         for (int k = 0; k < 6; ++k) {
             render(cam, {.width = 1920, .height = 1080, .frames = 2});
             for (const PassTiming& p : renderer->stats().passes) {
-                if (p.name == "DepthPrepass") prepass += p.gpuMs;
-                if (p.name == "ForwardOpaque") forward += p.gpuMs;
+                if (p.name.ends_with("/DepthPrepass")) prepass += p.gpuMs;
+                if (p.name.ends_with("/ForwardOpaque")) forward += p.gpuMs;
             }
         }
         const RenderStats& s = renderer->stats();

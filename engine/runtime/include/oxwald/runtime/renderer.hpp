@@ -7,6 +7,8 @@
 
 #include <array>
 #include <atomic>
+#include <filesystem>
+#include <functional>
 #include <string_view>
 
 namespace ox {
@@ -82,6 +84,14 @@ public:
     virtual void settingsChanged() = 0;
 
     [[nodiscard]] virtual RenderStats stats() const { return {}; }
+
+    // Optional: write the next rendered frame to a PNG (any thread). `done(ok)` is called on the render thread.
+    // Returns false when this renderer cannot capture (the default; the render module captures headless and windowed).
+    virtual bool requestScreenshot(std::filesystem::path pngPath, std::function<void(bool ok)> done = {}) {
+        (void)pngPath;
+        (void)done;
+        return false;
+    }
 };
 
 // Does nothing but count frames; used by headless servers, tests and the player until the render module lands.

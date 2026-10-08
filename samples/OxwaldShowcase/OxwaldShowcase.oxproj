@@ -1,0 +1,478 @@
+{
+  "name": "OxwaldShowcase",
+  "version": "1.0.0",
+  "company": "Oxwald",
+  "startupScene": "project://Assets/Scenes/MainMenu.oxscene",
+  "assetDirs": [
+    "Assets"
+  ],
+  "modules": {
+    "Showcase": true
+  },
+  "saveVersion": 1,
+  "input": {
+    "actions": [
+      {
+        "name": "Move",
+        "type": "Axis2D",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "Look",
+        "type": "Axis2D",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "Jump",
+        "type": "Bool",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "Sprint",
+        "type": "Bool",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "Interact",
+        "type": "Bool",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "Fire",
+        "type": "Bool",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "Menu",
+        "type": "Bool",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "QuickSave",
+        "type": "Bool",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "QuickLoad",
+        "type": "Bool",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "Info",
+        "type": "Bool",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      },
+      {
+        "name": "Zoom",
+        "type": "Axis1D",
+        "accumulation": "HighestAbsolute",
+        "description": ""
+      }
+    ],
+    "contexts": [
+      {
+        "name": "OnFoot",
+        "priority": 0,
+        "bindings": [
+          {
+            "action": "Move",
+            "source": "Key.D",
+            "modifiers": [],
+            "triggers": [],
+            "consume": true
+          },
+          {
+            "action": "Move",
+            "source": "Key.A",
+            "modifiers": [
+              {
+                "type": "Negate",
+                "deadZone": "Radial",
+                "lower": 0.2,
+                "upper": 1.0,
+                "vector": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "order": "YXZ"
+              }
+            ],
+            "triggers": [],
+            "consume": true
+          },
+          {
+            "action": "Move",
+            "source": "Key.W",
+            "modifiers": [
+              {
+                "type": "Swizzle",
+                "deadZone": "Radial",
+                "lower": 0.2,
+                "upper": 1.0,
+                "vector": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "order": "YXZ"
+              }
+            ],
+            "triggers": [],
+            "consume": true
+          },
+          {
+            "action": "Move",
+            "source": "Key.S",
+            "modifiers": [
+              {
+                "type": "Negate",
+                "deadZone": "Radial",
+                "lower": 0.2,
+                "upper": 1.0,
+                "vector": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "order": "YXZ"
+              },
+              {
+                "type": "Swizzle",
+                "deadZone": "Radial",
+                "lower": 0.2,
+                "upper": 1.0,
+                "vector": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "order": "YXZ"
+              }
+            ],
+            "triggers": [],
+            "consume": true
+          },
+          {
+            "action": "Move",
+            "source": "Gamepad.LeftStick",
+            "modifiers": [
+              {
+                "type": "DeadZone",
+                "deadZone": "Radial",
+                "lower": 0.2,
+                "upper": 1.0,
+                "vector": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "order": "YXZ"
+              }
+            ],
+            "triggers": [],
+            "consume": true
+          },
+          {
+            "action": "Look",
+            "source": "Gamepad.RightStick",
+            "modifiers": [
+              {
+                "type": "DeadZone",
+                "deadZone": "Radial",
+                "lower": 0.15,
+                "upper": 1.0,
+                "vector": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "order": "YXZ"
+              },
+              {
+                "type": "Scale",
+                "deadZone": "Radial",
+                "lower": 0.2,
+                "upper": 1.0,
+                "vector": [
+                  3.0,
+                  2.2,
+                  1.0
+                ],
+                "order": "YXZ"
+              }
+            ],
+            "triggers": [],
+            "consume": true
+          },
+          {
+            "action": "Jump",
+            "source": "Key.Space",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Jump",
+            "source": "Gamepad.A",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Sprint",
+            "source": "Key.LeftShift",
+            "modifiers": [],
+            "triggers": [],
+            "consume": true
+          },
+          {
+            "action": "Sprint",
+            "source": "Gamepad.LeftThumb",
+            "modifiers": [],
+            "triggers": [],
+            "consume": true
+          },
+          {
+            "action": "Interact",
+            "source": "Key.E",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Interact",
+            "source": "Gamepad.X",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Fire",
+            "source": "Mouse.Left",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Fire",
+            "source": "Gamepad.RightTrigger",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Menu",
+            "source": "Key.Escape",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Menu",
+            "source": "Gamepad.Start",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "QuickSave",
+            "source": "Key.F5",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "QuickLoad",
+            "source": "Key.F9",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Info",
+            "source": "Key.I",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Info",
+            "source": "Gamepad.Back",
+            "modifiers": [],
+            "triggers": [
+              {
+                "type": "Pressed",
+                "threshold": 0.5,
+                "time": 0.5,
+                "oneShot": true,
+                "action": ""
+              }
+            ],
+            "consume": true
+          },
+          {
+            "action": "Zoom",
+            "source": "Mouse.Wheel",
+            "modifiers": [],
+            "triggers": [],
+            "consume": true
+          }
+        ]
+      }
+    ],
+    "activeContexts": [
+      "OnFoot"
+    ]
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81,
+      0.0
+    ],
+    "fixedRate": 60.0,
+    "maxSubsteps": 8,
+    "maxBodies": 65536
+  },
+  "audio": {
+    "sampleRate": 48000,
+    "maxVoices": 64,
+    "busVolumes": {
+      "Ambience": 0.8,
+      "Music": 0.6,
+      "SFX": 1.0,
+      "Voice": 1.0
+    }
+  },
+  "rendering": {
+    "cvars": {
+      "r.AntiAliasing": "2"
+    },
+    "rayTracingIfSupported": false,
+    "upscaler": "Off"
+  },
+  "defaultQuality": "High",
+  "scalability": {},
+  "packaging": {
+    "alwaysIncludeAssets": [
+      "UI/",
+      "Scripts/",
+      "Data/",
+      "Audio/"
+    ],
+    "targetPlatforms": [
+      "macos",
+      "windows",
+      "linux"
+    ],
+    "outputDir": "build/package",
+    "compress": true
+  },
+  "editor": {
+    "description": "OxwaldShowcase — экскурсия по всем возможностям OxwaldEngine (сгенерировано oxshowcase_generate)",
+    "maps": {
+      "editorStartupMap": "Scenes/Hub.oxscene",
+      "gameDefaultMap": "Scenes/MainMenu.oxscene",
+      "defaultGameMode": "Default"
+    }
+  }
+}

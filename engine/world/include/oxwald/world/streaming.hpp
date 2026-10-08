@@ -86,7 +86,7 @@ struct ChunkCallbacks {
     std::function<std::unique_ptr<ChunkPayload>(ChunkCoord, const std::atomic<bool>& cancelled)> load;
     // Main thread (inside update()): the chunk became Loaded — create entities, upload GPU data, ...
     std::function<void(ChunkCoord, ChunkPayload&)> onLoaded;
-    // Main thread: the chunk is leaving — remove it from the world.
+    // Main thread: the chunk is leaving — remove it from the world (also called from ~ChunkStreamer).
     std::function<void(ChunkCoord, ChunkPayload&)> onUnload;
     // Optional, worker thread: persist the payload before it is destroyed (chunk stays Unloading).
     std::function<void(ChunkCoord, ChunkPayload&)> save;
@@ -102,7 +102,9 @@ class ChunkStreamer {
 public:
     // executor == nullptr → an internal ThreadPoolExecutor(2).
     ChunkStreamer(const ChunkStreamerSettings& settings, ChunkCallbacks callbacks, std::shared_ptr<IChunkExecutor> executor = nullptr);
-    ~ChunkStreamer(); // cancels in-flight loads and waits for running jobs
+    // Cancels in-flight loads, waits for running jobs, then unloads every Loaded chunk (onUnload + save, on the
+    // destroying thread) so the world never keeps entities of a dead streamer.
+    ~ChunkStreamer();
     ChunkStreamer(const ChunkStreamer&) = delete;
     ChunkStreamer& operator=(const ChunkStreamer&) = delete;
 

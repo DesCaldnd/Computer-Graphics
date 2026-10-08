@@ -15,7 +15,7 @@ CVar<int> cvAntiAliasing("r.AntiAliasing", 0, "Anti-aliasing method (implemented
                          S::AntiAliasing, {0, 1, 2, 2});
 CVar<int> cvUpscaler("r.Upscaler", 0, "Upscaler", CVarEnum{"Off", "FSR1", "DLSS", "TAAU"}, CVarFlags::Persist);
 CVar<int> cvUpscalerQuality("r.Upscaler.Quality", 3, "Upscaler quality mode",
-                            CVarEnum{"UltraPerformance", "Performance", "Balanced", "Quality", "Native"},
+                            CVarEnum{"UltraPerformance", "Performance", "Balanced", "Quality", "Native"}.alias("DLAA", 4),
                             CVarFlags::Persist);
 CVar<bool> cvRayTracing("r.RayTracing", false, "Ray traced effects (ignored when the GPU lacks ray queries)",
                         CVarFlags::Persist);

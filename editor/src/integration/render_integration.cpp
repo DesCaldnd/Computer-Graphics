@@ -10,6 +10,7 @@
 #include <oxwald/core/log.hpp>
 #include <oxwald/render/editor_viewport_adapter.hpp>
 #include <oxwald/render/features/postprocess/postprocess.hpp>
+#include <oxwald/render/features/reflections/reflections.hpp>
 #include <oxwald/render/quality.hpp>
 #include <oxwald/rhi/device.hpp>
 #include <oxwald/scene/components.hpp>
@@ -21,25 +22,16 @@
 #include <oxwald/render/asset_provider.hpp>
 #endif
 
+#include <QElapsedTimer>
 #include <QPointer>
+
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #include <glm/gtc/quaternion.hpp>
 
 namespace ox::editor {
-
-namespace {
-// EditorViewportRenderer::renderToImage() does not apply the frame's grid/debugDraw/selectionOutline flags (only
-// render() does), so offscreen frames would keep the previous ones. Apply them to the renderer's views first.
-void applyOffscreenFlags(render::EditorViewportRenderer& core, const render::EditorViewportFrame& f) {
-    for (render::ViewId id = 1; id <= 4; ++id) {
-        if (render::RenderView* v = core.renderer().view(id)) {
-            v->desc().flags.grid = f.grid;
-            v->desc().flags.debugDraw = f.debugDraw;
-            v->desc().flags.selectionOutline = f.selectionOutline;
-        }
-    }
-}
-} // namespace
 
 // The render module's adapter plus what the editor needs on top: offscreen frames (headless canvas, screenshots,
 // thumbnails) and the asset-provider/hot-reload wiring kept per renderer.
@@ -71,7 +63,6 @@ public:
         if (sizePx.isEmpty()) return {};
         const u32 w = u32(sizePx.width()), h = u32(sizePx.height());
         const render::EditorViewportFrame f = convert(frame);
-        applyOffscreenFlags(core(), f);
         const std::vector<u8> px = core().renderToImage(f, w, h);
         if (px.size() < usize(w) * h * 4) return {};
         return QImage(px.data(), int(w), int(h), int(w * 4), QImage::Format_RGBA8888).copy();
@@ -205,7 +196,6 @@ public:
         f.lines = &noLines;
         const u32 size = u32(std::clamp(req.sizePx, 32, 512));
         render::EditorViewportRenderer& core = gpu->core();
-        applyOffscreenFlags(core, f);
         (void)core.renderToImage(f, size, size); // first frame requests the assets
         core.renderer().resources().flush();
         const std::vector<u8> px = core.renderToImage(f, size, size);
@@ -297,7 +287,14 @@ private:
     std::unique_ptr<IRenderingCapsProvider> m_base;
 };
 
+namespace {
+RenderIntegration* g_renderIntegration = nullptr;
+} // namespace
+
+RenderIntegration* RenderIntegration::instance() { return g_renderIntegration; }
+
 RenderIntegration::RenderIntegration(EditorContext& ctx) : m_ctx(ctx) {
+    g_renderIntegration = this;
     QPointer<RenderIntegration> self(this);
     ctx.services().setCapsProvider(std::make_unique<RenderCapsProvider>(createDefaultCapsProvider()));
     VulkanViewportHub::setDeviceDescHook([](rhi::DeviceDesc& d) { render::appendUpscalerVulkanExtensions(d); });
@@ -308,11 +305,15 @@ RenderIntegration::RenderIntegration(EditorContext& ctx) : m_ctx(ctx) {
     ctx.services().setBenchmark(std::make_unique<RenderBenchmark>());
     connect(&ctx.runtime(), &RuntimeHost::aboutToStop, this, &RenderIntegration::unwireAssets);
     connect(&ctx.runtime(), &RuntimeHost::started, this, [this] {
-        for (GpuViewportRenderer* r : m_renderers) wireAssets(*r);
+        for (GpuViewportRenderer* r : m_renderers) {
+            wireAssets(*r);
+            r->core().resetBakedData(); // project switch / restart: re-read baked probes
+        }
     });
 }
 
 RenderIntegration::~RenderIntegration() {
+    if (g_renderIntegration == this) g_renderIntegration = nullptr;
     unwireAssets();
     m_ctx.services().setViewportRendererFactory({});
     m_ctx.services().setThumbnailRenderer(nullptr);
@@ -320,6 +321,15 @@ RenderIntegration::~RenderIntegration() {
 
 std::unique_ptr<IViewportRenderer> RenderIntegration::createRenderer(rhi::Device& device) {
     auto r = std::make_unique<GpuViewportRenderer>(*this, device);
+    QPointer<RenderIntegration> self(this);
+    r->core().setBakedDataReader([self](const std::string& file) -> std::optional<std::vector<u8>> {
+        if (!self || !self->m_ctx.project()) return std::nullopt;
+        const std::filesystem::path path = std::filesystem::path(self->m_ctx.project()->rootDir().toStdString()) /
+                                           std::string(render::reflections::kBakedDataDirectory) / file;
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return std::nullopt;
+        return std::vector<u8>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    });
     m_renderers.push_back(r.get());
     wireAssets(*r);
     ThumbnailCache::instance().clear(); // placeholders cached before the renderer existed
@@ -342,6 +352,54 @@ void RenderIntegration::wireAssets(GpuViewportRenderer& r) {
 #endif
     r.hotReload = {};
     cache.setProvider(nullProvider(), nullptr);
+}
+
+bool RenderIntegration::bakeProbes(QString& message) {
+    GpuViewportRenderer* gpu = live();
+    if (!gpu) {
+        message = tr("Probe baking needs the GPU viewport renderer");
+        return false;
+    }
+    if (m_ctx.isPlaying()) {
+        message = tr("Stop play mode to bake probes");
+        return false;
+    }
+    if (!m_ctx.project()) {
+        message = tr("Open a project to bake probes");
+        return false;
+    }
+    QElapsedTimer t;
+    t.start();
+    render::EditorViewportRenderer& core = gpu->core();
+    render::EditorViewportFrame f;
+    f.world = &m_ctx.editWorld();
+    f.camera = render::CameraParams::lookAt({0.0f, 2.0f, 8.0f}, {0.0f, 0.0f, 0.0f});
+    f.grid = false;
+    f.debugDraw = false;
+    f.selectionOutline = false;
+    DebugDraw noLines;
+    noLines.flush(0.0f);
+    f.lines = &noLines;
+    m_ctx.editWorld().updateTransforms();
+    render::reflections::requestBake(core.renderer());
+    // Captures run within the per-frame budgets; offscreen frames drive them (the camera does not matter).
+    int frames = 0;
+    for (; frames < 2000 && (frames < 2 || render::reflections::bakeInProgress(core.renderer())); ++frames) {
+        (void)core.renderToImage(f, 64, 64);
+    }
+    if (render::reflections::bakeInProgress(core.renderer())) {
+        message = tr("Probe bake did not finish");
+        return false;
+    }
+    const std::filesystem::path dir = std::filesystem::path(m_ctx.project()->rootDir().toStdString()) /
+                                      std::string(render::reflections::kBakedDataDirectory);
+    auto written = render::reflections::saveBakedData(core.renderer(), dir);
+    if (!written) {
+        message = tr("Saving baked probes failed: %1").arg(QString::fromStdString(written.error().message));
+        return false;
+    }
+    message = tr("Baked %1 probe file(s) in %2 ms (%3 frames)").arg(*written).arg(t.elapsed()).arg(frames);
+    return true;
 }
 
 void RenderIntegration::unwireAssets() {

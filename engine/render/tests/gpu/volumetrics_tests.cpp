@@ -132,6 +132,28 @@ TEST_F(VolumetricsTest, SpotLightConeInFog) {
     EXPECT_GT(meanLuminance(img, 120, 60, 136, 100), meanLuminance(img, 10, 60, 26, 100) + 0.05f);
 }
 
+TEST_F(VolumetricsTest, LightVolumetricFlagAndIntensity) {
+    const Uuid floorMat = material({0.5f, 0.5f, 0.5f, 1.0f}, 0.0f, 0.8f);
+    mesh(Primitive::Plane, floorMat, {0, 0, 0}, glm::vec3(60.0f));
+    Entity spot = spotLight({0, 7.0f, -6.0f}, {0, -1, 0}, 60000.0f, 14.0f, 14.0f, 26.0f, false);
+    fogEnvironment(0.06f, 0.0f, glm::vec3(1.0f), 0.002f, 0.002f);
+    const CameraParams cam = camera({0, 3.0f, 6.0f}, {0, 3.5f, -6.0f}, 4.0f, 60.0f, 100.0f);
+    auto coneContrast = [&] {
+        // Enough frames for the fog's temporal history to forget the previous setting.
+        const Image img = render(cam, {.width = 128, .height = 96, .frames = 40});
+        return meanLuminance(img, 56, 20, 72, 50) - meanLuminance(img, 4, 20, 20, 50);
+    };
+    spot.get<LightComponent>().volumetric = false;
+    const f32 off = coneContrast();
+    spot.get<LightComponent>().volumetric = true;
+    const f32 lit = coneContrast();
+    EXPECT_GT(lit, 0.05f) << "the spot cone lights the fog";
+    EXPECT_LT(off, lit * 0.2f) << "LightComponent::volumetric = false keeps the light out of the fog";
+    spot.get<LightComponent>().volumetricIntensity = 3.0f;
+    const f32 stronger = coneContrast();
+    EXPECT_GT(stronger, lit * 1.5f) << "LightComponent::volumetricIntensity scales the in-scattering";
+}
+
 TEST_F(VolumetricsTest, PointLightsInLocalFogBox) {
     const Uuid floorMat = material({0.06f, 0.06f, 0.06f, 1.0f}, 0.0f, 0.8f);
     mesh(Primitive::Plane, floorMat, {0, 0, 0}, glm::vec3(60.0f));

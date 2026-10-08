@@ -95,7 +95,7 @@ glm::quat SplineSample::rotation(const glm::vec3& localForward, const glm::vec3&
 Spline::Spline(SplineType type, bool closed) : m_type(type), m_closed(closed) {}
 
 void Spline::touch() {
-    m_cache.dirty = true;
+    m_cache.invalidate();
     ++m_version;
 }
 
@@ -360,14 +360,15 @@ std::optional<f32> Spline::markerT(std::string_view name) const {
 // ---------------------------------------------------------------------------------------------------------
 // Cache
 
-void Spline::rebuild() const {
-    m_cache.dirty = true;
-    ensureCache();
-}
+void Spline::rebuild() const { ensureCache(); }
 
 void Spline::ensureCache() const {
-    if (!m_cache.dirty) {
+    if (m_cache.ready.load(std::memory_order_acquire)) {
         return;
+    }
+    std::lock_guard lock(m_cache.mutex);
+    if (!m_cache.dirty) {
+        return; // built by another thread meanwhile, or re-entered while this thread builds it
     }
     m_cache.segments.clear();
     m_cache.homogeneous.clear();
@@ -384,6 +385,7 @@ void Spline::ensureCache() const {
     m_cache.dirty = false;
     buildArcLength();
     buildFrames();
+    m_cache.ready.store(true, std::memory_order_release);
 }
 
 void Spline::buildCubicSegments() const {

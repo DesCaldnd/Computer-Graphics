@@ -7,7 +7,9 @@
 
 #include <filesystem>
 #include <map>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Game projects: a directory with a "<Name>.oxproj" JSON file (plain JSON of ProjectSettings) next to the asset
@@ -40,6 +42,11 @@ struct ProjectPackagingSettings {
     bool compress = true;
 };
 
+// Names accepted in ProjectSettings::modules for the engine's own modules (whether or not compiled in).
+inline constexpr std::string_view kEngineModuleNames[] = {"assets", "physics", "animation", "audio", "script",
+                                                          "async",  "gameplay", "ai",      "net",   "world",
+                                                          "spline", "render", "ui"};
+
 struct ProjectSettings {
     std::string name = "Untitled";
     std::string version = "0.1.0"; // game version (stored in save headers)
@@ -59,6 +66,9 @@ struct ProjectSettings {
     ProjectPackagingSettings packaging;
 
     [[nodiscard]] bool moduleEnabled(std::string_view module) const;
+    // Keys of `modules` that name neither an engine module (kEngineModuleNames) nor one of `registered` (the
+    // engine's game modules) — typos would otherwise be ignored silently. The Engine logs them at init.
+    [[nodiscard]] std::vector<std::string> unknownModules(std::span<const std::string> registered = {}) const;
 };
 
 class Project {

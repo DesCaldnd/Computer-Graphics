@@ -9,6 +9,7 @@
 #include <oxwald/scene/scene_serializer.hpp>
 
 #include <algorithm>
+#include <utility>
 #include <chrono>
 #include <cstdio>
 #include <set>
@@ -104,6 +105,20 @@ Result<serial::Document> decodeSave(const std::filesystem::path& path) {
     auto bytes = serial::readFileBytes(path);
     if (!bytes) return bytes.error();
     auto doc = serial::decodeAny(*bytes);
+    if (!doc) return makeError("{}: {}", path.filename().string(), doc.error().message);
+    if (doc->kind != kKind) return makeError("{}: not a save game (kind '{}')", path.filename().string(), doc->kind);
+    if (!doc->root.find("header")) return makeError("{}: save has no header", path.filename().string());
+    return doc;
+}
+
+// Slot listing: decodes only the header and thumbnail of binary saves (the world and user sections are skipped
+// by size); JSON saves are parsed fully.
+Result<serial::Document> decodeSaveHeader(const std::filesystem::path& path) {
+    auto bytes = serial::readFileBytes(path);
+    if (!bytes) return bytes.error();
+    auto doc = serial::isBinaryArchive(*bytes)
+                   ? serial::decodeBinary(*bytes, serial::BinaryDecodeOptions{{"header", "thumbnail"}})
+                   : serial::decodeAny(*bytes);
     if (!doc) return makeError("{}: {}", path.filename().string(), doc.error().message);
     if (doc->kind != kKind) return makeError("{}: not a save game (kind '{}')", path.filename().string(), doc->kind);
     if (!doc->root.find("header")) return makeError("{}: save has no header", path.filename().string());
@@ -211,6 +226,35 @@ void SaveGameSystem::registerSaveable(ISaveable& saveable) {
 }
 
 void SaveGameSystem::unregisterSaveable(ISaveable& saveable) { std::erase(m_saveables, &saveable); }
+
+SaveableRegistration SaveGameSystem::registerSaveableScoped(ISaveable& saveable) {
+    registerSaveable(saveable);
+    return SaveableRegistration(this, &saveable, m_lifetime);
+}
+
+SaveableRegistration::SaveableRegistration(SaveGameSystem* system, ISaveable* saveable, std::weak_ptr<void> alive)
+    : m_system(system), m_saveable(saveable), m_alive(std::move(alive)) {}
+
+SaveableRegistration::SaveableRegistration(SaveableRegistration&& o) noexcept
+    : m_system(std::exchange(o.m_system, nullptr)), m_saveable(std::exchange(o.m_saveable, nullptr)),
+      m_alive(std::move(o.m_alive)) {}
+
+SaveableRegistration& SaveableRegistration::operator=(SaveableRegistration&& o) noexcept {
+    if (this != &o) {
+        reset();
+        m_system = std::exchange(o.m_system, nullptr);
+        m_saveable = std::exchange(o.m_saveable, nullptr);
+        m_alive = std::move(o.m_alive);
+    }
+    return *this;
+}
+
+void SaveableRegistration::reset() {
+    if (m_system && m_saveable && !m_alive.expired()) m_system->unregisterSaveable(*m_saveable);
+    m_system = nullptr;
+    m_saveable = nullptr;
+    m_alive.reset();
+}
 
 void SaveGameSystem::registerMigration(u32 fromVersion, Migration fn) { m_migrations[fromVersion] = std::move(fn); }
 
@@ -728,10 +772,10 @@ Result<SaveSlotInfo> SaveGameSystem::slotInfo(std::string_view slot) const {
     info.hasBackup = std::filesystem::exists(bak, ec);
     const bool hasMain = std::filesystem::exists(info.path, ec);
     if (!hasMain && !info.hasBackup) return makeError("no save in slot '{}'", slot);
-    auto doc = hasMain ? decodeSave(info.path) : Result<serial::Document>(makeError("missing"));
+    auto doc = hasMain ? decodeSaveHeader(info.path) : Result<serial::Document>(makeError("missing"));
     if (!doc) {
         info.corrupted = true;
-        if (info.hasBackup) doc = decodeSave(bak);
+        if (info.hasBackup) doc = decodeSaveHeader(bak);
     }
     if (doc) {
         info.header = readHeader(*doc);

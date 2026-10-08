@@ -233,7 +233,7 @@ void ProjectSettingsDialog::buildRendering() {
 
     p->addSection(tr("Anti-Aliasing & Upscaling"));
     p->addCombo(tr("Anti-Aliasing Method"), tr("TAA gives the best quality and is required for temporal upscalers."),
-                cvarEnumLabels(cvars::kAntiAliasing), indices(3), cvarBinding(cvars::kAntiAliasing));
+                {tr("None"), tr("FXAA"), tr("Temporal AA (TAA)")}, indices(3), cvarBinding(cvars::kAntiAliasing)); // plain int cvar
     const QStringList upscalerLabels = cvarEnumLabels(cvars::kUpscaler);
     QComboBox* up = p->addCombo(tr("Upscaler"), tr("Render at a lower resolution and reconstruct. FSR 1.0 and TAAU work on every GPU, DLSS needs NVIDIA RTX."),
                                 upscalerLabels, indices(int(upscalerLabels.size())), cvarBinding(cvars::kUpscaler));
@@ -252,20 +252,20 @@ void ProjectSettingsDialog::buildRendering() {
     p->addRefresher([sharp] { sharp->setEnabled(cvarBinding(QString::fromLatin1(cvars::kUpscaler)).get().toInt() != 0); });
 
     p->addSection(tr("Tonemapping & Exposure"));
-    p->addCombo(tr("Tonemapper"), tr("ACES filmic or AgX (better hue preservation in highlights)."), cvarEnumLabels(cvars::kTonemapper), indices(2),
-                cvarBinding(cvars::kTonemapper));
+    const QStringList tonemappers = cvarEnumLabels(cvars::kTonemapper);
+    p->addCombo(tr("Tonemapper"), tr("ACES filmic or AgX (better hue preservation in highlights)."), tonemappers,
+                indices(int(tonemappers.size())), cvarBinding(cvars::kTonemapper));
     p->addNumber(tr("Default Exposure"), tr("Exposure compensation in EV applied when no camera overrides it."), cvarBinding(cvars::kExposure), -10, 10, 0.1, 1, QStringLiteral(" EV"));
     p->addToggle(tr("Auto Exposure"), tr("Histogram based eye adaptation."), cvarBinding(cvars::kAutoExposure));
 
+    // Raster techniques; with Ray Tracing on, the ray traced effects above replace them where enabled.
     p->addSection(tr("Lighting"));
-    QComboBox* sm = p->addCombo(tr("Shadow Method"), {}, cvarEnumLabels(cvars::kShadowMethod), indices(2), cvarBinding(cvars::kShadowMethod));
-    QComboBox* gi = p->addCombo(tr("Global Illumination Method"), {}, cvarEnumLabels(cvars::kGIMethod), indices(4), cvarBinding(cvars::kGIMethod));
-    QComboBox* refl = p->addCombo(tr("Reflection Method"), {}, cvarEnumLabels(cvars::kReflectionMethod), indices(3), cvarBinding(cvars::kReflectionMethod));
-    if (!caps.rayTracingSupported) {
-        disableComboItem(sm, 1, caps.rayTracingUnavailableReason);
-        disableComboItem(gi, 3, caps.rayTracingUnavailableReason);
-        disableComboItem(refl, 2, caps.rayTracingUnavailableReason);
-    }
+    p->addToggle(tr("Shadow Maps"), tr("Cascaded/atlas shadow maps (replaced by ray traced shadows when those are on)."),
+                 cvarBinding(cvars::kShadows));
+    p->addCombo(tr("Ambient Occlusion"), tr("Screen-space AO technique (scalability group Global Illumination)."),
+                {tr("Off"), tr("SSAO"), tr("GTAO")}, indices(3), cvarBinding(cvars::kAOMethod));
+    p->addToggle(tr("Screen Space Reflections"), tr("Hi-Z traced reflections on top of reflection probes."), cvarBinding(cvars::kSSR));
+    p->addToggle(tr("Irradiance Volumes"), tr("Baked probe grids for indirect diffuse lighting."), cvarBinding(cvars::kIrradianceVolumes));
     p->addSection(tr("Display"));
     p->addToggle(tr("VSync"), {}, cvarBinding(cvars::kVSync));
     p->addNumber(tr("Frame Rate Limit"), tr("0 = unlimited"), cvarBinding(cvars::kMaxFps), 0, 1000, 1, 0, QStringLiteral(" fps"));

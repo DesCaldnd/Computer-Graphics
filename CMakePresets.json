@@ -17,13 +17,13 @@
       "name": "debug",
       "displayName": "Debug (validation layers, Tracy)",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "OX_WARNINGS_AS_ERRORS": "ON" }
     },
     {
       "name": "dev",
       "displayName": "RelWithDebInfo — day-to-day development",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "OX_WARNINGS_AS_ERRORS": "ON" }
     },
     {
       "name": "release",

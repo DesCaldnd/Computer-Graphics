@@ -550,7 +550,6 @@ void PainterViewportRenderer::render(const ViewportFrame& frame, const ViewportT
 
 AABB entityBounds(World& world, Entity e) {
     (void)world;
-    AABB box;
     const glm::mat4 m = e.worldMatrix();
     if (auto* mr = e.tryGet<MeshRendererComponent>()) {
         const Prim prim = primitiveOf(mr->mesh);

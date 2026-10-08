@@ -448,3 +448,34 @@ TEST(ChunkData, StreamerCanLoadSerializedChunks) {
     EXPECT_TRUE(s.isAreaReady(v.position, 100.f));
     EXPECT_GT(withTerrain, 9);
 }
+
+TEST(ChunkStreamer, DestructionUnloadsLoadedChunks) {
+    auto exec = std::make_shared<ManualExecutor>();
+    Recorder rec;
+    usize loaded = 0;
+    {
+        ChunkStreamer s(smallSettings(), rec.callbacks(true), exec);
+        StreamingViewer v{{5.f, 0.f, 5.f}};
+        for (int i = 0; i < 20; ++i) {
+            s.update(std::span(&v, 1));
+            exec->runAll();
+        }
+        loaded = rec.activated.size();
+        ASSERT_GT(loaded, 0u);
+        EXPECT_TRUE(rec.unloaded.empty());
+        // Teleport: old chunks unload, new ones load; loads finished but not yet activated stay Loading and must
+        // not be reported as unloaded by the destructor.
+        v.position = {505.f, 0.f, 5.f};
+        s.update(std::span(&v, 1));
+        exec->runAll();
+        s.update(std::span(&v, 1));
+        exec->runAll(); // the manual executor must not hold jobs when the streamer waits for them
+        rec.unloaded.clear();
+        rec.saved.clear();
+        loaded = 0;
+        s.forEachChunk([&](ChunkCoord, ChunkState st) { loaded += st == ChunkState::Loaded; });
+        ASSERT_GT(loaded, 0u);
+    }
+    EXPECT_EQ(rec.unloaded.size(), loaded);
+    EXPECT_EQ(rec.saved.size(), loaded);
+}

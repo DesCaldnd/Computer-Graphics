@@ -129,7 +129,8 @@ ox::spline::drawSpline(road, [&](glm::vec3 a, glm::vec3 b, glm::vec4 c) { debugD
 
 ## Known limits / TODO
 
-* Const queries rebuild the cache lazily → not thread-safe on a dirty spline; call `rebuild()` before sharing.
+* Const queries build the cache lazily under a lock (double-checked atomic flag), so concurrent const queries are
+  safe; `rebuild()` just builds eagerly. Copies start with an empty cache. Editing is not thread-safe.
 * Arc-length LUT is fixed at 16 steps per segment (accurate to ~1e-6 relative for smooth segments; extremely
   long, kinked segments may need more). No adaptive Simpson fallback yet.
 * Closest point searches the 16-sample coarse minimum per segment; very tight loops inside one segment could

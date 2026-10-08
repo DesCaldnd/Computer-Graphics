@@ -111,6 +111,10 @@ volume/mute/solo/hierarchy, sidechain ducking + release, voice stealing & priori
 start delay/pause/resume, fade in/out/fadeTo timing, occlusion (HF energy and gain), distance low-pass, snapshots,
 bus effect chain add/remove, standalone DSP (delay/reverb/high-pass), WAV load decoded & streamed, debug draw.
 
+`loadSound(const Vfs&, uri, mode)` loads through the VFS: loose files with a native path are opened directly
+(streaming works), archive/in-memory files are read and decoded (`Stream` falls back to `Decode`). The gameplay
+`AudioSource.clipPath` uses it for `scheme://` paths.
+
 ## Known limits / TODO
 
 * One listener (miniaudio supports up to 4; API exposes listener 0).

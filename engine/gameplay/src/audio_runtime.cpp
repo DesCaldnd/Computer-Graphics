@@ -1,6 +1,8 @@
 #include <oxwald/core/debug_draw.hpp>
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/profile.hpp>
+#include <oxwald/core/services.hpp>
+#include <oxwald/core/vfs.hpp>
 #include <oxwald/gameplay/audio.hpp>
 #include <oxwald/gameplay/physics.hpp>
 #include <oxwald/gameplay/providers.hpp>
@@ -84,7 +86,10 @@ audio::SoundId AudioRuntime::resolve(const Uuid& clip, const std::string& path, 
     if (path.empty()) return {};
     auto it = m_loaded.find(path);
     if (it != m_loaded.end()) return it->second;
-    const audio::SoundId id = m_engine->loadSound(path, stream ? audio::LoadMode::Stream : audio::LoadMode::Decode);
+    const audio::LoadMode mode = stream ? audio::LoadMode::Stream : audio::LoadMode::Decode;
+    // "project://sfx/x.ogg" style paths go through the VFS (loose files or pak archives).
+    const Vfs* vfs = path.find("://") != std::string::npos && m_services ? m_services->tryGet<Vfs>() : nullptr;
+    const audio::SoundId id = vfs ? m_engine->loadSound(*vfs, path, mode) : m_engine->loadSound(path, mode);
     if (id) m_loaded.emplace(path, id);
     return id;
 }

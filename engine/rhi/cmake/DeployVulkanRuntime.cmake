@@ -22,16 +22,21 @@ function(_ox_copy src dst)
     endif()
     # Copy to a new inode and rename: overwriting a loaded, signed Mach-O in place makes macOS kill the next
     # process that maps it (stale code-signature cache).
-    file(COPY_FILE "${_real}" "${dst}.tmp")
+    # Several targets deploy into the same bin/vulkan directory from parallel POST_BUILD steps: use a private
+    # temp name so concurrent copies never rename each other's file away.
+    string(RANDOM LENGTH 8 _rnd)
+    set(_tmp "${dst}.${_rnd}.tmp")
+    file(COPY_FILE "${_real}" "${_tmp}")
     if(CMAKE_HOST_APPLE)
-        # vcpkg rewrites install names of prebuilt dylibs (e.g. MoltenVK), invalidating their signature;
-        # macOS then SIGKILLs on load ("Code Signature Invalid"). Re-sign ad hoc when needed.
-        execute_process(COMMAND codesign -v "${dst}.tmp" RESULT_VARIABLE _valid OUTPUT_QUIET ERROR_QUIET)
+        # Safety net: a dylib whose install names were rewritten after signing (e.g. by vcpkg's Mach-O fixup)
+        # has an invalid signature and macOS SIGKILLs on load. The moltenvk overlay port now keeps the release
+        # signature intact, so this normally does nothing.
+        execute_process(COMMAND codesign -v "${_tmp}" RESULT_VARIABLE _valid OUTPUT_QUIET ERROR_QUIET)
         if(NOT _valid EQUAL 0)
-            execute_process(COMMAND codesign --force --sign - "${dst}.tmp" OUTPUT_QUIET ERROR_QUIET)
+            execute_process(COMMAND codesign --force --sign - "${_tmp}" OUTPUT_QUIET ERROR_QUIET)
         endif()
     endif()
-    file(RENAME "${dst}.tmp" "${dst}")
+    file(RENAME "${_tmp}" "${dst}")
     file(WRITE "${dst}.stamp" "${_stamp}")
 endfunction()
 

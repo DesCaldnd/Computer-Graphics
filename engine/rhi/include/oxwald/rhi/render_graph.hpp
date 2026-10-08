@@ -161,6 +161,7 @@ struct RGExecuteOptions {
     std::vector<TimelinePoint> waits;
     bool timestamps = true;
     bool asyncCompute = true; // use the device's async compute queue for passes hinted Compute
+    std::string timestampPrefix; // prepended to pass names in GPU timings (e.g. "Main/" per view)
 };
 
 // Frame graph. Typical frame:  graph.reset();  declare resources/passes;  graph.execute(device, opts);
@@ -192,7 +193,7 @@ public:
     // Multi-queue execution: creates command lists, submits batches with timeline waits.
     void execute(Device& device, const RGExecuteOptions& options = {});
     // Records every pass into `cmd` (single queue; async hints ignored). Caller submits.
-    void execute(CommandList& cmd);
+    void execute(CommandList& cmd, std::string_view timestampPrefix = {});
     void releaseResources(Device& device);
 
     [[nodiscard]] std::string exportGraphviz() const;

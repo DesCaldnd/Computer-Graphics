@@ -559,3 +559,57 @@ TEST(SaveGame, EngineQuickSaveReloadsLevel) {
     ASSERT_TRUE(engine.console().execute("save console"));
     EXPECT_TRUE(engine.saves().exists("console"));
 }
+
+TEST(SaveGame, ScopedSaveableRegistrationUnregistersItself) {
+    registerTestTypes();
+    Fixture f;
+    World w;
+    w.create("A").add<SaveGameComponent>();
+    QuestLog kept;
+    kept.gold = 5;
+    {
+        SaveGameSystem saves(f.config());
+        {
+            QuestLog temporary;
+            temporary.gold = 7;
+            SaveableRegistration reg = saves.registerSaveableScoped(temporary);
+            EXPECT_TRUE(reg.active());
+            SaveableRegistration moved = std::move(reg);
+            EXPECT_FALSE(reg.active());
+            EXPECT_TRUE(moved.active());
+        } // `temporary` and its registration go away together: saving must not touch the dangling section
+        ASSERT_TRUE(saves.save("slot", w));
+        auto doc = saves.readDocument("slot");
+        ASSERT_TRUE(doc);
+        const serial::Value* sections = doc->root.find("sections");
+        EXPECT_TRUE(!sections || !sections->find("quests"));
+
+        SaveableRegistration outlived = saves.registerSaveableScoped(kept);
+        ASSERT_TRUE(saves.save("slot2", w));
+        // Registration outliving the system: destroyed below after `saves` — must be a no-op.
+        static SaveableRegistration s_outlived;
+        s_outlived = std::move(outlived);
+    }
+    EXPECT_NO_FATAL_FAILURE({ SaveableRegistration dead; });
+}
+
+TEST(SaveGame, ListSlotsReadsHeadersOfLargeSaves) {
+    registerTestTypes();
+    Fixture f;
+    SaveGameSystem saves(f.config());
+    World w;
+    for (int i = 0; i < 2000; ++i) {
+        Entity e = w.create("E" + std::to_string(i));
+        e.add<SaveGameComponent>();
+        e.add<InventoryComponent>().items = {"a", "b", "c"};
+    }
+    ASSERT_TRUE(saves.save("big", w, SaveKind::Manual, "Big one"));
+    auto slots = saves.listSlots();
+    ASSERT_EQ(slots.size(), 1u);
+    EXPECT_EQ(slots[0].header.displayName, "Big one");
+    EXPECT_EQ(slots[0].header.entityCount, 2000u);
+    EXPECT_FALSE(slots[0].corrupted);
+    auto info = saves.slotInfo("big");
+    ASSERT_TRUE(info);
+    EXPECT_EQ(info->header.slot, "big");
+}

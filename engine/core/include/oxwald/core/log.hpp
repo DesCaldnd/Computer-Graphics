@@ -17,13 +17,17 @@ struct Record {
 
 using Sink = std::function<void(const Record&)>;
 
-// Sinks are called under a mutex; the default sink prints to stderr.
+// Sinks are called under a mutex; the built-in stderr sink can be switched off (e.g. when a game routes the log
+// into its own console/file sinks, or in tools whose stdout/stderr is machine-read).
 int addSink(Sink sink);
+void setStderrSinkEnabled(bool enabled);
+bool stderrSinkEnabled();
 void removeSink(int id);
 void setMinLevel(Level level);
 Level minLevel();
 std::string_view levelName(Level level);
 
+// Unfiltered: callers check minLevel() (OX_LOG_* and print() do; Fatal is always written).
 void write(Level level, std::string_view category, std::string_view message);
 
 template <class... Args>

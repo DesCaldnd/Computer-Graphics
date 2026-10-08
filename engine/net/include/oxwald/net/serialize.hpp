@@ -4,10 +4,14 @@
 
 #include <glm/vec4.hpp>
 
+#include <algorithm>
 #include <concepts>
+#include <map>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
+#include <vector>
 
 namespace ox::net {
 
@@ -110,6 +114,77 @@ struct NetCodec<glm::quat> {
     void read(BitReader& r, glm::quat& v) const { v = r.readQuatRaw(); }
     bool equal(const glm::quat& a, const glm::quat& b) const { return a == b; }
 };
+
+// ---- containers: element count + elements (each with the element type's default codec)
+
+inline constexpr u32 kMaxReplicatedElements = 1u << 16; // malformed packets must not allocate unbounded memory
+
+template <class T>
+struct NetCodec<std::vector<T>> {
+    void write(BitWriter& w, const std::vector<T>& v) const {
+        w.writeVarU32(static_cast<u32>(v.size()));
+        for (const T& e : v) NetCodec<T>{}.write(w, e);
+    }
+    void read(BitReader& r, std::vector<T>& v) const {
+        const u64 n = r.readVarU64();
+        v.clear();
+        if (!r.ok() || n > kMaxReplicatedElements) return;
+        v.resize(static_cast<usize>(n));
+        for (T& e : v) {
+            NetCodec<T>{}.read(r, e);
+            if (!r.ok()) return;
+        }
+    }
+    bool equal(const std::vector<T>& a, const std::vector<T>& b) const {
+        if (a.size() != b.size()) return false;
+        for (usize i = 0; i < a.size(); ++i) {
+            if (!NetCodec<T>{}.equal(a[i], b[i])) return false;
+        }
+        return true;
+    }
+};
+
+template <class Map>
+struct NetStringMapCodec {
+    using T = typename Map::mapped_type;
+    void write(BitWriter& w, const Map& m) const {
+        w.writeVarU32(static_cast<u32>(m.size()));
+        // Sorted keys: equal maps always produce identical bits (unordered_map iteration order varies).
+        std::vector<const typename Map::value_type*> items;
+        items.reserve(m.size());
+        for (const auto& kv : m) items.push_back(&kv);
+        std::sort(items.begin(), items.end(), [](const auto* a, const auto* b) { return a->first < b->first; });
+        for (const auto* kv : items) {
+            w.writeString(kv->first);
+            NetCodec<T>{}.write(w, kv->second);
+        }
+    }
+    void read(BitReader& r, Map& m) const {
+        const u64 n = r.readVarU64();
+        m.clear();
+        if (!r.ok() || n > kMaxReplicatedElements) return;
+        for (u64 i = 0; i < n; ++i) {
+            std::string key = r.readString();
+            T value{};
+            NetCodec<T>{}.read(r, value);
+            if (!r.ok()) return;
+            m.emplace(std::move(key), std::move(value));
+        }
+    }
+    bool equal(const Map& a, const Map& b) const {
+        if (a.size() != b.size()) return false;
+        for (const auto& [k, v] : a) {
+            auto it = b.find(k);
+            if (it == b.end() || !NetCodec<T>{}.equal(v, it->second)) return false;
+        }
+        return true;
+    }
+};
+
+template <class T>
+struct NetCodec<std::map<std::string, T>> : NetStringMapCodec<std::map<std::string, T>> {};
+template <class T>
+struct NetCodec<std::unordered_map<std::string, T>> : NetStringMapCodec<std::unordered_map<std::string, T>> {};
 
 // ---- quantising codecs (use them explicitly in NetObject::replicate)
 

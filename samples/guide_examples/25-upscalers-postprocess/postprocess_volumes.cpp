@@ -130,8 +130,8 @@ TEST(GuidePostProcessVolumes, SettingsDefaults) {
     EXPECT_FLOAT_EQ(s.maxEV100, 20.0f);
     EXPECT_FLOAT_EQ(s.adaptationSpeedUp, 3.0f);
     EXPECT_FLOAT_EQ(s.adaptationSpeedDown, 1.0f);
-    EXPECT_FLOAT_EQ(s.histogramLowPercent, 70.0f);
-    EXPECT_FLOAT_EQ(s.histogramHighPercent, 95.0f);
+    EXPECT_FLOAT_EQ(s.histogramLowPercent, 50.0f);
+    EXPECT_FLOAT_EQ(s.histogramHighPercent, 90.0f);
     EXPECT_FLOAT_EQ(s.bloomIntensity, 0.04f);
     EXPECT_FLOAT_EQ(s.maxBokehSize, 1.5f);
     EXPECT_FLOAT_EQ(s.motionBlurAmount, 0.5f);

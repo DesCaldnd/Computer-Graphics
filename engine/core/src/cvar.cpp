@@ -36,7 +36,9 @@ bool ICVar::allowed(CVarSource source) const {
 
 void ICVar::noteChanged(CVarSource source) {
     m_lastSource.store(source, std::memory_order_relaxed);
-    if (hasFlag(CVarFlags::RequiresRestart) && m_registered) CVarRegistry::instance().markRestartRequired();
+    if (!m_registered) return;
+    if (hasFlag(CVarFlags::RequiresRestart)) CVarRegistry::instance().markRestartRequired();
+    CVarRegistry::instance().notifyChanged(*this, source);
 }
 
 // ---- CVar<T> parsing ---------------------------------------------------------------------------------------
@@ -70,10 +72,14 @@ std::optional<bool> parseCVarBool(std::string_view text) {
     return std::nullopt;
 }
 
-std::optional<int> parseCVarInt(std::string_view text, const std::vector<std::string>& enumNames) {
+std::optional<int> parseCVarInt(std::string_view text, const std::vector<std::string>& enumNames,
+                                const std::vector<std::pair<std::string, int>>& aliases) {
     text = trim(text);
     for (usize i = 0; i < enumNames.size(); ++i) {
         if (iequals(enumNames[i], text)) return int(i);
+    }
+    for (const auto& [alias, value] : aliases) {
+        if (iequals(alias, text)) return value;
     }
     int v = 0;
     auto [p, ec] = std::from_chars(text.data(), text.data() + text.size(), v);
@@ -132,10 +138,12 @@ void CVarRegistry::add(ICVar& cvar) {
     {
         std::lock_guard lock(m_mutex);
         for (auto* c : m_cvars) {
-            OX_ASSERT(c->name() != cvar.name(), "cvar '{}' registered twice", cvar.name());
+            // Lookups are case-insensitive, so names differing only in case would shadow each other.
+            OX_ASSERT(!iequals(c->name(), cvar.name()), "cvar '{}' registered twice (as '{}')", cvar.name(), c->name());
         }
         for (auto* cmd : m_commands) {
-            OX_ASSERT(cmd->name() != cvar.name(), "cvar '{}' clashes with a console command", cvar.name());
+            OX_ASSERT(!iequals(cmd->name(), cvar.name()), "cvar '{}' clashes with console command '{}'", cvar.name(),
+                      cmd->name());
         }
         m_cvars.push_back(&cvar);
         for (auto it = m_pending.begin(); it != m_pending.end(); ++it) {
@@ -160,7 +168,11 @@ void CVarRegistry::remove(ICVar& cvar) {
 void CVarRegistry::addCommand(ConsoleCommand& cmd) {
     std::lock_guard lock(m_mutex);
     for (auto* c : m_commands) {
-        OX_ASSERT(c->name() != cmd.name(), "console command '{}' registered twice", cmd.name());
+        OX_ASSERT(!iequals(c->name(), cmd.name()), "console command '{}' registered twice (as '{}')", cmd.name(),
+                  c->name());
+    }
+    for (auto* c : m_cvars) {
+        OX_ASSERT(!iequals(c->name(), cmd.name()), "console command '{}' clashes with cvar '{}'", cmd.name(), c->name());
     }
     m_commands.push_back(&cmd);
 }
@@ -218,6 +230,28 @@ std::vector<std::string> CVarRegistry::complete(std::string_view prefix) const {
 bool CVarRegistry::set(std::string_view name, std::string_view value, CVarSource source) {
     ICVar* c = find(name);
     return c && c->setFromString(value, source);
+}
+
+usize CVarRegistry::addChangeListener(ChangeListener fn) {
+    std::lock_guard lock(m_listenerMutex);
+    m_listeners.emplace_back(++m_nextListenerId, std::make_shared<ChangeListener>(std::move(fn)));
+    return m_nextListenerId;
+}
+
+void CVarRegistry::removeChangeListener(usize id) {
+    std::lock_guard lock(m_listenerMutex);
+    std::erase_if(m_listeners, [id](const auto& p) { return p.first == id; });
+}
+
+void CVarRegistry::notifyChanged(ICVar& cvar, CVarSource source) {
+    std::vector<std::shared_ptr<ChangeListener>> listeners;
+    {
+        std::lock_guard lock(m_listenerMutex);
+        if (m_listeners.empty()) return;
+        listeners.reserve(m_listeners.size());
+        for (const auto& [id, fn] : m_listeners) listeners.push_back(fn);
+    }
+    for (const auto& fn : listeners) (*fn)(cvar, source);
 }
 
 std::vector<std::string> tokenizeCommandLine(std::string_view line) {

@@ -177,7 +177,11 @@ serial::Document createPrefab(World& world, Entity root, const CreatePrefabOptio
     const Uuid id = options.prefabId.isValid() ? options.prefabId : Uuid::generate();
     const auto subtree = subtreeOf(root);
     std::unordered_map<Uuid, Uuid> toLocal;
-    for (Entity e : subtree) toLocal.emplace(e.uuid(), Uuid::generate());
+    // Prefab-local ids derive from the prefab id and the hierarchy order: re-creating a prefab from the same subtree
+    // writes the same file (reproducible generated content, clean diffs).
+    for (usize i = 0; i < subtree.size(); ++i) {
+        toLocal.emplace(subtree[i].uuid(), Uuid::fromName(id.toString() + "/" + std::to_string(i)));
+    }
 
     const Entity roots[] = {root};
     Value entities = serializeEntities(world, roots, withoutPrefabLinks());
@@ -352,7 +356,7 @@ serial::Document applyInstanceToPrefab(World& world, Entity instanceRoot, const 
             toSource.emplace(e.uuid(), pic->sourceId);
         } else {
             // Entity added on the instance becomes part of the prefab.
-            const Uuid source = Uuid::generate();
+            const Uuid source = Uuid::fromName(view.id.toString() + "/added/" + e.uuid().toString());
             toSource.emplace(e.uuid(), source);
             e.addOrReplace<PrefabInstanceComponent>(PrefabInstanceComponent{view.id, source, false, {}});
         }

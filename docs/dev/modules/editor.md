@@ -196,5 +196,6 @@ snapshot (edit/live) + panel, save game listed and decoded.
 - Input page edits the first context's bindings; modifiers/triggers are kept but not editable in the UI.
 - Vulkan surfaces only on macOS (xcb/wayland/win32 TODO); single viewport; `QWindow` drops rely on the platform
   delivering drag events to the native window.
-- rhi/vk-bootstrap: creating a surface device after a headless device in the same process crashed in
-  `get_present_queue_index` — the editor never probes with a headless device while a Vulkan viewport exists.
+- The editor never probes with a headless device while a Vulkan viewport exists (one device per process). The
+  former crash when a surface device followed a headless one (vk-bootstrap's cached instance functions) is fixed
+  in rhi.

@@ -8,6 +8,8 @@
 #include <glm/vec4.hpp>
 
 #include <array>
+#include <atomic>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -120,6 +122,23 @@ struct FrameSample {
 };
 
 struct Cache {
+    Cache() = default;
+    // Copies/moves start with an empty cache (rebuilt lazily): copying a cache another thread may be building is
+    // a data race, and the source's data is cheap to recompute.
+    Cache(const Cache&) noexcept {}
+    Cache& operator=(const Cache&) noexcept {
+        invalidate();
+        return *this;
+    }
+    void invalidate() {
+        dirty = true;
+        ready.store(false, std::memory_order_release);
+    }
+
+    // `ready` is the published flag read without locking; `dirty` is only touched under `mutex` (or by the
+    // non-const editing API, which must not race with anything anyway).
+    std::atomic<bool> ready{false};
+    std::recursive_mutex mutex; // recursive: building evaluates the curve, which re-enters ensureCache()
     bool dirty = true;
     bool cubic = true;
     std::vector<Segment> segments;
@@ -138,7 +157,8 @@ struct Cache {
 // generally not on the curve). Closed splines wrap t modulo segmentCount(); open ones clamp.
 // Distances are arc lengths in the spline's local space ∈ [0, length()].
 //
-// Const queries rebuild the cache on demand: call rebuild() before sharing a spline across threads.
+// Const queries build the evaluation cache on first use; concurrent const queries from several threads are safe
+// (the first one builds under a lock, the others wait). Editing is not thread-safe, as usual.
 class Spline {
 public:
     Spline() = default;
@@ -210,6 +230,7 @@ public:
     ClosestPointResult closestPoint(const glm::vec3& worldPoint) const;
     Bounds bounds() const;
 
+    // Builds the cache now (e.g. on the loading thread) so the first query does not pay for it.
     void rebuild() const;
 
 private:

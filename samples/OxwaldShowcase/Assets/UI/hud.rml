@@ -1,0 +1,31 @@
+<rml>
+<head>
+    <title>HUD</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<!-- Data model "hud" (Scripts/game.lua). Clicks pass through (body.hud: pointer-events none). -->
+<body class="hud" data-model="hud">
+    <div class="badge" data-if="badgeVisible">
+        <div class="num">{{stationNum}}</div>
+        <div class="name">{{stationTitle}}</div>
+    </div>
+    <div class="info" data-if="infoVisible">
+        <h1>{{infoTitle}}</h1>
+        <div class="desc">{{infoDesc}}</div>
+        <div class="keys">{{infoHints}}</div>
+        <div class="more" data-if="infoGuide != ''">Подробнее: {{infoGuide}}</div>
+        <div class="close">[I] — скрыть / показать · [Esc] — меню</div>
+    </div>
+    <div class="crosshair" data-if="crosshair"/>
+    <div class="prompt" data-if="prompt != ''"><span>{{prompt}}</span></div>
+    <div class="toast" data-if="toast != ''"><span>{{toast}}</span></div>
+    <div class="saving" data-if="saving != ''"><span class="dot">●</span> {{saving}}</div>
+    <div class="fps" data-if="fps != ''">{{fps}}</div>
+    <div class="caption" data-if="captionVisible">
+        <div class="cstep">{{captionStep}}</div>
+        <div class="ctitle">{{captionTitle}}</div>
+        <div class="ctext">{{captionText}}</div>
+    </div>
+</body>
+</rml>

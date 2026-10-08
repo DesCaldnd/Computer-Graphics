@@ -2,10 +2,12 @@
 #include "lua_runtime.hpp"
 
 #include <oxwald/core/assert.hpp>
+#include <oxwald/core/cvar.hpp>
 #include <oxwald/script/script_events.hpp>
 #include <oxwald/script/script_instance.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -17,6 +19,9 @@ namespace {
 // Raw C function: builds the message in a luaL_Buffer so no C++ object is alive if tostring raises.
 template <log::Level kLevel>
 int luaLog(lua_State* L) {
+    if (kLevel < log::minLevel()) {
+        return 0;
+    }
     const int n = lua_gettop(L);
     luaL_Buffer b;
     luaL_buffinit(L, &b);
@@ -164,6 +169,8 @@ ScriptVM::ScriptVM(ScriptVMConfig config)
     m_events = std::make_unique<ScriptEventBus>(*this);
     m_scheduler = std::make_unique<Scheduler>(*this);
     m_apis = m_lua.create_table();
+    m_environments = m_lua.create_table();
+    m_environments[sol::metatable_key] = m_lua.create_table_with("__mode", "k");
 
     installBindings();
     installSandboxBuilder();
@@ -180,6 +187,7 @@ ScriptVM::~ScriptVM() {
     m_scheduler.reset();
     m_events.reset();
     m_apis = sol::table();
+    m_environments = sol::table();
     m_sandboxBuilder = sol::protected_function();
     m_readonly = sol::protected_function();
     m_traceback = sol::reference();
@@ -206,6 +214,57 @@ void ScriptVM::installBindings() {
         api["info"] = &luaLog<log::Level::Info>;
         api["warn"] = &luaLog<log::Level::Warn>;
         api["error"] = &luaLog<log::Level::Error>;
+    });
+    // Console variables: cvar.get("r.Bloom"), cvar.set("r.Bloom", false), cvar.getString / exists / reset /
+    // description. Changes go through the registry with CVarSource::Console (read-only and cheat flags apply, and
+    // the runtime re-applies graphics settings for r.* cvars like for console input).
+    bindApi("cvar", [](sol::state_view, sol::table& api) {
+        api["get"] = [](sol::this_state ts, const std::string& name) -> sol::object {
+            sol::state_view lua(ts);
+            const ICVar* c = CVarRegistry::instance().find(name);
+            if (!c) {
+                return sol::make_object(lua, sol::lua_nil);
+            }
+            const nlohmann::json j = c->toJson();
+            switch (c->type()) {
+            case CVarType::Bool: return sol::make_object(lua, j.get<bool>());
+            case CVarType::Int: return sol::make_object(lua, j.get<i64>());
+            case CVarType::Float: return sol::make_object(lua, j.get<f64>());
+            case CVarType::String: return sol::make_object(lua, j.get<std::string>());
+            }
+            return sol::make_object(lua, sol::lua_nil);
+        };
+        api["getString"] = [](const std::string& name) -> sol::optional<std::string> {
+            const ICVar* c = CVarRegistry::instance().find(name);
+            return c ? sol::optional<std::string>(c->toString()) : sol::nullopt;
+        };
+        api["set"] = [](const std::string& name, const sol::object& value) -> bool {
+            std::string text;
+            switch (value.get_type()) {
+            case sol::type::boolean: text = value.as<bool>() ? "true" : "false"; break;
+            case sol::type::number: {
+                const f64 d = value.as<f64>();
+                text = (std::floor(d) == d && std::abs(d) < 1e15) ? std::to_string(static_cast<i64>(d))
+                                                                   : std::format("{}", d);
+                break;
+            }
+            case sol::type::string: text = value.as<std::string>(); break;
+            default: return false;
+            }
+            return CVarRegistry::instance().set(name, text, CVarSource::Console);
+        };
+        api["exists"] = [](const std::string& name) { return CVarRegistry::instance().find(name) != nullptr; };
+        api["reset"] = [](const std::string& name) {
+            ICVar* c = CVarRegistry::instance().find(name);
+            if (c) {
+                c->reset(CVarSource::Console);
+            }
+            return c != nullptr;
+        };
+        api["description"] = [](const std::string& name) -> sol::optional<std::string> {
+            const ICVar* c = CVarRegistry::instance().find(name);
+            return c ? sol::optional<std::string>(c->description()) : sol::nullopt;
+        };
     });
 }
 
@@ -304,6 +363,7 @@ ScriptResult ScriptVM::runFile(const std::filesystem::path& path, const sol::env
 sol::environment ScriptVM::createEnvironment(u64 owner) {
     sol::environment env(m_lua, sol::create);
     populateEnvironment(env, owner);
+    m_environments[env] = true; // weak keys: lets bindApi() reach it while it lives
     return env;
 }
 
@@ -363,14 +423,24 @@ void ScriptVM::bindApi(std::string_view name, const ApiBuilder& builder) {
         return;
     }
     const std::string key(name);
+    const bool rebinding = hasApi(key);
     m_apis[key] = api;
-    // Environments created earlier get the API too.
-    for (auto& [instance, owner] : m_instances) {
-        if (instance->m_env.valid()) {
-            ScriptResult r = call(m_readonly, "bindApi", api, key);
-            if (r.ok) {
-                instance->m_env[key] = r.value;
-            }
+    // Every live sandbox created earlier (instances, modules, raw createEnvironment() users) gets the API too. A
+    // global the script defined itself under that name is kept unless it is the previous version of this API.
+    ScriptResult wrapped = call(m_readonly, "bindApi", api, key);
+    if (!wrapped.ok) {
+        return;
+    }
+    std::vector<sol::table> envs;
+    for (const auto& [env, alive] : m_environments) {
+        if (env.get_type() == sol::type::table) {
+            envs.push_back(env.as<sol::table>());
+        }
+    }
+    for (sol::table& env : envs) {
+        const sol::object existing = env.raw_get<sol::object>(key);
+        if (rebinding || !existing.valid() || existing.get_type() == sol::type::lua_nil) {
+            env.raw_set(key, wrapped.value);
         }
     }
 }

@@ -1,11 +1,14 @@
 #include <oxwald/audio/audio_engine.hpp>
+#include <oxwald/core/vfs.hpp>
 
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 using namespace ox;
 using namespace ox::audio;
@@ -536,4 +539,52 @@ TEST_F(AudioTest, DebugDrawEmitsLines) {
     int lines = 0;
     engine.debugDraw([&](glm::vec3, glm::vec3, glm::vec4) { ++lines; });
     EXPECT_GT(lines, 60);
+}
+
+namespace {
+// In-memory mount (like a pak archive): no native path, so the VFS overload has to decode from memory.
+class BytesMount final : public IMountSource {
+public:
+    explicit BytesMount(std::vector<std::byte> file) : m_file(std::move(file)) {}
+    bool exists(std::string_view rel) const override { return rel == "tone.wav"; }
+    Result<std::vector<std::byte>> read(std::string_view rel) const override {
+        if (rel != "tone.wav") return makeError("missing {}", rel);
+        return m_file;
+    }
+
+private:
+    std::vector<std::byte> m_file;
+};
+} // namespace
+
+TEST_F(AudioTest, LoadSoundThroughVfs) {
+    const auto dir = std::filesystem::temp_directory_path() / "ox_audio_vfs_test";
+    std::filesystem::create_directories(dir);
+    std::vector<f32> tone(kRate / 4);
+    for (usize i = 0; i < tone.size(); ++i) {
+        tone[i] = 0.5f * std::sin(6.2831853f * 440.f * static_cast<f32>(i) / kRate);
+    }
+    writeWav16(dir / "tone.wav", tone, kRate);
+    std::ifstream in(dir / "tone.wav", std::ios::binary);
+    std::vector<char> raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<std::byte> bytes(raw.size());
+    std::memcpy(bytes.data(), raw.data(), raw.size());
+
+    Vfs vfs;
+    vfs.mount("loose", std::make_unique<DirectoryMount>(dir, false));
+    vfs.mount("pak", std::make_unique<BytesMount>(bytes));
+    for (const char* uri : {"loose://tone.wav", "pak://tone.wav"}) {
+        for (LoadMode mode : {LoadMode::Decode, LoadMode::Stream}) {
+            const SoundId id = engine.loadSound(vfs, uri, mode);
+            ASSERT_TRUE(id.valid()) << uri;
+            EXPECT_NEAR(engine.soundDuration(id), 0.25f, 1e-3f) << uri;
+            const SoundHandle h = engine.play(id, {});
+            ASSERT_TRUE(h.valid());
+            auto buf = engine.renderSeconds(0.4f, 256);
+            EXPECT_NEAR(rms(buf, 0.05f, 0.2f), 0.5 / std::sqrt(2.0), 0.03) << uri;
+            engine.unloadSound(id);
+        }
+    }
+    EXPECT_FALSE(engine.loadSound(vfs, "pak://missing.wav").valid());
+    std::filesystem::remove_all(dir);
 }

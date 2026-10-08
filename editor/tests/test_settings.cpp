@@ -53,17 +53,18 @@ private Q_SLOTS:
         QVERIFY(sw);
         sw->overallControl()->button(0)->click(); // Low
         QCOMPARE(scalability::overallLevel(), QualityLevel::Low);
-        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Shadows.Resolution")->get(), 512);
-        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Textures.MaxAnisotropy")->get(), 2);
+        QVERIFY(CVarRegistry::instance().findAs<int>("r.Shadows.CSM.Resolution"));
+        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Shadows.CSM.Resolution")->get(), 1024);
+        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Textures.Anisotropy")->get(), 2);
         QCOMPARE(sw->groupControl(Scalability::Shadows)->current(), 0);
         // group override -> overall becomes Custom
         sw->groupControl(Scalability::Shadows)->button(3)->click();
-        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Shadows.Resolution")->get(), 4096);
+        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Shadows.CSM.Resolution")->get(), 4096);
         QCOMPARE(scalability::overallLevel(), QualityLevel::Custom);
         QCOMPARE(sw->overallControl()->current(), -1);
         // changes are undoable inside the dialog and Revert restores the opening state
         dlg.undoStack().undo();
-        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Shadows.Resolution")->get(), 512);
+        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Shadows.CSM.Resolution")->get(), 1024);
         QVERIFY(dlg.isDirty());
         dlg.revertButton()->click();
         QCOMPARE(scalability::overallLevel(), QualityLevel::High);
@@ -215,9 +216,9 @@ private Q_SLOTS:
 
     void consoleExecutesCVars() {
         ConsolePanel console(ctx.get());
-        console.execute(QStringLiteral("r.Shadows.Resolution 1024"));
-        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Shadows.Resolution")->get(), 1024);
-        const QString out = console.execute(QStringLiteral("r.Shadows.Resolution"));
+        console.execute(QStringLiteral("r.Shadows.CSM.Resolution 1024"));
+        QCOMPARE(CVarRegistry::instance().findAs<int>("r.Shadows.CSM.Resolution")->get(), 1024);
+        const QString out = console.execute(QStringLiteral("r.Shadows.CSM.Resolution"));
         QVERIFY(out.contains(QStringLiteral("1024")));
         QCOMPARE(console.history().size(), 2);
         console.execute(QStringLiteral("does.not.exist 1"));

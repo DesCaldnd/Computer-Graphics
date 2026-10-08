@@ -13,8 +13,12 @@
 #include <oxwald/core/uuid.hpp>
 #include <oxwald/render/renderer.hpp>
 
+#include <functional>
 #include <optional>
 #include <span>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace ox {
 class World;
@@ -51,15 +55,21 @@ public:
     // Records into `cmd` (the caller's frame on the graphics queue) targeting `target` (e.g. the acquired swapchain
     // image). The caller owns Device::beginFrame/endFrame and the submit.
     void render(const EditorViewportFrame& frame, rhi::TextureHandle target, rhi::CommandList& cmd);
-    // Offscreen frame with its own device frame + submit (thumbnails, tests). Returns RGBA8 pixels.
+    // Offscreen frame with its own device frame + submit (thumbnails, tests). Returns RGBA8 pixels. Honours the
+    // frame's grid/debugDraw/selectionOutline flags like render().
     std::vector<u8> renderToImage(const EditorViewportFrame& frame, u32 width, u32 height);
     // Synchronous ID-buffer pick at an output pixel of a viewport of `viewportSize`. Renders one offscreen frame
     // (call outside the editor's device frame). nullopt = nothing under the cursor.
     std::optional<Uuid> pick(const EditorViewportFrame& frame, Extent2D viewportSize, glm::ivec2 pixel);
     [[nodiscard]] const RenderStats& stats() const { return m_renderer->stats(); }
+    // Baked probe / irradiance volume files (reflections::installBakedData) for the scenes this viewport shows,
+    // e.g. reading <project>/Baked/<file>. resetBakedData() re-reads them (after a bake or project switch).
+    void setBakedDataReader(std::function<std::optional<std::vector<u8>>(const std::string& fileName)> reader);
+    void resetBakedData() { m_bakedAttempted.clear(); }
 
 private:
     void buildSnapshot(const EditorViewportFrame& frame);
+    void applyViewFlags(const EditorViewportFrame& frame);
     RenderSettings settingsFor(const EditorViewportFrame& frame) const;
     rhi::TextureHandle offscreen(u32 width, u32 height);
 
@@ -68,6 +78,8 @@ private:
     ViewId m_view = 0;
     RenderSnapshot m_snapshot;
     rhi::TextureHandle m_offscreen;
+    std::function<std::optional<std::vector<u8>>(const std::string&)> m_bakedReader;
+    std::unordered_set<Uuid> m_bakedAttempted;
 };
 
 } // namespace ox::render

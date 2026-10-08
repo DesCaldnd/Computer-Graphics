@@ -172,6 +172,10 @@ compute → vertex-attribute-read barrier. The test `AnimShaders.SkinningCompute
 the shader with shaderc, or with a `glslc`/`glslangValidator` found at configure time. If neither is
 available, the test skips.
 
+`Animator(std::shared_ptr<const Skeleton>, controller)` shares ownership of the skeleton (gameplay uses it, so
+asset-cache eviction/hot reload cannot leave a dangling pointer); the `const Skeleton&` constructor stays for
+stack-owned skeletons (non-owning).
+
 ## Known limits / TODO
 
 - Assimp does not expose glTF cubic-spline tangents, so imported cubic tracks arrive as assimp's resampled

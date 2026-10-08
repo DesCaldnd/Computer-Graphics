@@ -10,7 +10,7 @@ public API `<oxwald/render/features/postprocess/postprocess.hpp>`, component
 | Point | Feature (order) | What |
 | --- | --- | --- |
 | PreDepth | AutoExposure | pre-exposure hook: `VIEW.preExposure` = GPU exposure of 3 frames ago (host-visible ring) |
-| BeforePostProcess | AutoExposure (-100) | 128-bin centre-weighted log-luminance histogram → percentile average → EV100 adaptation → `Exposure` (R32F 1×1) |
+| BeforePostProcess | AutoExposure (-100) | 128-bin centre-weighted log-luminance histogram → average between the 50th and 90th percentile (volume-overridable) → middle-grey calibration (the metered average lands on 18 %, −0.79 EV vs the plain K = 12.5 / saturation formulas) → EV100 adaptation → `Exposure` (R32F 1×1) |
 | BeforePostProcess | TAA \| TAAU \| DLSS (0) | TAA at render res; temporal upscalers output **output resolution** here, so post runs at output res |
 | PostProcess | DepthOfField (200), MotionBlur (300), Bloom (400) | work at whatever resolution `SceneColorHDR` has; Depth/Velocity sampled by uv |
 | Upscale | FSR1 (EASU + RCAS) | spatial, after post at render res; TAAU/DLSS only reserve the slot (no bilinear resample) |
@@ -118,9 +118,10 @@ gather 0.03, composite 0.19), motion blur ≈0.22 (tiles 0.06, gather 0.15), HDR
 
 * DLSS is compile-checked but untested at runtime here (no NVIDIA GPU on macOS); the jitter sign follows UE's
   convention and should be checked once with the NGX debug overlay on an RTX machine. DLSS frame generation / ray
-  reconstruction are not integrated. The NGX runtime libraries (`OX_DLSS_RUNTIME_FILES`) still need deploying next to
-  executables on Windows/Linux.
-* `CameraComponent` has no focus distance / focal length: DoF takes them from volumes (scene module could add them).
+  reconstruction are not integrated. The NGX runtime libraries (`OX_DLSS_RUNTIME_FILES`) are deployed next to
+  every executable by `ox_deploy_vulkan_runtime` (untested here: no Windows/Linux machine).
+* DoF base values come from the view's `CameraComponent` (`focusDistance`, `focalLength`, `aperture`); volumes with
+  `overrideDepthOfField` blend over them (`resolvePostProcessSettings(..., camera)`).
 * TAA disocclusion uses velocity differences (no previous-depth reprojection); TAAU keeps sub-pixel wires only
   partially at 50 %. Transparent / particle velocities are not written (translucency should provide a reactive mask).
 * Bloom lens dirt and user LUT textures are taken from the resource cache only once loaded (nothing while loading).

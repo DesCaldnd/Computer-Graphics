@@ -429,12 +429,15 @@ void Renderer::renderView(const ViewRenderRequest& request) {
     const u64 compilesBefore = graph.compileCount();
     m.buildView(fs, request, output, {td.width, td.height});
     m.commit(fs);
+    // PassTiming::name = "<view>/<pass>" (RenderStats aggregates every view of the frame).
+    const std::string timingPrefix = view->desc().name + "/";
     if (request.recordInto) {
-        graph.execute(*request.recordInto);
+        graph.execute(*request.recordInto, timingPrefix);
     } else {
         rhi::RGExecuteOptions eo;
         eo.swapchain = request.target.swapchain;
         eo.timestamps = fs.settings.gpuTimings;
+        eo.timestampPrefix = timingPrefix;
         graph.execute(dev, eo);
     }
     m.sceneUploaded = true;
@@ -515,6 +518,7 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         g.position = sl.position;
         g.sourceRadius = glm::radians(sl.light.sourceRadius);
         g.entityId = sl.entityId;
+        g.volumetric = sl.light.volumetric ? std::max(sl.light.volumetricIntensity, 0.0f) : 0.0f;
         gpuIndex[i] = i32(fs.lights.size());
         fs.lights.push_back(g);
     }
@@ -546,6 +550,7 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         g.spotScale = 1.0f / std::max(cosInner - cosOuter, 1e-4f);
         g.spotOffset = -cosOuter * g.spotScale;
         g.entityId = sl.entityId;
+        g.volumetric = sl.light.volumetric ? std::max(sl.light.volumetricIntensity, 0.0f) : 0.0f;
         gpuIndex[i] = i32(fs.lights.size());
         fs.lights.push_back(g);
     }
@@ -879,10 +884,16 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
     if (entity.valid()) {
         for (PickRequest& p : vi.picks) {
             if (p.recorded) continue;
-            const u32 rx = std::min(u32(f32(p.x) * f32(re.width) / f32(outputExtent.width)), re.width - 1);
-            const u32 ry = std::min(u32(f32(p.y) * f32(re.height) / f32(outputExtent.height)), re.height - 1);
-            const u32 rw = std::clamp(u32(std::ceil(f32(p.w) * f32(re.width) / f32(outputExtent.width))), 1u, re.width - rx);
-            const u32 rh = std::clamp(u32(std::ceil(f32(p.h) * f32(re.height) / f32(outputExtent.height))), 1u, re.height - ry);
+            // Output → render resolution. Clamp in floating point before converting: rectangles may extend past the
+            // view (e.g. "whole view" requests with huge sizes) and float → u32 overflow is undefined behaviour.
+            auto toRender = [](u32 v, u32 render, u32 output, f64 lo, f64 hi, bool roundUp) {
+                const f64 scaled = f64(v) * f64(render) / f64(std::max(output, 1u));
+                return u32(std::clamp(roundUp ? std::ceil(scaled) : scaled, lo, hi));
+            };
+            const u32 rx = toRender(p.x, re.width, outputExtent.width, 0.0, f64(re.width - 1), false);
+            const u32 ry = toRender(p.y, re.height, outputExtent.height, 0.0, f64(re.height - 1), false);
+            const u32 rw = toRender(p.w, re.width, outputExtent.width, 1.0, f64(re.width - rx), true);
+            const u32 rh = toRender(p.h, re.height, outputExtent.height, 1.0, f64(re.height - ry), true);
             p.result.x = rx, p.result.y = ry, p.result.width = rw, p.result.height = rh;
             p.readback = dev.createBuffer({u64(rw) * rh * 4, rhi::BufferUsage::Storage, rhi::MemoryUsage::Readback,
                                            "render.pickReadback"});

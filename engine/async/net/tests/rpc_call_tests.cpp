@@ -49,3 +49,25 @@ TEST(AsyncNetRpc, RequestResponseWithTimeout) {
     slow.failAll("disconnected");
     EXPECT_EQ(slow.pending(), 0u);
 }
+
+TEST(AsyncNetRpc, TimedOutRequestCanBeCancelledIndividually) {
+    MemoryHarness h; // public harness (oxwald/net/net_harness.hpp)
+    h.server.rpcs().bind("math.slow", [](PeerId, u32, int) { /* never replies */ });
+    ASSERT_TRUE(h.startAndConnect());
+    RpcCall<int, int> slow(h.client, "math.slow");
+    u32 first = 0, second = 0;
+    Future<int> a = slow.call(first, 1);
+    Future<int> b = slow.call(second, 2);
+    ASSERT_NE(first, 0u);
+    ASSERT_NE(first, second);
+    EXPECT_EQ(slow.pending(), 2u);
+    h.run(0.5); // the server never answers: "time out" the first one
+    EXPECT_TRUE(slow.cancel(first, "timed out"));
+    EXPECT_FALSE(slow.cancel(first)) << "already cancelled";
+    EXPECT_EQ(slow.pending(), 1u) << "only the cancelled request is forgotten";
+    ASSERT_TRUE(a.isReady());
+    EXPECT_TRUE(a.hasError());
+    EXPECT_FALSE(b.isReady());
+    slow.failAll("shutdown");
+    EXPECT_TRUE(b.hasError());
+}

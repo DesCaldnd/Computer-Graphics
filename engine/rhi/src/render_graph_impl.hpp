@@ -68,7 +68,8 @@ struct RenderGraph::Impl {
     void compileFull(const RGCompileOptions& options);
     TextureHandle textureHandle(u32 id) const;
     BufferHandle bufferHandle(u32 id) const;
-    void recordPass(CommandList& cmd, Device& device, const RGPlannedPass& planned, bool timestamps);
+    void recordPass(CommandList& cmd, Device& device, const RGPlannedPass& planned, bool timestamps,
+                    std::string_view timestampPrefix = {});
 };
 
 } // namespace ox::rhi

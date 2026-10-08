@@ -4,6 +4,9 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace ox;
 
@@ -211,4 +214,32 @@ TEST_F(CVars, ScalabilityGroups) {
     EXPECT_EQ(sc::groupFromName("Foliage"), Scalability::Foliage);
     EXPECT_EQ(sc::levelFromName("Ultra"), QualityLevel::Ultra);
     sc::setOverall(QualityLevel::High);
+}
+
+TEST_F(CVars, DuplicateNameDifferingOnlyInCaseIsRejected) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    CVar<int> a("test.CaseDup", 1, "first");
+    EXPECT_DEATH({ CVar<int> b("TEST.casedup", 2, "second"); }, "registered twice");
+    EXPECT_DEATH({ ConsoleCommand c("Test.CaseDup", "clash", [](auto) { return std::string{}; }); }, "clashes with cvar");
+}
+
+TEST_F(CVars, ChangeListenerSeesEveryChangePath) {
+    CVar<int> c("test.Listened", 1, "listened");
+    std::vector<std::pair<std::string, CVarSource>> seen;
+    auto& reg = CVarRegistry::instance();
+    const usize id = reg.addChangeListener([&](ICVar& cv, CVarSource src) {
+        if (cv.name() == "test.Listened") seen.emplace_back(cv.toString(), src);
+    });
+    c.set(2);                                     // code
+    ASSERT_TRUE(reg.set("test.listened", "3"));   // registry set (console source by default)
+    ASSERT_TRUE(reg.execute("test.Listened 4"));  // console line
+    ASSERT_TRUE(reg.execute("test.Listened 4"));  // unchanged: no notification
+    reg.loadOverrides({{"test.Listened", 5}});    // config
+    reg.removeChangeListener(id);
+    c.set(6);
+    ASSERT_EQ(seen.size(), 4u);
+    EXPECT_EQ(seen[0], (std::pair<std::string, CVarSource>{"2", CVarSource::Code}));
+    EXPECT_EQ(seen[1], (std::pair<std::string, CVarSource>{"3", CVarSource::Console}));
+    EXPECT_EQ(seen[2], (std::pair<std::string, CVarSource>{"4", CVarSource::Console}));
+    EXPECT_EQ(seen[3], (std::pair<std::string, CVarSource>{"5", CVarSource::Config}));
 }

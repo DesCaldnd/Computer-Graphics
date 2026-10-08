@@ -27,6 +27,9 @@
 #include <string>
 #include <vector>
 
+namespace ox {
+struct CameraComponent;
+}
 namespace ox::rhi {
 class Device;
 struct DeviceDesc;
@@ -112,8 +115,10 @@ struct PostProcessVolumeSnapshot {
 [[nodiscard]] PostProcessSettings blendPostProcessVolumes(const PostProcessSettings& base,
                                                           std::span<const PostProcessVolumeSnapshot> volumes,
                                                           const glm::vec3& position);
-// Snapshot volumes (if any) blended over the cvar defaults for this camera.
+// Snapshot volumes (if any) blended over the cvar defaults for this camera. With `camera`, its depth of field
+// (CameraComponent::focusDistance/focalLength) is the base that DoF volumes override.
 [[nodiscard]] PostProcessSettings resolvePostProcessSettings(const RenderSnapshot& snapshot,
-                                                             const RenderSettings& settings, const glm::vec3& position);
+                                                             const RenderSettings& settings, const glm::vec3& position,
+                                                             const CameraComponent* camera = nullptr);
 
 } // namespace ox::render

@@ -257,5 +257,7 @@ streamer.debugDraw(debugLine, 0.f);
 * Hydraulic erosion is single-threaded (~0.3 s per 100k droplets on 129² — fine for tools, not runtime).
 * Moon accuracy ~0.3°; no nutation/aberration for the moon, no eclipses dimming.
 * Preetham is invalid for a sun below the horizon (clamped to 1°); twilight relies on the curves.
+* `~ChunkStreamer` cancels in-flight loads, waits for jobs, then calls `onUnload` (and `save`, synchronously) for
+  every Loaded chunk.
 * Streamer chunks are 2D (XZ); no vertical layers. Not yet bound to `core` jobs, reflection or ECS
   components (integration step).

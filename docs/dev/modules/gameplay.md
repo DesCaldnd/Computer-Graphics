@@ -99,6 +99,9 @@ API: `bodyOf/entityOf/characterOf`, `raycast` (-> entity), `overlapSphere`, `cou
 | `SkinnedMesh` | `mesh`, `materials`, `skinningMethod` (Linear/DualQuaternion), `gpuSkinning`, `castShadows`, `visible`; runtime (not reflected) `palette` (`model * inverseBind` per joint) + `paletteVersion` for the renderer. Uses the animator on the same entity or the nearest ancestor. |
 | `IK` | `chains[{type TwoBone/Aim, rootJoint, midJoint, endJoint, target (EntityRef), targetOffset, pole, poleOffset, aimAxis, weight, enabled}]` |
 
+Inline controller states can be 1D blend spaces: `blendParameter` (float parameter) + `blendSamples[{clip, position}]`
+replace `clip` (e.g. idle 0 / walk 1.4 / run 4.5 m/s by "speed"; used by OxwaldShowcase's mannequins).
+
 Root motion: applied to the local transform (owner space), or converted to `CharacterController.desiredVelocity`
 (+ yaw on the entity) when the entity has one. Assets come from `IAnimationAssetProvider`. Events:
 `AnimationRuntime::onEvent` (`AnimationEvent{entity, name, payload, weight}`), scripts get `onAnimationEvent`.
@@ -181,7 +184,8 @@ order (bool, ints, floats — `Range`+`Step` select a quantised codec —, strin
 
 ## Lua entity API
 
-Every script instance has `self.entity`. Errors raised by the API (invalid entity, unknown field, wrong type) are Lua
+Every script instance has `self.entity`. Assigning a runtime (`NoSerialize`) field through a component proxy, e.g.
+`cc.desiredVelocity`/`cc.jump`, does not fire the change signal (it would recreate the physics character every step). Errors raised by the API (invalid entity, unknown field, wrong type) are Lua
 errors (logged with traceback, catchable with `pcall`).
 
 ```lua

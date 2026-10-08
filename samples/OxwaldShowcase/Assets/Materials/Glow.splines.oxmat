@@ -1,0 +1,55 @@
+{
+  "oxmat": 1,
+  "shadingModel": "Lit",
+  "blendMode": "Opaque",
+  "baseColor": [
+    0.060000002,
+    0.17999999,
+    0.16000001,
+    1.0
+  ],
+  "metallic": 0.0,
+  "roughness": 0.5,
+  "emissive": [
+    0.3,
+    0.9,
+    0.8
+  ],
+  "emissiveStrength": 10.0,
+  "normalStrength": 1.0,
+  "occlusionStrength": 1.0,
+  "heightScale": 0.0,
+  "albedoTexture": "00000000-0000-0000-0000-000000000000",
+  "normalTexture": "00000000-0000-0000-0000-000000000000",
+  "ormTexture": "00000000-0000-0000-0000-000000000000",
+  "emissiveTexture": "00000000-0000-0000-0000-000000000000",
+  "heightTexture": "00000000-0000-0000-0000-000000000000",
+  "alphaCutoff": 0.5,
+  "doubleSided": false,
+  "ior": 1.5,
+  "transmission": 0.0,
+  "thickness": 0.0,
+  "absorptionColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "absorptionDistance": 0.0,
+  "clearcoat": 0.0,
+  "clearcoatRoughness": 0.0,
+  "subsurface": 0.0,
+  "subsurfaceColor": [
+    1.0,
+    0.3,
+    0.2
+  ],
+  "uvTiling": [
+    1.0,
+    1.0
+  ],
+  "uvOffset": [
+    0.0,
+    0.0
+  ],
+  "renderQueueOffset": 0
+}

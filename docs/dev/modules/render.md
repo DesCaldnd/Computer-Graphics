@@ -144,16 +144,20 @@ from files hot-reload automatically.
 using namespace ox;
 using namespace ox::render;
 
-static CVar<float> cvAoRadius("r.AO.Radius", 0.5f, "AO radius (m)", Scalability::Effects, {0.3f, 0.5f, 0.5f, 0.8f});
-static CVar<bool> cvAo("r.AO", true, "Screen-space ambient occlusion");
+// Own names: r.AO.* belongs to the built-in AmbientOcclusion feature (registering a name twice asserts).
+static CVar<float> cvAoRadius("r.MyAO.Radius", 0.5f, "AO radius (m)", Scalability::Effects, {0.3f, 0.5f, 0.5f, 0.8f});
+static CVar<bool> cvAo("r.MyAO", true, "Screen-space ambient occlusion");
 
 class MyAoFeature final : public IRenderFeature {
 public:
     std::string_view name() const override { return "MyAO"; }
     InjectionMask injectionPoints() const override { return maskOf(InjectionPoint::Lighting); }
-    std::string_view exclusiveGroup() const override { return "AO"; }       // an RT AO would join this group
+    std::string_view exclusiveGroup() const override { return "AO"; }       // shared with the built-in GTAO/SSAO
+    // The built-in AmbientOcclusion feature has priority 0 in group "AO": with the default priority (also 0) this
+    // feature would never be selected while r.AO.Method > 0. Ray traced AO uses 100.
+    i32 priority() const override { return 10; }
     std::vector<std::string_view> provides() const override { return {res::kAO}; }
-    std::vector<std::string> cvarNames() const override { return {"r.AO", "r.AO.Radius"}; }
+    std::vector<std::string> cvarNames() const override { return {"r.MyAO", "r.MyAO.Radius"}; }
     bool isEnabled(const RenderSettings&, const rhi::DeviceCaps&) const override { return cvAo; }
 
     bool initialize(FeatureInitContext& ctx) override {
@@ -199,7 +203,7 @@ void registerMyAo() { registerFeatureFactory("MyAO", [] { return std::make_uniqu
 ```glsl
 // engine/shaders/render/myao/ao.comp
 #version 460
-#include <render/common/view.glsl>
+#include <render/common/scene.glsl>   // OX_RENDER_PUSH, VIEW (scene.glsl includes view.glsl)
 layout(local_size_x = 8, local_size_y = 8) in;
 OX_RENDER_PUSH(uint depth; uint normals; uint outAo; float radius;);
 void main() {
@@ -726,7 +730,9 @@ public helpers `<oxwald/render/features/gpu_driven/gpu_driven.hpp>`. Measurement
   GPU feedback pass; data comes from the CPU copy kept by the streamer.
 * **Async PSOs**: meshlet / mesh shader pipelines compile on the job system (`Device::create*PipelineAsync`) when
   `RendererDesc::jobs` is set; the instanced path is the placeholder until they are ready
-  (`RenderStats::pipelinesCompiling`). Persistent cache: `DeviceDesc::pipelineCachePath` (set it in the runtime).
+  (`RenderStats::pipelinesCompiling`). Persistent cache: `DeviceDesc::pipelineCachePath` (the runtime renderer uses
+  `user://cache/pipeline_cache.bin`, the editor its user data dir). `render::createRenderer()` also calls
+  `registerSceneTypes()` + `registerRenderTypes()` so scenes with render components load in the player.
 * **Stats**: `RenderStats::gpuCulling` (tested / frustum / occluded / visible, draws, triangles, average LOD, meshlets,
   shadow jobs; read back `latencyFrames` late), `indirectDrawCalls`, `indirectCommands`, `streaming`, `vram`
   (geometry, textures, gpu-driven buffers, transient targets), `parallelRecordedChunks`, async timings.

@@ -160,7 +160,10 @@ TEST(GuideUpscalers, ApplyRecommendedSettingsAndCVars) {
     const RenderSettings s = RenderSettings::fromCVars();
     EXPECT_EQ(s.upscaler, i32(UpscalerType::FSR1));
     EXPECT_EQ(s.upscalerQuality, i32(UpscalerQuality::Native));
-    EXPECT_FALSE(CVarRegistry::instance().set("r.Upscaler.Quality", "DLAA")) << "значение называется Native";
+    // DLAA — синоним Native (так значение называют меню и UserSettings); печатается всё равно Native.
+    CVarRegistry::instance().set("r.Upscaler.Quality", "Quality");
+    EXPECT_TRUE(CVarRegistry::instance().set("r.Upscaler.Quality", "DLAA"));
+    EXPECT_EQ(cvarText("r.Upscaler.Quality"), "Native");
 
     scalability::setGroup(Scalability::PostProcess, QualityLevel::Low);
     EXPECT_EQ(cvarText("r.MotionBlur"), "false");

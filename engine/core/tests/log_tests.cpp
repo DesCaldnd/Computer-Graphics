@@ -25,3 +25,21 @@ TEST(Log, MinLevelFilters) {
     ox::log::removeSink(id);
     EXPECT_EQ(count, 1);
 }
+
+TEST(Log, StderrSinkCanBeDisabled) {
+    ASSERT_TRUE(ox::log::stderrSinkEnabled());
+    int count = 0;
+    const int id = ox::log::addSink([&](const ox::log::Record&) { ++count; });
+    ox::log::setStderrSinkEnabled(false);
+    testing::internal::CaptureStderr();
+    OX_LOG_WARN("test", "only in the user sink");
+    const std::string err = testing::internal::GetCapturedStderr();
+    ox::log::setStderrSinkEnabled(true);
+    ox::log::removeSink(id);
+    EXPECT_EQ(count, 1);
+    EXPECT_EQ(err.find("only in the user sink"), std::string::npos);
+
+    testing::internal::CaptureStderr();
+    OX_LOG_WARN("test", "back on stderr");
+    EXPECT_NE(testing::internal::GetCapturedStderr().find("back on stderr"), std::string::npos);
+}

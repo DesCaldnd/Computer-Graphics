@@ -127,6 +127,16 @@ Cvars registered after a level was chosen start at that level.
 `__tsan_release/__tsan_acquire` (submit -> run -> completion/wait/waitAll/shutdown; compiled only under TSan).
 TSan runs need no suppressions (`tools/sanitizers/tsan.supp` documents this).
 
+## Polish additions (0.1.0)
+- `CVarRegistry::addChangeListener(fn(ICVar&, CVarSource))` / `removeChangeListener(id)`: notified after any
+  registered cvar changes (code, console line, `set()`, config, scalability), on the changing thread. The runtime uses
+  it to re-apply graphics settings for `r.*`/`sg.*` changes with `CVarSource::Console`.
+- Duplicate cvar/command names are detected case-insensitively (lookups are case-insensitive).
+- `log::setStderrSinkEnabled(false)` disables the built-in stderr output (Fatal is always printed); `log::write` is
+  unfiltered, `OX_LOG_*` / `print` honour `minLevel()`.
+- `serial::decodeBinary(bytes, BinaryDecodeOptions{{"header"}})` decodes only the listed root fields (the rest are
+  skipped by record size) — used for save-slot listings.
+
 ## Limits / TODO
 - JSON cannot represent NaN payload bits (NaN/±inf are written as strings `"nan"`, `"inf"`); object keys `"$type"` are reserved.
 - Arrays in the value tree are homogeneous; heterogeneous hand-written JSON arrays are rejected.

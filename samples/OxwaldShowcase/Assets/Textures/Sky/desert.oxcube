@@ -1,0 +1,10 @@
+{
+  "faces": [
+    "desert_px.png",
+    "desert_nx.png",
+    "desert_py.png",
+    "desert_ny.png",
+    "desert_pz.png",
+    "desert_nz.png"
+  ]
+}

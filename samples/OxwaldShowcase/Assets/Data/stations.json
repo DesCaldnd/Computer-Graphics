@@ -1,0 +1,93 @@
+{
+  "hub": {
+    "id": "hub",
+    "title": "Хаб",
+    "scene": "project://Assets/Scenes/Hub.oxscene"
+  },
+  "stations": [
+    {
+      "id": "lighting",
+      "title": "Свет и тени",
+      "scene": "project://Assets/Scenes/Stations/01_Lighting.oxscene",
+      "guide": "docs/guide/20-lighting-shadows.md"
+    },
+    {
+      "id": "materials",
+      "title": "Материалы",
+      "scene": "project://Assets/Scenes/Stations/02_Materials.oxscene",
+      "guide": "docs/guide/19-materials.md"
+    },
+    {
+      "id": "reflections",
+      "title": "Отражения и GI",
+      "scene": "project://Assets/Scenes/Stations/03_Reflections.oxscene",
+      "guide": "docs/guide/21-reflections-gi.md"
+    },
+    {
+      "id": "volumetrics",
+      "title": "Волюметрика",
+      "scene": "project://Assets/Scenes/Stations/04_Volumetrics.oxscene",
+      "guide": "docs/guide/22-volumetrics.md"
+    },
+    {
+      "id": "water",
+      "title": "Вода и частицы",
+      "scene": "project://Assets/Scenes/Stations/05_Water.oxscene",
+      "guide": "docs/guide/23-transparency-water-particles.md"
+    },
+    {
+      "id": "world",
+      "title": "Открытый мир",
+      "scene": "project://Assets/Scenes/Stations/06_World.oxscene",
+      "guide": "docs/guide/16-world.md"
+    },
+    {
+      "id": "physics",
+      "title": "Физика",
+      "scene": "project://Assets/Scenes/Stations/07_Physics.oxscene",
+      "guide": "docs/guide/09-physics.md"
+    },
+    {
+      "id": "animation",
+      "title": "Анимация",
+      "scene": "project://Assets/Scenes/Stations/08_Animation.oxscene",
+      "guide": "docs/guide/10-animation.md"
+    },
+    {
+      "id": "ai",
+      "title": "Искусственный интеллект",
+      "scene": "project://Assets/Scenes/Stations/09_AI.oxscene",
+      "guide": "docs/guide/13-ai.md"
+    },
+    {
+      "id": "splines",
+      "title": "Сплайны и корутины",
+      "scene": "project://Assets/Scenes/Stations/10_Splines.oxscene",
+      "guide": "docs/guide/08-coroutines.md"
+    },
+    {
+      "id": "audio",
+      "title": "Звук",
+      "scene": "project://Assets/Scenes/Stations/11_Audio.oxscene",
+      "guide": "docs/guide/12-audio.md"
+    },
+    {
+      "id": "network",
+      "title": "Сеть",
+      "scene": "project://Assets/Scenes/Stations/12_Network.oxscene",
+      "guide": "docs/guide/14-networking.md"
+    },
+    {
+      "id": "rtx",
+      "title": "RTX и апскейлеры",
+      "scene": "project://Assets/Scenes/Stations/13_RTX.oxscene",
+      "guide": "docs/guide/24-ray-tracing.md"
+    },
+    {
+      "id": "saves",
+      "title": "Сохранения",
+      "scene": "project://Assets/Scenes/Stations/14_SaveGames.oxscene",
+      "guide": "docs/guide/07-savegames.md"
+    }
+  ]
+}

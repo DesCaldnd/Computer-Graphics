@@ -32,12 +32,21 @@ struct AnimatorParameterDesc {
     f32 defaultValue = 0.f;
 };
 
+struct AnimatorBlendSample {
+    Uuid clip;         // AnimationClip asset
+    f32 position = 0.f; // value of the blend parameter where this clip has full weight
+};
+
 struct AnimatorStateDesc {
     std::string name;
     Uuid clip; // AnimationClip asset
     f32 speed = 1.f;
     std::string speedParameter; // optional float parameter multiplying speed
     bool loop = true;
+    // 1D blend space (e.g. idle/walk/run by speed): when `blendParameter` names a float parameter and `blendSamples`
+    // is not empty, the state plays the samples blended by that parameter instead of `clip`.
+    std::string blendParameter;
+    std::vector<AnimatorBlendSample> blendSamples;
 };
 
 struct AnimatorTransitionDesc {

@@ -2,6 +2,11 @@
 //
 //   oxpack <project dir> -o Game.oxpak [--scene <asset path>]... [--include <path|dir/|uuid>]... [--all]
 //          [--no-compress] [--level <zstd level>] [--align <bytes>] [--verify] [--quiet]
+//          [--loose-ext <.ext>]... [--no-loose] [--patch <base.oxpak>]...
+//
+// Loose files (.rml, .rcss, .json by default; --loose-ext adds more, --no-loose disables) under Assets/ that no
+// importer handles are stored verbatim (project://Assets/... in the cooked game). --patch writes a patch pak with
+// only the entries that differ from the given base pak(s); run it with OxwaldPlayer --pak base --patch-pak patch.
 //
 // Without --scene/--include (and without <project>/pack.json) every asset is packed. Assets reachable from
 // the startup scenes (dependencies: prefabs, meshes, materials, textures, ...) are always included.
@@ -19,7 +24,8 @@ namespace {
 void usage() {
     std::fprintf(stderr,
                  "usage: oxpack <project dir> -o <out.oxpak> [--scene <path>]... [--include <path>]... [--all]\n"
-                 "              [--no-compress] [--level <n>] [--align <bytes>] [--verify] [--quiet]\n");
+                 "              [--no-compress] [--level <n>] [--align <bytes>] [--verify] [--quiet]\n"
+                 "              [--loose-ext <.ext>]... [--no-loose] [--patch <base.oxpak>]...\n");
 }
 
 std::string human(u64 bytes) {
@@ -45,6 +51,9 @@ int main(int argc, char** argv) {
         else if (arg == "--no-compress") options.compress = false;
         else if (arg == "--level" && i + 1 < argc) options.compressionLevel = std::atoi(next());
         else if (arg == "--align" && i + 1 < argc) options.alignment = u32(std::max(1, std::atoi(next())));
+        else if (arg == "--loose-ext" && i + 1 < argc) options.looseFileExtensions.push_back(next());
+        else if (arg == "--no-loose") options.looseFileExtensions.clear();
+        else if (arg == "--patch" && i + 1 < argc) options.patchBase.emplace_back(next());
         else if (arg == "--verify") verify = true;
         else if (arg == "--quiet") quiet = true;
         else if (arg == "-h" || arg == "--help") {
@@ -80,6 +89,10 @@ int main(int argc, char** argv) {
                         human(it.storedSize).c_str(), it.path.c_str());
         }
     }
+    if (!quiet) {
+        for (const auto& f : report->looseFiles) std::printf("%-14s %12s %12s  %s\n", "loose", "", "", f.c_str());
+    }
+    if (!options.patchBase.empty()) std::printf("patch: %zu unchanged entries left out\n", report->unchangedSkipped);
     std::printf("%zu assets, %s -> %s stored, pak %s: %s\n", items.size(), human(report->totalSize).c_str(),
                 human(report->totalStored).c_str(), human(report->pakSize).c_str(), output.string().c_str());
     int rc = 0;

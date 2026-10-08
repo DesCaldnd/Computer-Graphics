@@ -1,0 +1,24 @@
+{
+  "formatVersion": 1,
+  "uuid": "057451b7-c98a-858b-96a9-8bcfb11d6664",
+  "importer": "texture",
+  "importerVersion": 1,
+  "settings": {
+    "type": "Color",
+    "srgb": true,
+    "maxSize": 2048,
+    "compression": "Default",
+    "generateMips": true,
+    "mipFilter": "Kaiser",
+    "preserveAlphaCoverage": false,
+    "alphaCutoff": 0.5,
+    "flipY": false,
+    "wrapU": "Repeat",
+    "wrapV": "Repeat",
+    "filter": "Linear",
+    "streamingPriority": 128,
+    "cubemap": "None",
+    "cubeFaceSize": 0,
+    "compressionQuality": 1
+  }
+}

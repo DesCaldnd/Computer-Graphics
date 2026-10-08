@@ -134,7 +134,7 @@ scheduler.attach(*playWorld, services);
 | `Camera` | `projection` (`Perspective`), `verticalFov` (60°), `orthographicSize` (5), `nearPlane` (0.1), `farPlane` (1000, ≤ 0 — бесконечность), `aperture` (16), `shutterSpeed` (1/125), `iso` (100), `exposureCompensation` (0), `primary` (`false`) | Рендер. `TimeOfDay` пишет `exposureCompensation` главной камеры. Камера — наблюдатель стриминга |
 | `Light` | `type` (`Point`), `color` (1), `intensity` (800: люксы для `Directional`, люмены для остальных), `range` (10 м), `innerConeAngle`/`outerConeAngle` (20°/30°), `areaSize`, `castShadows` (`true`), `shadowResolution` (0 — авто), `shadowBias` (0.0005), `shadowNormalBias` (0.02), `sourceRadius` (0), `volumetric` (`true`), `volumetricIntensity` (1) | Рендер ([глава 20](20-lighting-shadows.md)). `TimeOfDay` управляет солнцем |
 | `MeshRenderer` | `mesh`, `materials` (UUID), `castShadows`, `receiveShadows`, `visible` (`true`), `layerMask` (1) | Рендер; `NavMeshSurface.includeMeshes`; коллайдер `Mesh` |
-| `Environment` | `skybox`, `skyIntensity` (1), `sun` (`EntityRef`), `ambientIntensity` (1), `fogEnabled` (`false`), `fogColor`, `fogDensity` (0.01), `fogHeightFalloff` (0.2), `fogStartDistance` (0) | Рендер. `TimeOfDay` пишет туман и ambient |
+| `Environment` | `skybox`, `skyIntensity` (1), `ldrSkyLuminance` (0 = `r.Sky.LdrLuminance`), `sun` (`EntityRef`), `ambientIntensity` (1), `fogEnabled` (`false`), `fogColor`, `fogDensity` (0.01), `fogHeightFalloff` (0.2), `fogStartDistance` (0) | Рендер. `TimeOfDay` пишет туман и ambient |
 | `Tags` | `tags` | `Trigger.requiredTag`, Lua `hasTag` |
 | `Active` | `active` | Неактивные сущности пропускаются системами |
 

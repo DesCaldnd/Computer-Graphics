@@ -74,6 +74,10 @@ void registerSceneTypes() {
         .field("shutterSpeed", &CameraComponent::shutterSpeed, Range{0.00001, 30.0}, Tooltip{"Seconds"})
         .field("iso", &CameraComponent::iso, DisplayName{"ISO"}, Range{25.0, 102400.0})
         .field("exposureCompensation", &CameraComponent::exposureCompensation, Range{-10.0, 10.0})
+        .field("focusDistance", &CameraComponent::focusDistance, Category{"Depth of Field"}, Range{0.0, 100000.0},
+               Tooltip{"Distance in focus (metres); 0 disables depth of field from the camera"})
+        .field("focalLength", &CameraComponent::focalLength, Category{"Depth of Field"}, Range{0.0, 2000.0},
+               Tooltip{"Lens focal length (mm); 0 = derived from the vertical FOV on a full-frame sensor"})
         .field("primary", &CameraComponent::primary);
 
     OX_REFLECT_ENUM(LightType, "LightType")
@@ -114,6 +118,8 @@ void registerSceneTypes() {
         .attributes(Category{"Rendering"}, Meta{"icon", "globe"})
         .field("skybox", &EnvironmentComponent::skybox, AssetRef{"Texture"})
         .field("skyIntensity", &EnvironmentComponent::skyIntensity, Range{0.0, 100.0})
+        .field("ldrSkyLuminance", &EnvironmentComponent::ldrSkyLuminance, Range{0.0, 100000.0},
+               Tooltip{"cd/m² of a white texel of an 8-bit skybox; 0 = r.Sky.LdrLuminance"})
         .field("sun", &EnvironmentComponent::sun)
         .field("ambientIntensity", &EnvironmentComponent::ambientIntensity, Range{0.0, 100.0})
         .field("fogEnabled", &EnvironmentComponent::fogEnabled, Category{"Fog"})

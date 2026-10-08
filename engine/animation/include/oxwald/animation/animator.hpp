@@ -112,6 +112,9 @@ struct FiredEvent {
 // (IK) → computeSkinningMatrices.
 class Animator {
 public:
+    // Shares ownership of the skeleton (asset caches can drop or hot-reload theirs while animators live on).
+    Animator(std::shared_ptr<const Skeleton> skeleton, std::shared_ptr<const AnimatorController> controller);
+    // Non-owning: `skeleton` must outlive the animator (stack/test setups).
     Animator(const Skeleton& skeleton, std::shared_ptr<const AnimatorController> controller);
 
     // Parameters (by index or name; unknown names are logged once and ignored).
@@ -146,6 +149,8 @@ public:
     f32 layerWeight(u32 layer) const;
 
     const Skeleton& skeleton() const { return *m_skeleton; }
+    // Null owner for animators built with the non-owning constructor.
+    const std::shared_ptr<const Skeleton>& skeletonPtr() const { return m_skeleton; }
     const AnimatorController& controller() const { return *m_controller; }
 
 private:
@@ -178,7 +183,7 @@ private:
     void sampleState(const LayerDesc& layer, StateInstance& inst, Pose& out, usize scratchBase);
     Pose& scratch(usize index);
 
-    const Skeleton* m_skeleton;
+    std::shared_ptr<const Skeleton> m_skeleton; // aliasing (non-owning) for the reference constructor
     std::shared_ptr<const AnimatorController> m_controller;
     std::vector<f32> m_params;
     std::vector<LayerRuntime> m_layers;

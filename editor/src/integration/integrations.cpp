@@ -160,3 +160,17 @@ void uninstallIntegrations(EditorContext& ctx) {
 }
 
 } // namespace ox::editor
+
+namespace ox::editor {
+
+bool bakeLightingProbes(EditorContext& ctx, QString& message) {
+    (void)ctx;
+#if OX_EDITOR_HAS_RENDER
+    if (RenderIntegration* r = RenderIntegration::instance()) return r->bakeProbes(message);
+#endif
+    message = QObject::tr("Render module not linked");
+    return false;
+}
+
+} // namespace ox::editor
+

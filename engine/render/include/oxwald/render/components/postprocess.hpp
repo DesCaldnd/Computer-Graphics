@@ -25,8 +25,10 @@ struct PostProcessSettings {
     f32 maxEV100 = 20.0f;                 // brightest
     f32 adaptationSpeedUp = 3.0f;         // EV per second when the scene gets brighter
     f32 adaptationSpeedDown = 1.0f;       // EV per second when it gets darker
-    f32 histogramLowPercent = 70.0f;      // average the luminance histogram between these percentiles
-    f32 histogramHighPercent = 95.0f;
+    // Average the luminance histogram between these percentiles (the dark half — shadows, sky-less corners — and the
+    // brightest 10 % — sky, highlights — are ignored); the average is exposed as middle grey.
+    f32 histogramLowPercent = 50.0f;
+    f32 histogramHighPercent = 90.0f;
 
     // --- bloom (threshold-less, energy conserving) ---
     bool overrideBloom = false;

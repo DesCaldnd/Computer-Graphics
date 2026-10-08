@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -162,28 +163,56 @@ private:
 
 // ---- Entity template implementation -----------------------------------------------------------------------
 
+namespace detail {
+// Empty (tag) components have no per-entity storage in EnTT; accessors hand out this shared instance instead.
+template <class C>
+C& tagInstance() {
+    static C instance{};
+    return instance;
+}
+} // namespace detail
+
 template <class C, class... Args>
 C& Entity::add(Args&&... args) {
     OX_ASSERT(valid(), "add on invalid entity");
     OX_ASSERT(!m_world->m_registry.all_of<C>(m_handle), "entity already has this component");
-    return m_world->m_registry.emplace<C>(m_handle, std::forward<Args>(args)...);
+    if constexpr (std::is_empty_v<C>) {
+        m_world->m_registry.emplace<C>(m_handle, std::forward<Args>(args)...);
+        return detail::tagInstance<C>();
+    } else {
+        return m_world->m_registry.emplace<C>(m_handle, std::forward<Args>(args)...);
+    }
 }
 
 template <class C, class... Args>
 C& Entity::addOrReplace(Args&&... args) {
     OX_ASSERT(valid(), "addOrReplace on invalid entity");
-    return m_world->m_registry.emplace_or_replace<C>(m_handle, std::forward<Args>(args)...);
+    if constexpr (std::is_empty_v<C>) {
+        m_world->m_registry.emplace_or_replace<C>(m_handle, std::forward<Args>(args)...);
+        return detail::tagInstance<C>();
+    } else {
+        return m_world->m_registry.emplace_or_replace<C>(m_handle, std::forward<Args>(args)...);
+    }
 }
 
 template <class C>
 C& Entity::get() const {
     OX_ASSERT(valid(), "get on invalid entity");
-    return m_world->m_registry.get<C>(m_handle);
+    if constexpr (std::is_empty_v<C>) {
+        OX_ASSERT(m_world->m_registry.all_of<C>(m_handle), "entity has no such tag component");
+        return detail::tagInstance<C>();
+    } else {
+        return m_world->m_registry.get<C>(m_handle);
+    }
 }
 
 template <class C>
 C* Entity::tryGet() const {
-    return valid() ? m_world->m_registry.try_get<C>(m_handle) : nullptr;
+    if constexpr (std::is_empty_v<C>) {
+        return valid() && m_world->m_registry.all_of<C>(m_handle) ? &detail::tagInstance<C>() : nullptr;
+    } else {
+        return valid() ? m_world->m_registry.try_get<C>(m_handle) : nullptr;
+    }
 }
 
 template <class... C>

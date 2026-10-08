@@ -70,7 +70,7 @@ void main() {
 
     vec3 color;
     if ((m.flags & OX_MATERIAL_UNLIT) != 0u) {
-        color = s.baseColor / max(VIEW.exposure, 1e-12);
+        color = (s.baseColor + s.emissive) / max(VIEW.exposure, 1e-12); // display-relative like lit emissive
     } else {
         OxLightingInputs inputs;
         inputs.screenSpace = true;
@@ -80,6 +80,8 @@ void main() {
         inputs.reflections = pc.reflections;
         inputs.indirectDiffuse = pc.indirectDiffuse;
         inputs.receiveShadows = (instanceFlags & OX_INSTANCE_RECEIVE_SHADOWS) != 0u;
+        inputs.clearcoat = clamp(m.clearcoat, 0.0, 1.0);
+        inputs.clearcoatRoughness = m.clearcoatRoughness;
         OxLightingResult lit = oxEvaluateLighting(pc.view, pc.scene, s, gl_FragCoord.xy, viewDepth, inputs);
         // Emissive is display-relative: 1.0 = white at the current exposure.
         color = lit.direct + lit.indirect + s.emissive / max(VIEW.exposure, 1e-12);

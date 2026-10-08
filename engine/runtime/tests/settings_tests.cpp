@@ -268,3 +268,54 @@ TEST(Launch, ParseCommandLine) {
     EXPECT_FALSE(parseLaunchOptions(std::vector<std::string>{"--cvar", "novalue"}));
     EXPECT_FALSE(parseLaunchOptions(std::vector<std::string>{"--bogus"}));
 }
+
+TEST(Project, UnknownModuleTogglesAreReported) {
+    ProjectSettings s;
+    s.modules = {{"physics", true}, {"phyiscs", false}, {"net", false}, {"mygame", true}};
+    EXPECT_EQ(s.unknownModules(), (std::vector<std::string>{"mygame", "phyiscs"}));
+    const std::vector<std::string> registered = {"mygame"};
+    EXPECT_EQ(s.unknownModules(registered), std::vector<std::string>{"phyiscs"});
+    EXPECT_FALSE(s.moduleEnabled("net"));
+}
+
+TEST(Settings, FirstLaunchStartsFromProjectDefaults) {
+    test::TempDir dir;
+    Vfs vfs;
+    vfs.mount("user", std::make_unique<DirectoryMount>(dir.path(), true));
+    ProjectSettings project;
+    project.defaultQuality = "Low";
+    project.rendering.rayTracingIfSupported = true;
+    project.rendering.upscaler = "FSR1";
+    {
+        Settings settings(&vfs);
+        settings.setProject(project);
+        settings.applyProjectDefaults();
+        ASSERT_TRUE(settings.load());
+        EXPECT_FALSE(settings.hasUserFile());
+        settings.seedUserFromProject();
+        EXPECT_EQ(settings.user().graphics.quality, "Low");
+        EXPECT_TRUE(settings.user().graphics.rayTracing) << "rendering.rayTracingIfSupported";
+        EXPECT_EQ(settings.user().graphics.upscaler, "FSR1");
+        settings.user().graphics.quality = "Ultra"; // the player changes it
+        settings.user().graphics.rayTracing = false;
+        ASSERT_TRUE(settings.save());
+    }
+    Settings again(&vfs);
+    again.setProject(project);
+    again.applyProjectDefaults();
+    ASSERT_TRUE(again.load());
+    EXPECT_TRUE(again.hasUserFile()) << "second launch: the saved choice wins, no re-seeding/auto-detect";
+    EXPECT_EQ(again.user().graphics.quality, "Ultra");
+    EXPECT_FALSE(again.user().graphics.rayTracing);
+    scalability::setOverall(QualityLevel::High);
+}
+
+TEST(Settings, UpscalerQualityAcceptsDlaaAlias) {
+    CVar<int> q("test.UpscalerQualityAlias", 3, "quality",
+                CVarEnum{"UltraPerformance", "Performance", "Balanced", "Quality", "Native"}.alias("DLAA", 4));
+    ASSERT_TRUE(q.setFromString("DLAA", CVarSource::Config));
+    EXPECT_EQ(q.get(), 4);
+    EXPECT_EQ(q.toString(), "Native");
+    ASSERT_TRUE(q.setFromJson("dlaa", CVarSource::Config));
+    EXPECT_EQ(q.get(), 4);
+}

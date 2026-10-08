@@ -1,0 +1,10 @@
+{
+  "faces": [
+    "park_px.png",
+    "park_nx.png",
+    "park_py.png",
+    "park_ny.png",
+    "park_pz.png",
+    "park_nz.png"
+  ]
+}

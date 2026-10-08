@@ -72,6 +72,30 @@ public:
     virtual void onMissing() {}
 };
 
+class SaveGameSystem;
+
+// RAII registration from SaveGameSystem::registerSaveableScoped(): unregisters the section when destroyed (or
+// reset()). Safe when the SaveGameSystem is destroyed first. Keep it next to the ISaveable (e.g. as a member).
+class [[nodiscard]] SaveableRegistration {
+public:
+    SaveableRegistration() = default;
+    ~SaveableRegistration() { reset(); }
+    SaveableRegistration(SaveableRegistration&& other) noexcept;
+    SaveableRegistration& operator=(SaveableRegistration&& other) noexcept;
+    SaveableRegistration(const SaveableRegistration&) = delete;
+    SaveableRegistration& operator=(const SaveableRegistration&) = delete;
+
+    void reset();
+    [[nodiscard]] bool active() const { return m_saveable != nullptr && !m_alive.expired(); }
+
+private:
+    friend class SaveGameSystem;
+    SaveableRegistration(SaveGameSystem* system, ISaveable* saveable, std::weak_ptr<void> alive);
+    SaveGameSystem* m_system = nullptr;
+    ISaveable* m_saveable = nullptr;
+    std::weak_ptr<void> m_alive;
+};
+
 struct SaveGameConfig {
     std::string directoryUri = "user://saves"; // resolved through the Vfs (native directory required)
     std::filesystem::path directory;           // used when non-empty (overrides directoryUri)
@@ -169,6 +193,8 @@ public:
     // ---- sections and migrations ----
     void registerSaveable(ISaveable& saveable);
     void unregisterSaveable(ISaveable& saveable);
+    // Same as registerSaveable, but unregisters automatically when the returned handle is destroyed.
+    SaveableRegistration registerSaveableScoped(ISaveable& saveable);
     // Upgrades documents of data version `fromVersion` to fromVersion + 1 (operates on the value tree).
     void registerMigration(u32 fromVersion, Migration fn);
 
@@ -275,6 +301,7 @@ private:
     std::vector<PendingSave> m_pendingSaves; // game thread only (signals emitted from update())
     u32 m_autosaveCursor = 0;
     bool m_autosaveCursorValid = false;
+    std::shared_ptr<void> m_lifetime = std::make_shared<char>(); // observed by SaveableRegistration handles
 };
 
 void registerSaveGameTypes();

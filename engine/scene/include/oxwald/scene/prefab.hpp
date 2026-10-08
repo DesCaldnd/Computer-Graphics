@@ -21,7 +21,7 @@ namespace ox {
 inline constexpr u32 kPrefabFormatVersion = 1;
 
 struct CreatePrefabOptions {
-    Uuid prefabId;            // nil: generate
+    Uuid prefabId;            // nil: generate (entity ids inside the prefab derive from it deterministically)
     bool linkSource = true;   // turn the source subtree into an instance of the new prefab
 };
 

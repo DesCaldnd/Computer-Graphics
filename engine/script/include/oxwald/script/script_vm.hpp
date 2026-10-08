@@ -84,7 +84,9 @@ public:
     void addSearchRoot(const std::filesystem::path& root);
     std::optional<std::filesystem::path> resolveModule(std::string_view name) const;
 
-    // Extension point for other modules: builds a table once; every sandbox sees it as a read-only global `name`.
+    // Extension point for other modules: builds a table once; every sandbox sees it as a read-only global `name`,
+    // including sandboxes created before the call (a global of the same name defined by the script itself wins,
+    // unless it is an earlier version of this API being rebound).
     //   vm.bindApi("physics", [&](sol::state_view lua, sol::table& api) {
     //       api["raycast"] = [&world](glm::vec3 from, glm::vec3 dir, f32 dist) { ... };
     //   });
@@ -151,6 +153,7 @@ private:
     sol::protected_function m_sandboxBuilder;
     sol::protected_function m_readonly;
     sol::table m_apis;
+    sol::table m_environments; // weak-keyed set of every sandbox from createEnvironment()
     std::unique_ptr<ScriptEventBus> m_events;
     std::unique_ptr<Scheduler> m_scheduler;
 

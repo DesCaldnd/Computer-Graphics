@@ -1,0 +1,30 @@
+{
+  "formatVersion": 1,
+  "uuid": "706a1feb-5227-875f-aeb6-a39cefea8a50",
+  "importer": "model",
+  "importerVersion": 1,
+  "settings": {
+    "scale": 1.0,
+    "unitToMeters": 0.0,
+    "upAxis": "Auto",
+    "mergeMeshes": false,
+    "createPrefab": true,
+    "importMaterials": true,
+    "importAnimations": true,
+    "generateTangents": true,
+    "flipUVs": false,
+    "weldVertices": true,
+    "optimize": true,
+    "generateLods": true,
+    "lodRatios": [
+      0.5,
+      0.25,
+      0.125
+    ],
+    "lodMaxError": 0.05,
+    "generateMeshlets": true,
+    "generateCollision": false,
+    "collisionSimplifyRatio": 0.25,
+    "maxHullVertices": 64
+  }
+}

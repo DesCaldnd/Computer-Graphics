@@ -17,6 +17,10 @@ OX_BUFFER(ExposureReadback, { float values[]; });
 float exposureLuminanceToEV100(float lum) { return log2(max(lum, 1e-10) * 100.0 / 12.5); }
 // Saturation based exposure: maximum luminance 1.2 · 2^EV100 maps to 1.
 float exposureFromEV100(float ev) { return 1.0 / (1.2 * exp2(ev)); }
+// The two formulas above (Lagarde/de Rousiers) put the metered average at 1 / (1.2 · 100 / 12.5) = 10.4 % instead of
+// middle grey: auto exposure subtracts log2(0.18 · 1.2 · 100 / 12.5) = log2(1.728) ≈ 0.79 EV so the metered average
+// lands on 18 % (manual exposure from camera settings is unaffected).
+const float kExposureMiddleGreyEV = 0.7891;
 
 uint exposureBin(float ev) {
     float t = clamp((ev - kExposureMinEV) / (kExposureMaxEV - kExposureMinEV), 0.0, 0.99999);

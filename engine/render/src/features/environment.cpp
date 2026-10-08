@@ -69,6 +69,24 @@ const std::vector<u8>& brdfLutData() {
 
 // Sets the sky/IBL view constants and (re)generates the environment maps when the environment changed:
 // capture (sky or HDRI) → mips → GGX prefiltered cube + SH9 irradiance; BRDF LUT once.
+CVar<float> cvLdrSkyLuminance("r.Sky.LdrLuminance", 5000.0f,
+                               "cd/m² of a white texel of an 8-bit (LDR) skybox (EnvironmentComponent::ldrSkyLuminance = 0)",
+                               0.0f, 100000.0f);
+
+bool isHdrFormat(VkFormat f) {
+    switch (f) {
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+    case VK_FORMAT_R16G16B16_SFLOAT:
+    case VK_FORMAT_R32G32B32A32_SFLOAT:
+    case VK_FORMAT_R32G32B32_SFLOAT:
+    case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+    case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+    case VK_FORMAT_BC6H_UFLOAT_BLOCK:
+    case VK_FORMAT_BC6H_SFLOAT_BLOCK: return true;
+    default: return false;
+    }
+}
+
 class EnvironmentFeature final : public IRenderFeature {
 public:
     std::string_view name() const override { return "Environment"; }
@@ -131,6 +149,10 @@ public:
                     c.skyMode = 1;
                     c.skyCube = t->sampledIndex;
                     skyKey = t->texture.packed();
+                    // 8-bit skyboxes hold display values: scale them to sky radiance (HDR cubes are already in nits).
+                    if (!isHdrFormat(dev.desc(t->texture).format)) {
+                        c.skyIntensity *= env.ldrSkyLuminance > 0.0f ? env.ldrSkyLuminance : cvLdrSkyLuminance.get();
+                    }
                 }
             }
             if (c.skyMode == 0 && snap.environment->preetham) {
@@ -165,8 +187,7 @@ public:
         // Environment hash: everything the capture depends on.
         u64 h = 0x9e3779b97f4a7c15ull;
         auto mix = [&](const void* p, usize n) { h = hashCombine(h, fnv1a64(std::span(static_cast<const std::byte*>(p), n))); };
-        const EnvironmentComponent& env = snap.environment->environment;
-        mix(&env.skyIntensity, sizeof(f32));
+        mix(&c.skyIntensity, sizeof(f32));
         mix(&c.skyMode, sizeof(u32));
         mix(&skyKey, sizeof(skyKey));
         if (snap.environment->iblKey) {

@@ -29,7 +29,7 @@ TEST(GraphicsUserSettings, MenuValuesReachRenderer) {
     EXPECT_EQ(scalability::currentLevel(Scalability::Volumetrics), QualityLevel::Low);
 
     // Правка из консоли → captureFromCVars() → settings.json сохранит её.
-    CVarRegistry::instance().execute("sg.Textures Ultra");
+    ASSERT_TRUE(CVarRegistry::instance().execute("sg.Textures Ultra"));
     settings.captureFromCVars();
     EXPECT_EQ(settings.user().graphics.quality, "Custom");
     EXPECT_EQ(settings.user().graphics.groups.at("Textures"), "Ultra");

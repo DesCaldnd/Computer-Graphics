@@ -11,6 +11,19 @@
 
 namespace ox::rhi {
 
+static bool isIntegerColorFormat(VkFormat f) {
+    switch (f) {
+    case VK_FORMAT_R8_UINT: case VK_FORMAT_R8_SINT: case VK_FORMAT_R8G8_UINT: case VK_FORMAT_R8G8_SINT:
+    case VK_FORMAT_R8G8B8A8_UINT: case VK_FORMAT_R8G8B8A8_SINT: case VK_FORMAT_R16_UINT: case VK_FORMAT_R16_SINT:
+    case VK_FORMAT_R16G16_UINT: case VK_FORMAT_R16G16_SINT: case VK_FORMAT_R16G16B16A16_UINT:
+    case VK_FORMAT_R16G16B16A16_SINT: case VK_FORMAT_R32_UINT: case VK_FORMAT_R32_SINT: case VK_FORMAT_R32G32_UINT:
+    case VK_FORMAT_R32G32_SINT: case VK_FORMAT_R32G32B32A32_UINT: case VK_FORMAT_R32G32B32A32_SINT:
+    case VK_FORMAT_A2B10G10R10_UINT_PACK32: return true;
+    default: return false;
+    }
+}
+
+
 namespace fs = std::filesystem;
 using namespace detail;
 
@@ -198,7 +211,9 @@ VkPipeline buildGraphics(Device& device, DeviceState& s, PipelineRecord& rec) {
         for (usize i = 0; i < d.colorFormats.size(); ++i) {
             const BlendState b = i < d.blend.size() ? d.blend[i] : BlendState{};
             VkPipelineColorBlendAttachmentState a{};
-            a.blendEnable = b.enable;
+            // Vulkan doesn't support blending on integer attachments (e.g. the R32_UINT entity-ID target);
+            // passes often share one blend description for all targets, so drop it here.
+            a.blendEnable = b.enable && !isIntegerColorFormat(d.colorFormats[i]);
             a.srcColorBlendFactor = b.srcColor;
             a.dstColorBlendFactor = b.dstColor;
             a.colorBlendOp = b.colorOp;

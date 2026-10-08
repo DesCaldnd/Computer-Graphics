@@ -173,6 +173,12 @@ Throwing from a binding is safe (sol2 turns it into a Lua error, which is then l
   Generic component access driven by reflection means no per-component binding code.
 * Other modules: `physics.raycast/overlap`, `audio.play`, `input.isDown/axis`, `net.callServer` through `bindApi`.
 
+## Built-in `cvar` API and `bindApi` reach
+`cvar.get(name)` (typed: bool/number/string, nil when unknown), `cvar.getString`, `cvar.set(name, value)` (bool,
+number or string; `CVarSource::Console` permissions), `cvar.exists`, `cvar.reset`, `cvar.description`. `log.*` and
+`print` honour `log::minLevel()`. `bindApi` also reaches sandboxes created before the call (the VM keeps a weak-keyed
+set of environments); a script global with the same name wins unless the API is being re-bound.
+
 ## Known limits / TODO
 
 * `io` is either fully off or fully on; the VFS-restricted file API is pending (core VFS).

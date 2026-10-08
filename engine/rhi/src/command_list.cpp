@@ -465,6 +465,22 @@ void CommandList::beginTimestamp(std::string_view name) {
     m_openTimestamps.push_back(u32(f.scopes.size() - 1));
 }
 
+namespace detail {
+void* tracyZoneBegin(DeviceState& s, VkCommandBuffer cmd, QueueType queue, const std::string& name);
+void tracyZoneEnd(void* zone);
+} // namespace detail
+
+void CommandList::beginGpuZone(std::string_view name) {
+    m_gpuZones.push_back(detail::tracyZoneBegin(st(*m_device), m_cmd, m_queue, std::string(name)));
+}
+
+void CommandList::endGpuZone() {
+    OX_ASSERT(!m_gpuZones.empty(), "endGpuZone without beginGpuZone");
+    void* zone = m_gpuZones.back();
+    m_gpuZones.pop_back();
+    if (zone) detail::tracyZoneEnd(zone);
+}
+
 void CommandList::endTimestamp() {
     OX_ASSERT(!m_openTimestamps.empty(), "endTimestamp without beginTimestamp");
     const u32 scope = m_openTimestamps.back();

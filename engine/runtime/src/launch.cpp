@@ -29,10 +29,10 @@ std::optional<QualityLevel> parseQuality(std::string_view s) {
 } // namespace
 
 std::string launchUsage() {
-    return "usage: OxwaldPlayer [--project <dir|file.oxproj>] [--pak <file>] [--scene <uri>] [--headless] [--server]\n"
+    return "usage: OxwaldPlayer [--project <dir|file.oxproj>] [--pak <file>] [--patch-pak <file>]... [--scene <uri>] [--headless] [--server]\n"
            "                    [--frames N] [--width W] [--height H] [--fullscreen|--borderless|--windowed]\n"
            "                    [--monitor I] [--quality low|medium|high|ultra] [--cvar name=value]...\n"
-           "                    [--fps N] [--fixed-rate HZ] [--single-thread] [--user-dir DIR]\n";
+           "                    [--fps N] [--fixed-rate HZ] [--single-thread] [--user-dir DIR] [-- game args...]\n";
 }
 
 Result<LaunchOptions> parseLaunchOptions(std::span<const std::string> args) {
@@ -63,10 +63,18 @@ Result<LaunchOptions> parseLaunchOptions(std::span<const std::string> args) {
         if (!r_) return r_.error();                                                                                    \
         target = *r_;                                                                                                  \
     } while (0)
+        if (a == "--") {
+            o.gameArgs.assign(args.begin() + i + 1, args.end());
+            break;
+        }
         if (a == "--project") {
             OX_TRY(value(), o.project);
         } else if (a == "--pak") {
             OX_TRY(value(), o.pak);
+        } else if (a == "--patch-pak") {
+            std::string patch;
+            OX_TRY(value(), patch);
+            o.patchPaks.emplace_back(patch);
         } else if (a == "--scene") {
             OX_TRY(value(), o.scene);
         } else if (a == "--headless") {
@@ -137,6 +145,7 @@ EngineConfig LaunchOptions::toEngineConfig(std::string appName) const {
     c.appName = std::move(appName);
     c.projectPath = project;
     c.pakPath = pak;
+    c.patchPaks = patchPaks;
     c.startupScene = scene;
     c.headless = headless;
     c.dedicatedServer = server;
@@ -150,6 +159,7 @@ EngineConfig LaunchOptions::toEngineConfig(std::string appName) const {
     if (fps) c.targetFps = *fps;
     c.fixedRate = fixedRate;
     c.userDir = userDir;
+    c.gameArgs = gameArgs;
     return c;
 }
 

@@ -10,12 +10,14 @@
 #include <atomic>
 #include <functional>
 #include <initializer_list>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 // Console variables. Declare them as (static) objects in a translation unit that is linked into the program
@@ -70,7 +72,13 @@ inline constexpr usize kQualityLevelCount = 4;
 // Names for an int cvar used as an enum: setFromString accepts names or numbers, toString prints the name.
 struct CVarEnum {
     std::vector<std::string> names;
+    // Extra spellings accepted when parsing (e.g. "DLAA" for "Native"); toString always prints `names`.
+    std::vector<std::pair<std::string, int>> aliases;
     CVarEnum(std::initializer_list<std::string> n) : names(n) {}
+    CVarEnum&& alias(std::string name, int value) && {
+        aliases.emplace_back(std::move(name), value);
+        return std::move(*this);
+    }
 };
 
 class ICVar {
@@ -85,6 +93,7 @@ public:
     [[nodiscard]] bool hasFlag(CVarFlags f) const { return ox::hasFlag(m_flags, f); }
     [[nodiscard]] Scalability group() const { return m_group; }
     [[nodiscard]] const std::vector<std::string>& enumNames() const { return m_enumNames; }
+    [[nodiscard]] const std::vector<std::pair<std::string, int>>& enumAliases() const { return m_enumAliases; }
     [[nodiscard]] CVarSource lastSource() const { return m_lastSource.load(std::memory_order_relaxed); }
     [[nodiscard]] std::optional<double> minValue() const { return m_min; }
     [[nodiscard]] std::optional<double> maxValue() const { return m_max; }
@@ -118,6 +127,7 @@ protected:
     CVarFlags m_flags;
     Scalability m_group;
     std::vector<std::string> m_enumNames;
+    std::vector<std::pair<std::string, int>> m_enumAliases;
     std::optional<double> m_min;
     std::optional<double> m_max;
     std::atomic<CVarSource> m_lastSource{CVarSource::Default};
@@ -126,7 +136,8 @@ protected:
 
 namespace detail {
 std::optional<bool> parseCVarBool(std::string_view text);
-std::optional<int> parseCVarInt(std::string_view text, const std::vector<std::string>& enumNames);
+std::optional<int> parseCVarInt(std::string_view text, const std::vector<std::string>& enumNames,
+                                const std::vector<std::pair<std::string, int>>& aliases = {});
 std::optional<float> parseCVarFloat(std::string_view text);
 std::string formatCVarFloat(float v);
 } // namespace detail
@@ -162,6 +173,7 @@ public:
         : ICVar(name, description, flags, Scalability::None, names.names, 0.0,
                 double(std::max<usize>(names.names.size(), 1) - 1)),
           m_default(defaultValue), m_value(defaultValue) {
+        m_enumAliases = std::move(names.aliases);
         registerSelf();
     }
 
@@ -309,7 +321,7 @@ private:
 
     std::optional<T> parse(std::string_view text) const {
         if constexpr (std::is_same_v<T, bool>) return detail::parseCVarBool(text);
-        else if constexpr (std::is_same_v<T, int>) return detail::parseCVarInt(text, m_enumNames);
+        else if constexpr (std::is_same_v<T, int>) return detail::parseCVarInt(text, m_enumNames, m_enumAliases);
         else if constexpr (std::is_same_v<T, float>) return detail::parseCVarFloat(text);
         else return std::string(text);
     }
@@ -371,6 +383,13 @@ public:
     // Quotes group arguments: r.Foo "a b".
     Result<std::string> execute(std::string_view line);
 
+    // Called after any registered cvar changed value (from code, console, config or a scalability preset), on the
+    // thread that changed it. Lets subsystems react to `set()`/`execute()`/Lua changes, e.g. the runtime re-applies
+    // graphics settings when an r.* cvar changes from the console. Returns an id for removeChangeListener().
+    using ChangeListener = std::function<void(ICVar& cvar, CVarSource source)>;
+    usize addChangeListener(ChangeListener fn);
+    void removeChangeListener(usize id);
+
     void setCheatsEnabled(bool enabled) { m_cheats.store(enabled); }
     [[nodiscard]] bool cheatsEnabled() const { return m_cheats.load(); }
     // Set when a RequiresRestart cvar changed since startup.
@@ -390,6 +409,7 @@ public:
     void addCommand(ConsoleCommand& cmd);
     void removeCommand(ConsoleCommand& cmd);
     void markRestartRequired() { m_restartRequired.store(true); }
+    void notifyChanged(ICVar& cvar, CVarSource source);
 
 private:
     CVarRegistry() = default;
@@ -400,6 +420,9 @@ private:
     std::vector<std::pair<std::string, nlohmann::json>> m_pending;
     std::atomic<bool> m_cheats{false};
     std::atomic<bool> m_restartRequired{false};
+    std::mutex m_listenerMutex;
+    std::vector<std::pair<usize, std::shared_ptr<ChangeListener>>> m_listeners;
+    usize m_nextListenerId = 0;
 };
 
 // Splits a console line into tokens honouring double quotes and backslash escapes.

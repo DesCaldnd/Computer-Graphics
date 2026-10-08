@@ -1,0 +1,11 @@
+<rml>
+<head>
+    <title>Station panel</title>
+    <link type="text/rcss" href="base.rcss"/>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<!-- Generic right-hand panel; station scripts fill #content with ui.setText (net stats, RTX toggles, ...). -->
+<body class="hud">
+    <div class="side" id="content"></div>
+</body>
+</rml>

@@ -6,6 +6,7 @@
 #include "inspector/inspector_panel.hpp"
 #include "dialogs/save_game_inspector.hpp"
 #include "integration/gameplay_tools.hpp"
+#include "integration/integrations.hpp"
 #include "panels/behavior_tree_panel.hpp"
 #include "panels/console_panel.hpp"
 #include "panels/coroutines_panel.hpp"
@@ -287,6 +288,11 @@ void MainWindow::createActions() {
         const BakeResult r = bakeNavMesh(*m_ctx);
         statusBar()->showMessage(r.message, 5000);
     });
+    make("tools.bakeProbes", T, "light", tr("Bake Lighting Probes"), QKeySequence(), [this] {
+        QString message;
+        bakeLightingProbes(*m_ctx, message);
+        statusBar()->showMessage(message, 5000);
+    });
     make("window.coroutines", T, "coroutine", tr("Coroutines"), QKeySequence(), [this] {
         if (auto* d = dock(QStringLiteral("dock.coroutines"))) {
             d->show();
@@ -409,8 +415,10 @@ void MainWindow::createMenus() {
     tools->addAction(r.action("window.coroutines"));
     tools->addAction(r.action("window.behaviorTree"));
     tools->addAction(r.action("tools.bakeNav"));
+    tools->addAction(r.action("tools.bakeProbes"));
     connect(tools, &QMenu::aboutToShow, this, [this] {
         if (QAction* a = m_ctx->actions().action(QStringLiteral("tools.bakeNav"))) a->setEnabled(!m_ctx->isPlaying() && gameplayAvailable());
+        if (QAction* a = m_ctx->actions().action(QStringLiteral("tools.bakeProbes"))) a->setEnabled(!m_ctx->isPlaying());
     });
     tools->addSeparator();
     for (const char* id : {"play.play", "play.simulate", "play.pause", "play.step", "play.stop"}) tools->addAction(r.action(QString::fromLatin1(id)));

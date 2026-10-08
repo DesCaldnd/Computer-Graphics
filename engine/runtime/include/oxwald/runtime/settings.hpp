@@ -33,7 +33,7 @@ struct GraphicsSettings {
     std::map<std::string, std::string> groups; // per-group overrides ("Shadows": "Low")
     bool rayTracing = false;
     std::string upscaler = "Off";            // Off / FSR1 / DLSS
-    std::string upscalerQuality = "Quality"; // UltraPerformance/Performance/Balanced/Quality/DLAA
+    std::string upscalerQuality = "Quality"; // UltraPerformance/Performance/Balanced/Quality/Native ("DLAA" = Native)
     f32 fov = 90.0f;                         // horizontal-ish gameplay FOV in degrees (g.FOV)
 };
 
@@ -75,6 +75,11 @@ public:
 
     // Missing file = defaults (not an error).
     Status load();
+    // True once load() found and parsed a user settings file (false on first launch).
+    [[nodiscard]] bool hasUserFile() const { return m_hasUserFile; }
+    // First launch: makes the user settings start from the project defaults (current cvar state after
+    // applyProjectDefaults(), `rendering.rayTracingIfSupported`, `rendering.upscaler`) so apply() keeps them.
+    void seedUserFromProject();
     Status save();
     Status loadFrom(const std::filesystem::path& path);
     Status saveTo(const std::filesystem::path& path);
@@ -98,6 +103,7 @@ public:
 private:
     Vfs* m_vfs;
     std::string m_uri;
+    bool m_hasUserFile = false;
     ProjectSettings m_project;
     UserSettings m_user;
 };

@@ -130,3 +130,50 @@ TEST(Pak, CookProjectAndLoadFromPak) {
     vfs.mount("game", std::make_unique<PakMountSource>(*PakReader::open(pak)));
     EXPECT_TRUE(vfs.exists(std::string("game://") + std::string(kPakCatalogPath)));
 }
+
+TEST(Pak, LooseFilesAndPatchPaks) {
+    TempDir dir;
+    writeText(dir / "Assets/Scripts/game.lua", "return 1");
+    writeText(dir / "Assets/UI/menu.rml", "<rml/>");
+    writeText(dir / "Assets/UI/style.RCSS", "body {}");
+    writeText(dir / "Assets/Data/table.json", R"({"v": 1})");
+    writeText(dir / "Assets/Data/notes.txt", "not packed");
+    AssetRegistry reg(dir.path());
+    reg.scan();
+    const Uuid script = *reg.uuidForPath("Scripts/game.lua");
+    auto base = cookProject(reg, dir / "Base.oxpak");
+    ASSERT_TRUE(base) << base.error().message;
+    EXPECT_EQ(base->looseFiles, (std::vector<std::string>{"Assets/Data/table.json", "Assets/UI/menu.rml",
+                                                         "Assets/UI/style.RCSS"}));
+    auto baseReader = PakReader::open(dir / "Base.oxpak");
+    ASSERT_TRUE(baseReader);
+    Vfs vfs;
+    vfs.mount("project", std::make_unique<PakMountSource>(*baseReader));
+    EXPECT_EQ(*vfs.readText("project://Assets/UI/menu.rml"), "<rml/>");
+    EXPECT_FALSE(vfs.exists("project://Assets/Data/notes.txt"));
+
+    // Patch: one script and one data file change, everything else stays in the base pak.
+    writeText(dir / "Assets/Scripts/game.lua", "return 2");
+    writeText(dir / "Assets/Data/table.json", R"({"v": 2})");
+    reg.scan();
+    CookOptions patchOptions;
+    patchOptions.patchBase = {dir / "Base.oxpak"};
+    auto patch = cookProject(reg, dir / "Patch.oxpak", patchOptions);
+    ASSERT_TRUE(patch) << patch.error().message;
+    EXPECT_GT(patch->unchangedSkipped, 0u);
+    EXPECT_EQ(patch->looseFiles, std::vector<std::string>{"Assets/Data/table.json"});
+    ASSERT_EQ(patch->items.size(), 1u);
+    EXPECT_EQ(patch->items[0].path, "Scripts/game.lua");
+
+    PakAssetSource source;
+    ASSERT_TRUE(source.addPak(dir / "Base.oxpak"));
+    ASSERT_TRUE(source.addPak(dir / "Patch.oxpak"));
+    AssetManager mgr(source, nullptr);
+    auto lua = mgr.load<ScriptAsset>(script);
+    mgr.waitAll();
+    ASSERT_TRUE(lua.isLoaded());
+    EXPECT_EQ(lua->source, "return 2");
+    vfs.mount("project", std::make_unique<PakMountSource>(*PakReader::open(dir / "Patch.oxpak")), 1);
+    EXPECT_EQ(*vfs.readText("project://Assets/Data/table.json"), R"({"v": 2})");
+    EXPECT_EQ(*vfs.readText("project://Assets/UI/menu.rml"), "<rml/>") << "unchanged files come from the base pak";
+}

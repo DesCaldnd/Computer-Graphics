@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <map>
+#include <unordered_map>
 #include <random>
 
 using namespace ox;
@@ -368,4 +369,59 @@ TEST(DedicatedServer, RunsFixedTicksHeadless) {
     ticks = 0;
     EXPECT_EQ(runDedicatedServer(cfg, [&](NetServer&, u32, f64) { ++ticks; }), 0);
     EXPECT_EQ(ticks, 0u);
+}
+
+namespace {
+struct InventoryObject : NetObject {
+    std::vector<i32> slots;
+    std::vector<std::string> tags;
+    std::map<std::string, f32> stats;
+    std::unordered_map<std::string, std::vector<glm::vec3>> paths;
+    InventoryObject() : NetObject("InventoryObject") {
+        replicate("slots", slots);
+        replicate("tags", tags);
+        replicate("stats", stats);
+        replicate("paths", paths);
+    }
+};
+} // namespace
+
+TEST(Replication, ArraysAndMapsReplicate) {
+    MemoryHarness h;
+    ASSERT_TRUE(h.startAndConnect());
+    h.client.replication().factory().registerType<InventoryObject>("InventoryObject");
+    auto obj = std::make_shared<InventoryObject>();
+    obj->slots = {3, -1, 7};
+    obj->tags = {"quest", "heavy"};
+    obj->stats = {{"hp", 10.f}, {"mana", 2.5f}};
+    obj->paths["patrol"] = {glm::vec3(1, 2, 3), glm::vec3(4, 5, 6)};
+    const NetId id = h.server.replication().add(obj);
+    auto client = [&] { return static_cast<InventoryObject*>(h.client.replication().find(id)); };
+    ASSERT_TRUE(h.runUntil([&] { return client() != nullptr; }, 1.0));
+    EXPECT_EQ(client()->slots, obj->slots);
+    EXPECT_EQ(client()->tags, obj->tags);
+    EXPECT_EQ(client()->stats, obj->stats);
+    EXPECT_EQ(client()->paths, obj->paths);
+
+    h.run(0.3);
+    obj->slots.push_back(42);
+    obj->stats.erase("mana");
+    obj->paths.clear();
+    ASSERT_TRUE(h.runUntil([&] { return client()->slots.size() == 4; }, 1.0));
+    EXPECT_EQ(client()->slots.back(), 42);
+    EXPECT_EQ(client()->stats.size(), 1u);
+    EXPECT_TRUE(client()->paths.empty());
+
+    // Unchanged containers cost nothing.
+    h.run(0.3);
+    stepToNextTick(h);
+    EXPECT_EQ(h.server.lastSnapshotStats(onlyClient(h.server)).objectsWritten, 0u);
+
+    // Corrupt element counts are rejected without allocating.
+    BitWriter w;
+    w.writeVarU64(u64(1) << 40);
+    BitReader r(w.data());
+    std::vector<i32> v{1};
+    NetCodec<std::vector<i32>>{}.read(r, v);
+    EXPECT_TRUE(v.empty());
 }

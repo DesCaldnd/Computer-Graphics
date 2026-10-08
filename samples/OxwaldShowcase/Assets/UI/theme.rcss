@@ -1,0 +1,158 @@
+/* OxwaldShowcase theme: dark glass panels, accent blue. Based on engine/ui/resources/sample/theme.rcss.
+   Edit while the game runs — RmlUi documents hot reload. */
+body.menu { width: 100%; height: 100%; background-color: #070a10b0; }
+body.hud { width: 100%; height: 100%; pointer-events: none; }
+
+.panel {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 440dp;
+    margin-left: -220dp;
+    margin-top: -250dp;
+    padding: 26dp 32dp;
+    background-color: #121823f2;
+    border: 1dp #2c3a52;
+    border-radius: 10dp;
+}
+.panel.wide { width: 860dp; margin-left: -430dp; margin-top: -330dp; }
+.title { font-size: 46dp; font-weight: bold; color: #ffffff; letter-spacing: 3dp; }
+.subtitle { color: #8ea2c0; margin-bottom: 20dp; }
+.version { color: #5d6d86; font-size: 12dp; margin-top: 14dp; }
+
+button {
+    display: block;
+    margin: 7dp 0;
+    padding: 9dp 18dp;
+    font-size: 18dp;
+    color: #e8ecf2;
+    background-color: #1f2b40;
+    border: 1dp #34496b;
+    border-radius: 6dp;
+    text-align: center;
+    tab-index: auto;
+    nav: auto;
+    cursor: pointer;
+    pointer-events: auto;
+    transition: background-color 0.12s linear-in-out;
+}
+button:hover, button:focus-visible { background-color: #2f4a73; border-color: #5b8fe0; }
+button:active { background-color: #3d8bff; color: #ffffff; }
+button.primary { background-color: #2f6fe0; border-color: #5b8fe0; }
+button.primary:hover { background-color: #3d8bff; }
+button:disabled, button.unavailable { color: #6d7a8e; background-color: #171d28; border-color: #263247; }
+button.small { display: inline-block; font-size: 14dp; padding: 5dp 10dp; margin: 0 6dp 0 0; }
+
+.row { display: block; margin: 6dp 0; height: 30dp; }
+.row .label { display: inline-block; width: 210dp; color: #aab8cc; }
+.choices { display: inline-block; }
+button.choice { display: inline-block; margin: 0 5dp 0 0; padding: 5dp 10dp; font-size: 14dp; }
+button.choice.selected { background-color: #3d8bff; border-color: #8cb8ff; color: #ffffff; }
+.hint { color: #f0b85a; font-size: 13dp; height: auto; margin-left: 210dp; }
+.status { color: #8ea2c0; font-size: 13dp; margin-top: 10dp; }
+.buttons { margin-top: 16dp; }
+.buttons button { display: inline-block; margin-right: 10dp; }
+.columns { display: block; }
+.col { display: inline-block; width: 49%; vertical-align: top; }
+
+input.checkbox { width: 22dp; height: 22dp; vertical-align: middle; background-color: #223047; border: 1dp #4a6390; border-radius: 4dp; }
+input.checkbox:hover { border-color: #8cb8ff; }
+input.checkbox:checked { background-color: #3d8bff; }
+input.checkbox:disabled { background-color: #1a212e; border-color: #2a3446; }
+input.range { width: 240dp; height: 18dp; vertical-align: middle; }
+input.range slidertrack { margin-top: 7dp; height: 4dp; background-color: #34496b; border-radius: 2dp; }
+input.range sliderbar { width: 16dp; height: 16dp; background-color: #8cb8ff; border-radius: 8dp; }
+input.range sliderbar:hover { background-color: #ffffff; }
+input.range sliderarrowdec, input.range sliderarrowinc { width: 0; height: 0; }
+select { height: 26dp; padding: 3dp 8dp; background-color: #223047; border: 1dp #4a6390; border-radius: 4dp; }
+select selectvalue { height: 20dp; }
+select selectarrow { width: 18dp; height: 20dp; background-color: #34496b; }
+select selectbox { margin-top: 2dp; background-color: #1b2433; border: 1dp #4a6390; padding: 4dp 0; }
+select selectbox option { padding: 4dp 8dp; }
+select selectbox option:hover { background-color: #2f4a73; }
+
+/* ---- HUD ---------------------------------------------------------------------------------------------------- */
+.badge {
+    position: absolute; left: 28dp; top: 24dp;
+    padding: 8dp 14dp 9dp 14dp;
+    background-color: #0b0f17b0;
+    border-left: 4dp #3d8bff;
+    border-radius: 4dp;
+}
+.badge .num { font-size: 13dp; color: #8ea2c0; letter-spacing: 1dp; }
+.badge .name { font-size: 24dp; font-weight: bold; color: #ffffff; }
+
+.info {
+    position: absolute; left: 28dp; top: 96dp;
+    width: 430dp;
+    padding: 16dp 18dp;
+    background-color: #0b0f17d8;
+    border: 1dp #2c3a52;
+    border-radius: 8dp;
+}
+.info h1 { font-size: 22dp; margin-bottom: 6dp; color: #ffffff; }
+.info .desc { font-size: 15dp; color: #d5dcea; line-height: 21dp; }
+.info .keys { font-size: 13dp; color: #f0c56a; margin-top: 10dp; line-height: 18dp; }
+.info .more { font-size: 13dp; color: #8cb8ff; margin-top: 10dp; }
+.info .close { font-size: 11dp; color: #5d6d86; margin-top: 8dp; }
+
+.prompt {
+    position: absolute; left: 50%; bottom: 120dp; width: 520dp; margin-left: -260dp;
+    text-align: center; font-size: 18dp; color: #ffffff;
+}
+.prompt span { padding: 6dp 14dp; background-color: #0b0f17c8; border-radius: 6dp; }
+.toast {
+    position: absolute; left: 50%; top: 26dp; width: 600dp; margin-left: -300dp;
+    text-align: center; font-size: 16dp; color: #ffffff;
+}
+.toast span { padding: 6dp 14dp; background-color: #1d6b3ad0; border-radius: 6dp; }
+.saving { position: absolute; right: 28dp; top: 26dp; font-size: 14dp; color: #9fe8b2; }
+.saving .dot { color: #4fd17a; }
+.fps { position: absolute; right: 28dp; bottom: 18dp; font-size: 12dp; color: #8ea2c0; font-family: "JetBrains Mono"; }
+.crosshair { position: absolute; left: 50%; top: 50%; width: 6dp; height: 6dp; margin-left: -3dp; margin-top: -3dp;
+             background-color: #ffffffb0; border-radius: 3dp; }
+.caption {
+    position: absolute; left: 50%; bottom: 46dp; width: 900dp; margin-left: -450dp;
+    padding: 14dp 22dp; background-color: #0b0f17d8; border-radius: 8dp; border-bottom: 3dp #3d8bff;
+}
+.caption .ctitle { font-size: 26dp; font-weight: bold; color: #ffffff; }
+.caption .ctext { font-size: 16dp; color: #d5dcea; margin-top: 4dp; }
+.caption .cstep { font-size: 12dp; color: #8ea2c0; margin-bottom: 2dp; letter-spacing: 1dp; }
+
+/* ---- side panels (net stats, RTX, saves) -------------------------------------------------------------------- */
+.side {
+    position: absolute; right: 28dp; top: 64dp; width: 380dp;
+    padding: 14dp 16dp; background-color: #0b0f17e0; border: 1dp #2c3a52; border-radius: 8dp;
+    pointer-events: auto;
+}
+.side h2 { font-size: 18dp; margin: 0 0 8dp 0; color: #ffffff; }
+.side .kv { display: block; font-size: 14dp; color: #d5dcea; line-height: 19dp; }
+.side .kv .k { display: inline-block; width: 160dp; color: #8ea2c0; }
+.side .kv .v { font-family: "JetBrains Mono"; color: #ffffff; }
+.side .note { font-size: 12dp; color: #f0b85a; margin: 3dp 0 6dp 0; line-height: 15dp; }
+.side .muted { font-size: 12dp; }
+.side .muted { color: #5d6d86; }
+.toggle { display: block; font-size: 14dp; line-height: 20dp; color: #d5dcea; }
+.toggle .state { font-family: "JetBrains Mono"; display: inline-block; width: 44dp; color: #4fd17a; }
+.toggle.off .state { color: #8ea2c0; }
+.toggle.disabled { color: #5d6d86; }
+.toggle.disabled .state { color: #5d6d86; }
+.bar { display: inline-block; height: 8dp; background-color: #3d8bff; border-radius: 2dp; vertical-align: middle; }
+.pass { display: block; font-size: 12dp; height: 16dp; font-family: "JetBrains Mono"; color: #c8d2e2; }
+.pass .pn { display: inline-block; width: 200dp; }
+
+.slot { display: block; padding: 8dp 10dp; margin: 4dp 0; background-color: #1a2333; border-radius: 6dp; cursor: pointer; pointer-events: auto; }
+.slot:hover { background-color: #26344c; }
+.slot .sn { font-size: 16dp; color: #ffffff; }
+.slot .sm { font-size: 12dp; color: #8ea2c0; }
+.list { display: block; max-height: 420dp; overflow-y: auto; }
+
+.dialogue {
+    position: absolute; left: 50%; bottom: 60dp; width: 760dp; margin-left: -380dp;
+    padding: 16dp 22dp; background-color: #0b0f17e8; border: 1dp #2c3a52; border-radius: 8dp; pointer-events: auto;
+}
+.dialogue .speaker { font-size: 14dp; color: #8cb8ff; font-weight: bold; }
+.dialogue .line { font-size: 18dp; color: #ffffff; margin: 6dp 0 10dp 0; }
+.dialogue button { display: block; text-align: left; font-size: 15dp; margin: 4dp 0; }
+
+.bind { display: inline-block; width: 120dp; }

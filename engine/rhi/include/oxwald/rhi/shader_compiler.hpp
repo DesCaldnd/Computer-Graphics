@@ -67,6 +67,10 @@ struct ShaderCompileDesc {
     ShaderStage stage = ShaderStage::Unknown; // Unknown = derived from the path extension
     std::string entryPoint = "main";
     std::vector<ShaderDefine> defines;
+    // Extra include directories for this compile, searched after the including file's directory and before the
+    // compiler's roots — e.g. the asset folder of an inline (generated or material-graph) source whose `path` is
+    // only a display name.
+    std::vector<std::filesystem::path> includeDirs;
 };
 
 struct ShaderCompileResult {
@@ -102,7 +106,8 @@ public:
 
     // `#include "x"` searches the requesting file's directory first, then the roots; `#include <x>` only roots.
     std::optional<std::filesystem::path> resolveInclude(std::string_view requested, const std::filesystem::path& requester,
-                                                        bool relative) const;
+                                                        bool relative,
+                                                        std::span<const std::filesystem::path> extraDirs = {}) const;
     std::optional<std::filesystem::path> resolveSourcePath(const std::filesystem::path& path) const;
 
     [[nodiscard]] const ShaderCompilerOptions& options() const { return m_options; }

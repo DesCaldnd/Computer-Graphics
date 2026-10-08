@@ -121,7 +121,7 @@ void main() {
                 else if ((F.flags & OX_FOG_SUN_SHADOWS) != 0u) vis = fogSunShadow(P, viewDepth);
                 vis *= fogCloudShadow(P, -l.direction);
             }
-            if (vis > 0.0) sunL += l.color * (oxPhaseHG(dot(l.direction, V), g) * vis);
+            if (vis > 0.0) sunL += l.color * (oxPhaseHG(dot(l.direction, V), g) * vis * l.volumetric);
         }
         radiance += sunL * VIEW.volumetricFogLighting.y;
 
@@ -141,6 +141,7 @@ void main() {
                 vec3 L = toLight * inversesqrt(max(d2, 1e-8));
                 float att = oxDistanceAttenuation(d2, l.range);
                 if (l.type == OX_LIGHT_SPOT) att *= oxSpotAttenuation(L, l.direction, l.spotScale, l.spotOffset);
+                att *= l.volumetric;
                 if (att <= 0.0) continue;
                 float vis = 1.0;
                 if (localShadows && l.shadowIndex >= 0) {

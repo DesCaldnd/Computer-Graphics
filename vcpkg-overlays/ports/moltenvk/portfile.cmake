@@ -4,6 +4,10 @@ set(VCPKG_POLICY_SKIP_ARCHITECTURE_CHECK enabled)
 set(VCPKG_POLICY_DLLS_WITHOUT_EXPORTS enabled)
 set(VCPKG_POLICY_SKIP_COPYRIGHT_CHECK enabled)
 set(VCPKG_POLICY_ALLOW_RESTRICTED_HEADERS enabled)
+# The release dylib already has install name @rpath/libMoltenVK.dylib. vcpkg's Mach-O rpath fixup would
+# rewrite it with install_name_tool and invalidate the ad-hoc code signature (macOS then refuses to load
+# the ICD from signed/hardened processes and copies of it fail `codesign -v`). Keep the file untouched.
+set(VCPKG_FIXUP_MACHO_RPATH OFF)
 
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/KhronosGroup/MoltenVK/releases/download/v${VERSION}/MoltenVK-macos.tar"
@@ -36,4 +40,14 @@ set(MOLTENVK_DYLIB "${_MVK_PREFIX}/lib/libMoltenVK.dylib")
 set(MOLTENVK_ICD_JSON "${_MVK_PREFIX}/share/vulkan/icd.d/MoltenVK_icd.json")
 set(moltenvk_FOUND TRUE)
 ]=])
+# Belt and braces: if anything above ever modifies the binary, restore a valid ad-hoc signature.
+find_program(CODESIGN codesign)
+if(CODESIGN)
+    foreach(dylib "${CURRENT_PACKAGES_DIR}/lib/libMoltenVK.dylib" "${CURRENT_PACKAGES_DIR}/debug/lib/libMoltenVK.dylib")
+        execute_process(COMMAND "${CODESIGN}" -v "${dylib}" RESULT_VARIABLE mvk_sig_ok OUTPUT_QUIET ERROR_QUIET)
+        if(NOT mvk_sig_ok EQUAL 0)
+            execute_process(COMMAND "${CODESIGN}" --force --sign - "${dylib}" COMMAND_ERROR_IS_FATAL ANY)
+        endif()
+    endforeach()
+endif()
 vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/MoltenVK/LICENSE")

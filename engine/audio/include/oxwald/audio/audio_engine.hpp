@@ -9,6 +9,10 @@
 #include <string>
 #include <string_view>
 
+namespace ox {
+class Vfs;
+}
+
 namespace ox::audio {
 
 struct AudioEngineConfig {
@@ -53,6 +57,10 @@ public:
 
     // ---- sound data ---------------------------------------------------------------------------
     SoundId loadSound(const std::string& path, LoadMode mode = LoadMode::Decode);
+    // Loads through the virtual file system ("project://sfx/hit.ogg", pak archives, ...): files with a native path
+    // are opened directly (streaming works), others are read into memory and decoded (LoadMode::Stream falls back
+    // to Decode for them).
+    SoundId loadSound(const Vfs& vfs, std::string_view uri, LoadMode mode = LoadMode::Decode);
     SoundId createFromPcm(std::span<const f32> interleaved, u32 channels, u32 sampleRate);
     // Decodes an encoded file image (wav/ogg/mp3/flac, e.g. an asset database blob) into a PCM sound.
     SoundId loadSoundFromMemory(std::span<const std::byte> encoded, std::string_view debugName = {});

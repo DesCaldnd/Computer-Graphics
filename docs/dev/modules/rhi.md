@@ -233,6 +233,20 @@ sampling + storage images, hot reload, pipeline cache, render graph frames (grap
 async compute), BLAS/TLAS (skipped on MoltenVK). `tools/rhi_window_smoke --frames 120 [--resize] [--present mailbox]`
 checks the swapchain path manually.
 
+## Polish additions (0.1.0)
+* Manual Tracy GPU zones: `CommandList::beginGpuZone(name)` / `endGpuZone()`, `ScopedGpuZone`,
+  `OX_RHI_GPU_ZONE(cmd, "name")` — graphics queue, only while a Tracy profiler is connected, otherwise no-ops.
+* `ShaderCompileDesc::includeDirs`: per-compile include directories (searched after the including file's directory,
+  before the compiler roots; part of the cache key) — for inline/generated sources whose `path` is only a name.
+* `Device::savePipelineCache()` writes atomically (temp + rename); the runtime (`user://cache/pipeline_cache.bin`)
+  and the editor (user data dir) set `DeviceDesc::pipelineCachePath`.
+* Physical-device selection checks present support with volk instead of vk-bootstrap's surface path: vk-bootstrap
+  caches instance functions from the first instance of the process, so a windowed device after a headless one used
+  to crash in `get_present_queue_index` (regression test `DeviceLifecycle.SurfaceDeviceAfterHeadlessDevice`).
+* `DeployVulkanRuntime.cmake` uses private temp names (parallel POST_BUILD deployments into one `bin/vulkan` raced).
+  `ox_deploy_vulkan_runtime` also copies the NGX/DLSS runtime (`OX_DLSS_RUNTIME_FILES`, Windows/Linux) next to the
+  executable.
+
 ## Known limits / TODO
 
 * Render graph: whole-resource barriers (no per-mip/layer tracking), declaration order is the execution order

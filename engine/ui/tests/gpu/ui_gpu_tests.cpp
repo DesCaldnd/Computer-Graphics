@@ -8,11 +8,13 @@
 #include <oxwald/runtime/console.hpp>
 #include <oxwald/runtime/engine.hpp>
 #include <oxwald/runtime/settings.hpp>
+#include <oxwald/rhi/swapchain.hpp>
 #include <oxwald/ui/ui.hpp>
 
 #include <RmlUi/Core.h>
 #include <imgui.h>
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 
@@ -218,7 +220,11 @@ TEST(UiEngine, RuntimeIntegration) {
     for (int i = 0; i < 10 && summary.empty(); ++i) engine.tick(1.0 / 60.0);
     EXPECT_TRUE(summary.starts_with("Auto: ")) << summary;
     EXPECT_NE(engine.settings().user().graphics.quality, "") << "settings captured from the applied levels";
+    EXPECT_NE(ComponentRegistry::instance().find("PostProcessVolume"), nullptr)
+        << "createRenderer() registers the render components (scenes with volumes/probes load in the player)";
     engine.shutdown();
+    EXPECT_TRUE(std::filesystem::exists(dir / "user" / "cache" / "pipeline_cache.bin"))
+        << "the runtime persists the Vulkan pipeline cache in the user directory";
     scalability::setOverall(QualityLevel::High);
     std::error_code ec2;
     std::filesystem::remove_all(dir, ec2);
@@ -260,4 +266,53 @@ TEST_F(UiGpuTest, PerfReport1080p) {
     std::printf("UI 1080p: %zu draw commands, %zu vertices, %zu indices; UI pass GPU %.3f ms (frame %.3f ms)\n",
                 f->commands.size(), f->vertices.size(), f->indices.size(), uiMs, renderer->stats().gpuFrameMs);
     EXPECT_GT(f->commands.size(), 50u);
+}
+
+namespace {
+// Window-less presentable surface (VK_EXT_headless_surface) standing in for a GLFW window.
+class TestSurfaceProvider final : public rhi::ISurfaceProvider {
+public:
+    std::vector<const char*> requiredInstanceExtensions() const override {
+        return {VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+    }
+    VkSurfaceKHR createSurface(VkInstance instance) override {
+        auto create = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT"));
+        VkHeadlessSurfaceCreateInfoEXT ci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+        VkSurfaceKHR s = VK_NULL_HANDLE;
+        return create && create(instance, &ci, nullptr, &s) == VK_SUCCESS ? s : VK_NULL_HANDLE;
+    }
+    VkExtent2D framebufferSize() const override { return {320, 200}; }
+};
+} // namespace
+
+TEST(UiEngine, WindowedScreenshot) {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("oxwald_shot_" + Uuid::generate().toString());
+    TestSurfaceProvider surface;
+    Engine engine;
+    engine.setRenderer(render::createRenderer());
+    EngineConfig ec;
+    ec.appName = "OxwaldScreenshotTest";
+    ec.workerThreads = 2;
+    ec.userDir = dir / "user";
+    ec.loadUserSettings = false;
+    ec.saveUserSettingsOnShutdown = false;
+    ec.threadedRendering = false;
+    ec.surface.provider = &surface;
+    ec.surface.framebufferSize = {320, 200};
+    if (Status st = engine.init(ec); !st) {
+        std::filesystem::remove_all(dir);
+        GTEST_SKIP() << "no presentable Vulkan surface: " << st.error().message;
+    }
+    for (int i = 0; i < 3; ++i) engine.tick(1.0 / 60.0);
+    std::atomic<int> result{-1};
+    const auto png = dir / "shot.png";
+    ASSERT_TRUE(engine.renderer().requestScreenshot(png, [&](bool ok) { result = ok ? 1 : 0; }))
+        << "the Vulkan renderer captures windowed frames too";
+    engine.tick(1.0 / 60.0);
+    engine.shutdown();
+    EXPECT_EQ(result.load(), 1);
+    EXPECT_TRUE(std::filesystem::exists(png));
+    EXPECT_GT(std::filesystem::file_size(png), 100u);
+    std::error_code ec2;
+    std::filesystem::remove_all(dir, ec2);
 }

@@ -24,8 +24,9 @@ class VulkanViewportHub {
 public:
     static rhi::Device* device();
     static void setDevice(rhi::Device* d);
-    // A Vulkan viewport exists and will create the device (caps probes must not create a second one first:
-    // vk-bootstrap keeps per-process function tables and a later surface device crashes after a headless one).
+    // A Vulkan viewport exists and will create the device (caps probes then wait for it instead of creating a
+    // throw-away headless device first; the old vk-bootstrap crash for that order is fixed in rhi, but one device
+    // per process is still what volk supports).
     static bool pending();
     static void setPending(bool p);
     // Applied to every DeviceDesc the editor creates (viewport, offscreen canvas, benchmark): the render module adds

@@ -73,6 +73,12 @@ public:
     RpcCall& operator=(const RpcCall&) = delete;
 
     Future<Resp> operator()(const Args&... args) {
+        u32 id = 0;
+        return call(id, args...);
+    }
+    // Same, also returning the request id for cancel() (0 when the request was not sent).
+    Future<Resp> call(u32& requestId, const Args&... args) {
+        requestId = 0;
         if (!m_client.connected()) {
             return makeErrorFuture<Resp>("rpc '" + m_name + "': not connected");
         }
@@ -80,7 +86,21 @@ public:
         Promise<Resp>& promise = m_shared->pending[id];
         Future<Resp> future = promise.future();
         m_client.callServer(m_name, id, args...);
+        requestId = id;
         return future;
+    }
+
+    // Fails one pending request (e.g. after ox::timeout gave up on it) and forgets it: a late reply is ignored.
+    // Returns false when the request already completed or is unknown.
+    bool cancel(u32 requestId, const std::string& reason = "cancelled") {
+        auto it = m_shared->pending.find(requestId);
+        if (it == m_shared->pending.end()) {
+            return false;
+        }
+        Promise<Resp> promise = std::move(it->second);
+        m_shared->pending.erase(it);
+        promise.setError("rpc '" + m_name + "': " + reason);
+        return true;
     }
 
     // Fails every pending request (call on disconnect).

@@ -41,6 +41,18 @@ set(OX_MODULES "" CACHE STRING "Restrict configured engine modules and top-level
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(OxwaldHelpers)
 
+# Static libraries reach executables through several dependency paths (engine modules depend on each other and on
+# the same vcpkg archives, some imported through two spellings of the same path), and CMake keeps static libraries
+# repeated on the link line so single-pass linkers resolve back references. Apple's ld (Xcode 15+) warns about every
+# repeated archive although the result is identical; silence just that warning.
+if(APPLE)
+    include(CheckLinkerFlag)
+    check_linker_flag(CXX "LINKER:-no_warn_duplicate_libraries" OX_LINKER_HAS_NO_WARN_DUPLICATE_LIBRARIES)
+    if(OX_LINKER_HAS_NO_WARN_DUPLICATE_LIBRARIES)
+        add_link_options("LINKER:-no_warn_duplicate_libraries")
+    endif()
+endif()
+
 if(OX_BUILD_TESTS)
     enable_testing()
     find_package(GTest CONFIG REQUIRED)

@@ -4,10 +4,12 @@
 
 #include <oxwald/physics/physics_world.hpp>
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -101,6 +103,11 @@ public:
     explicit ExecutorJobSystem(IPhysicsJobExecutor& executor) : m_executor(executor) {
         Init(JPH::cMaxPhysicsBarriers);
     }
+    // A worker can still be inside run() — between the job signalling its barrier (which lets Update() return) and
+    // Release() calling back into FreeJob() — when the world is destroyed. Wait for those calls to leave.
+    ~ExecutorJobSystem() override {
+        while (m_running.load(std::memory_order_acquire) != 0) std::this_thread::yield();
+    }
     int GetMaxConcurrency() const override { return int(std::max(1u, m_executor.maxConcurrency())); }
     JobHandle CreateJob(const char* name, JPH::ColorArg color, const JobFunction& fn, JPH::uint32 deps) override {
         Job* job = new Job(name, color, this, fn, deps);
@@ -114,6 +121,7 @@ public:
 protected:
     void QueueJob(Job* job) override {
         job->AddRef();
+        m_running.fetch_add(1, std::memory_order_acq_rel);
         m_executor.submit(&run, job);
     }
     void QueueJobs(Job** jobs, JPH::uint count) override {
@@ -126,10 +134,13 @@ protected:
 private:
     static void run(void* ctx) {
         Job* job = static_cast<Job*>(ctx);
+        auto* system = static_cast<ExecutorJobSystem*>(job->GetJobSystem());
         job->Execute();
         job->Release();
+        system->m_running.fetch_sub(1, std::memory_order_acq_rel);
     }
     IPhysicsJobExecutor& m_executor;
+    std::atomic<u32> m_running{0}; // queued or executing run() calls
 };
 
 // --- Contact buffering ---------------------------------------------------------------------------

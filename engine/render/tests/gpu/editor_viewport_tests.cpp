@@ -68,3 +68,38 @@ TEST_F(EditorViewportTest, RecordsIntoCallerCommandListAndPicksUuids) {
     const std::vector<u8> px = evr.renderToImage(f, 64, 64);
     ASSERT_EQ(px.size(), 64u * 64u * 4u);
 }
+
+TEST_F(EditorViewportTest, RenderToImageHonoursShowFlags) {
+    renderer.reset();
+    EditorViewportRenderer evr(*device);
+    sun({-0.3f, -0.8f, -0.5f}, 20000.0f);
+    world->updateTransforms();
+    world->snapshotPreviousTransforms();
+    DebugDraw noLines;
+    noLines.flush(0.0f);
+
+    EditorViewportFrame f;
+    f.world = world.get();
+    f.camera = camera({0, 4, 6}, {0, 0, 0}, 12.0f, 50.0f);
+    f.lines = &noLines;
+    auto shot = [&](bool grid) {
+        f.grid = grid;
+        (void)evr.renderToImage(f, 96, 96); // settle temporal effects
+        return evr.renderToImage(f, 96, 96);
+    };
+    auto differingPixels = [](const std::vector<u8>& a, const std::vector<u8>& b) {
+        usize n = 0;
+        for (usize i = 0; i + 3 < a.size() && i + 3 < b.size(); i += 4) {
+            n += std::abs(int(a[i]) - int(b[i])) + std::abs(int(a[i + 1]) - int(b[i + 1])) +
+                     std::abs(int(a[i + 2]) - int(b[i + 2])) >
+                 24;
+        }
+        return n;
+    };
+    const std::vector<u8> off = shot(false);
+    const std::vector<u8> on = shot(true);
+    ASSERT_EQ(off.size(), 96u * 96u * 4u);
+    EXPECT_GT(differingPixels(off, on), 50u) << "grid visible only when requested";
+    const std::vector<u8> offAgain = shot(false);
+    EXPECT_LT(differingPixels(off, offAgain), 10u) << "a previous frame's flags must not leak into offscreen frames";
+}

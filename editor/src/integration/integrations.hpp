@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QString>
+
 namespace ox::editor {
 
 class EditorContext;
@@ -13,6 +15,9 @@ void registerModuleTypes();
 //   render    GPU viewport renderer factory, mesh/material thumbnails, render::autoDetectQuality benchmark,
 //             AssetManager -> GpuResourceCache provider + hot reload
 void installIntegrations(EditorContext& ctx);
+// Bakes reflection probes and irradiance volumes of the edit world (render module + GPU viewport required).
+// Returns false with a reason when unavailable; `message` describes the result either way.
+bool bakeLightingProbes(EditorContext& ctx, QString& message);
 void uninstallIntegrations(EditorContext& ctx);
 
 } // namespace ox::editor

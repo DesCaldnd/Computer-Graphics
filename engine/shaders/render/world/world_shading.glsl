@@ -47,6 +47,8 @@ vec4 oxWorldShade(ViewBuffer vb, SceneBuffer sb, OxSurface s, vec2 fragCoord, Ox
     inputs.reflections = inp.reflections;
     inputs.indirectDiffuse = inp.indirectDiffuse;
     inputs.receiveShadows = receiveShadows;
+    inputs.clearcoat = 0.0;
+    inputs.clearcoatRoughness = 0.0;
     OxLightingResult lit = oxEvaluateLighting(vb, sb, s, fragCoord, viewDepth, inputs);
     vec3 color = lit.direct + lit.indirect + s.emissive / max(vb.v.exposure, 1e-12);
     int sun = vb.v.sunLight;

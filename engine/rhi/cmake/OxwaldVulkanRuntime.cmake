@@ -78,6 +78,19 @@ function(ox_deploy_vulkan_runtime target)
         COMMAND ${CMAKE_COMMAND} ${_args} -DOX_DEST=$<TARGET_FILE_DIR:${target}>/vulkan -P ${OX_VK_RUNTIME_SCRIPT}
         COMMENT "Deploying Vulkan runtime next to ${target}"
         VERBATIM)
+    ox_deploy_dlss_runtime(${target})
+endfunction()
+
+# NVIDIA NGX/DLSS runtime libraries (Windows/Linux, set by engine/render when the DLSS backend is enabled) are
+# loaded by NGX from the executable's directory. No-op elsewhere.
+function(ox_deploy_dlss_runtime target)
+    if(NOT OX_DLSS_RUNTIME_FILES)
+        return()
+    endif()
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OX_DLSS_RUNTIME_FILES} $<TARGET_FILE_DIR:${target}>
+        COMMENT "Deploying NVIDIA NGX (DLSS) runtime next to ${target}"
+        VERBATIM)
 endfunction()
 
 function(ox_add_gpu_test_env target)

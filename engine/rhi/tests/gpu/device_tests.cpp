@@ -1,5 +1,7 @@
 #include "gpu_fixture.hpp"
 
+#include <oxwald/rhi/swapchain.hpp>
+
 #include <numeric>
 
 using namespace ox;
@@ -300,5 +302,66 @@ TEST(DeviceCache, PipelineCachePersistsToDisk) {
     }
     EXPECT_TRUE(std::filesystem::exists(path));
     EXPECT_GT(std::filesystem::file_size(path), 32u);
+    usize files = 0;
+    for (const auto& e : std::filesystem::directory_iterator(path.parent_path())) {
+        EXPECT_EQ(e.path().extension(), path.extension()) << "no temp files left behind: " << e.path();
+        ++files;
+    }
+    EXPECT_EQ(files, 1u);
     std::filesystem::remove_all(dir);
+}
+
+namespace {
+// Window-less surface (VK_EXT_headless_surface, supported by MoltenVK and Mesa) to exercise the surface/present path.
+class HeadlessSurfaceProvider final : public ISurfaceProvider {
+public:
+    std::vector<const char*> requiredInstanceExtensions() const override {
+        return {VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
+    }
+    VkSurfaceKHR createSurface(VkInstance instance) override {
+        auto create = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+            vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT"));
+        if (!create) return VK_NULL_HANDLE;
+        VkHeadlessSurfaceCreateInfoEXT ci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        return create(instance, &ci, nullptr, &surface) == VK_SUCCESS ? surface : VK_NULL_HANDLE;
+    }
+    VkExtent2D framebufferSize() const override { return {64, 64}; }
+};
+
+bool headlessSurfaceAvailable() {
+    u32 count = 0;
+    if (!vkEnumerateInstanceExtensionProperties) return false;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> exts(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, exts.data());
+    for (const auto& e : exts) {
+        if (std::string_view(e.extensionName) == VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME) return true;
+    }
+    return false;
+}
+} // namespace
+
+// Regression: vk-bootstrap caches instance functions from the first instance of the process; a surface device
+// created after a headless one crashed in get_present_queue_index (null vkGetPhysicalDeviceSurfaceSupportKHR).
+TEST(DeviceLifecycle, SurfaceDeviceAfterHeadlessDevice) {
+    {
+        DeviceDesc headless;
+        headless.validation = false;
+        auto device = Device::create(headless);
+        if (!device) GTEST_SKIP() << "no Vulkan device";
+    }
+    if (!headlessSurfaceAvailable()) GTEST_SKIP() << "VK_EXT_headless_surface not available";
+    HeadlessSurfaceProvider provider;
+    DeviceDesc windowed;
+    windowed.validation = false;
+    windowed.surface = &provider;
+    std::string error;
+    auto device = Device::create(windowed, &error);
+    ASSERT_NE(device, nullptr) << error;
+    EXPECT_NE(device->surface(), VK_NULL_HANDLE);
+    auto swapchain = Swapchain::create(*device);
+    EXPECT_NE(swapchain, nullptr);
+    swapchain.reset();
+    device->waitIdle();
 }

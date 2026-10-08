@@ -269,6 +269,7 @@ thread (await these futures from the scheduler thread).
   A script coroutine cancelled while parked leaves a no-op continuation on the future until it completes.
 * `bridge.invoke` on a destroyed instance: the future fails with `BrokenPromise` only when Lua collects the
   resolver closures (next GC cycle), not immediately.
-* `RpcCall` keeps timed-out requests until a reply or `failAll()`; call `failAll` on disconnect.
+* `RpcCall` keeps timed-out requests until a reply, `cancel(requestId)` (id from `call(id, args...)`) or `failAll()`;
+  call `failAll` on disconnect.
 * No per-owner time scale (e.g. a slowed-down character) — would need a per-owner clock in `WaitNode`.
 * Scheduler awaitables cannot be used from background threads (assert); there is no implicit hop.

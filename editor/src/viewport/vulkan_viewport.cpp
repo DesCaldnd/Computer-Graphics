@@ -2,6 +2,11 @@
 
 #include "viewport/viewport_panel.hpp"
 
+#include <oxwald/core/paths.hpp>
+#if OX_EDITOR_HAS_RHI
+#include <oxwald/rhi/device.hpp>
+#endif
+
 namespace ox::editor {
 
 namespace {
@@ -14,6 +19,10 @@ std::function<void(rhi::DeviceDesc&)>& deviceDescHook() {
 }
 void VulkanViewportHub::setDeviceDescHook(std::function<void(rhi::DeviceDesc&)> hook) { deviceDescHook() = std::move(hook); }
 void VulkanViewportHub::prepareDeviceDesc(rhi::DeviceDesc& desc) {
+#if OX_EDITOR_HAS_RHI
+    // Persistent Vulkan pipeline cache in the editor's user data dir (shared by all editor devices; saved atomically).
+    if (desc.pipelineCachePath.empty()) desc.pipelineCachePath = paths::userDataDir("OxwaldEditor") / "cache" / "pipeline_cache.bin";
+#endif
     if (deviceDescHook()) deviceDescHook()(desc);
 }
 bool VulkanViewportHub::pending() { return g_pending; }

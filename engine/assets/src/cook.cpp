@@ -1,9 +1,12 @@
 #include <oxwald/assets/cook.hpp>
+#include <oxwald/core/hash.hpp>
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/profile.hpp>
 
 #include "internal.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <set>
 
 namespace ox::assets {
@@ -61,6 +64,22 @@ Result<CookReport> cookProject(AssetRegistry& registry, const std::filesystem::p
         }
     }
 
+    std::vector<std::shared_ptr<PakReader>> bases;
+    for (const auto& basePath : options.patchBase) {
+        auto base = PakReader::open(basePath);
+        if (!base) return makeError("patch base '{}': {}", basePath.string(), base.error().message);
+        bases.push_back(*base);
+    }
+    // Patch paks: identical to the base => not stored again.
+    auto unchanged = [&](std::string_view path, std::span<const std::byte> bytes) {
+        if (bases.empty()) return false;
+        const u32 crc = crc32(bytes);
+        for (const auto& b : bases) {
+            if (const auto* e = b->find(path); e && e->size == bytes.size() && e->crc == crc) return true;
+        }
+        return false;
+    };
+
     PakWriter writer(options.alignment);
     std::vector<PakCatalogEntry> catalog;
     for (const Uuid& id : closure) {
@@ -80,6 +99,10 @@ Result<CookReport> cookProject(AssetRegistry& registry, const std::filesystem::p
         e.path = rec->path;
         e.artifact = "assets/" + id.toString() + std::string(artifactExtension(rec->type));
         e.dependencies = rec->dependencies;
+        if (unchanged(e.artifact, *bytes)) {
+            ++report.unchangedSkipped;
+            continue;
+        }
         // Textures stay uncompressed so mips can be range-read (streaming); BC data barely compresses anyway.
         const bool compress = options.compress && rec->type != AssetType::Texture;
         writer.add(e.artifact, *bytes, compress ? PakCompression::Zstd : PakCompression::None, id);
@@ -93,9 +116,65 @@ Result<CookReport> cookProject(AssetRegistry& registry, const std::filesystem::p
         for (const auto& entry : std::filesystem::directory_iterator(registry.projectDir(), ec)) {
             if (!entry.is_regular_file() || entry.path().extension() != ".oxproj") continue;
             if (auto bytes = detail::readFile(entry.path())) {
-                writer.add(entry.path().filename().generic_string(), *bytes,
-                           options.compress ? PakCompression::Zstd : PakCompression::None);
+                const std::string path = entry.path().filename().generic_string();
+                if (unchanged(path, *bytes)) {
+                    ++report.unchangedSkipped;
+                    continue;
+                }
+                writer.add(path, *bytes, options.compress ? PakCompression::Zstd : PakCompression::None);
             }
+        }
+    }
+    // Loose files (game UI documents, data tables, baked render data) that no importer turns into assets.
+    std::vector<std::filesystem::path> looseCandidates;
+    if (!options.looseFileExtensions.empty()) {
+        auto lower = [](std::string v) {
+            for (char& c : v) c = char(std::tolower(static_cast<unsigned char>(c)));
+            return v;
+        };
+        std::set<std::string> extensions;
+        for (const auto& e : options.looseFileExtensions) extensions.insert(lower(e.starts_with('.') ? e : "." + e));
+        std::error_code ec;
+        std::vector<std::filesystem::path> files;
+        for (auto it = std::filesystem::recursive_directory_iterator(registry.assetsDir(), ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            if (it->is_regular_file(ec) && extensions.count(lower(it->path().extension().string()))) {
+                files.push_back(it->path());
+            }
+        }
+        std::sort(files.begin(), files.end()); // deterministic pak layout
+        for (const auto& file : files) {
+            const std::string assetPath = std::filesystem::relative(file, registry.assetsDir(), ec).generic_string();
+            if (registry.uuidForPath(assetPath)) continue; // imported asset (cooked above when referenced)
+            looseCandidates.push_back(file);
+        }
+    }
+    for (const std::string& dir : options.looseDirectories) {
+        std::error_code ec;
+        std::vector<std::filesystem::path> files;
+        for (auto it = std::filesystem::recursive_directory_iterator(registry.projectDir() / dir, ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            if (it->is_regular_file(ec)) files.push_back(it->path());
+        }
+        std::sort(files.begin(), files.end());
+        looseCandidates.insert(looseCandidates.end(), files.begin(), files.end());
+    }
+    {
+        std::error_code ec;
+        for (const auto& file : looseCandidates) {
+            const std::string path = std::filesystem::relative(file, registry.projectDir(), ec).generic_string();
+            if (ec || path.empty() || path.starts_with("..")) continue;
+            auto bytes = detail::readFile(file);
+            if (!bytes) {
+                report.errors.push_back(path + ": " + bytes.error().message);
+                continue;
+            }
+            if (unchanged(path, *bytes)) {
+                ++report.unchangedSkipped;
+                continue;
+            }
+            writer.add(path, *bytes, options.compress ? PakCompression::Zstd : PakCompression::None);
+            report.looseFiles.push_back(path);
         }
     }
     const std::string cat = catalogToJson(catalog);

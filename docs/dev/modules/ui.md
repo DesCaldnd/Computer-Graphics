@@ -167,4 +167,5 @@ report, full runtime integration (UiModule + `withUi(createRenderer())`, F1 thro
 * Textures upload synchronously on the render thread when they change (font atlas growth: a few frames at startup).
 * UI frames are "latest wins" (not tied to snapshot slots); fine for UI, documented ≤ 1 frame latency.
 * One `GameUI` per process (RmlUi global state); one RmlUi context.
-* `apps/player` does not install the module yet: add the two lines from "Engine integration" (owner: player).
+* `apps/player` installs the module (`UiModule` + `withUi(render::createRenderer())`) unless it runs as a dedicated
+  server; F1 / `~` toggle the debug overlay.

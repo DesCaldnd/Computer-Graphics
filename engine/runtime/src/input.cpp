@@ -6,6 +6,8 @@
 #include <glm/geometric.hpp>
 
 #include <algorithm>
+#include <format>
+#include <unordered_set>
 #include <cmath>
 
 namespace ox {
@@ -326,7 +328,41 @@ void registerInputTypes() {
 InputSystem::InputSystem() = default;
 InputSystem::~InputSystem() = default;
 
+std::vector<std::string> validateInputMappings(const InputMappingConfig& config) {
+    std::vector<std::string> problems;
+    std::unordered_set<std::string> actions;
+    for (const auto& a : config.actions) {
+        if (!actions.insert(a.name).second) problems.push_back(std::format("action '{}' is declared twice", a.name));
+    }
+    std::unordered_set<std::string> contexts;
+    for (const auto& c : config.contexts) {
+        if (!contexts.insert(c.name).second) problems.push_back(std::format("context '{}' is declared twice", c.name));
+        for (const auto& b : c.bindings) {
+            if (!actions.contains(b.action)) {
+                problems.push_back(std::format("context '{}': binding to undeclared action '{}'", c.name, b.action));
+            }
+            if (b.source.empty()) {
+                problems.push_back(std::format("context '{}': action '{}' has a binding without a source", c.name, b.action));
+            } else if (!parseInputSource(b.source)) {
+                problems.push_back(
+                    std::format("context '{}': action '{}' has unknown input source '{}'", c.name, b.action, b.source));
+            }
+            for (const auto& t : b.triggers) {
+                if (t.type == InputTriggerType::Chord && !actions.contains(t.action)) {
+                    problems.push_back(std::format("context '{}': chord of action '{}' refers to undeclared action '{}'",
+                                                   c.name, b.action, t.action));
+                }
+            }
+        }
+    }
+    for (const auto& name : config.activeContexts) {
+        if (!contexts.contains(name)) problems.push_back(std::format("active context '{}' is not declared", name));
+    }
+    return problems;
+}
+
 void InputSystem::setMappings(const InputMappingConfig& config) {
+    for (const auto& problem : validateInputMappings(config)) OX_LOG_WARN("input", "{}", problem);
     m_config = config;
     m_active.clear();
     m_actions.clear();

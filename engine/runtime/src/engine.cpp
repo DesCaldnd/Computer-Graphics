@@ -9,6 +9,7 @@
 #include <oxwald/core/serial/format.hpp>
 #include <oxwald/core/vfs.hpp>
 #include <oxwald/runtime/engine.hpp>
+#include <oxwald/runtime/game_module.hpp>
 #include <oxwald/runtime/json_io.hpp>
 #include <oxwald/runtime/platform.hpp>
 #include <oxwald/scene/scene.hpp>
@@ -90,7 +91,22 @@ Status Engine::init(const EngineConfig& config) {
     auto builtins = makeBuiltinModules(m_config, m_projectSettings);
     m_modules.insert(m_modules.begin(), std::make_move_iterator(builtins.begin()),
                      std::make_move_iterator(builtins.end()));
+    // Native game modules linked into this host, opt-in per project ("modules": {"<Name>": true}).
+    for (const GameModuleEntry& g : registeredGameModules()) {
+        auto it = m_projectSettings.modules.find(g.name);
+        if (it == m_projectSettings.modules.end() || !it->second || findModule(g.name)) continue;
+        if (auto module = g.factory()) m_modules.push_back(std::move(module));
+    }
     for (auto& m : m_modules) m->registerTypes();
+    {
+        std::vector<std::string> registered;
+        for (const auto& m : m_modules) registered.emplace_back(m->name());
+        for (const auto& name : m_projectSettings.unknownModules(registered)) {
+            OX_LOG_WARN("engine", "project setting modules.{}: no such module (typo?); known engine modules: assets, "
+                                  "physics, animation, audio, script, async, gameplay, ai, net, world, spline, render, ui",
+                        name);
+        }
+    }
 
     if (auto st = createServices(); !st) {
         OX_LOG_ERROR("engine", "init failed: {}", st.error().message);
@@ -131,12 +147,15 @@ Status Engine::init(const EngineConfig& config) {
     m_connections.emplace_back(m_settings->changed.connect([this](SettingsCategory c) {
         if (hasCategory(c, SettingsCategory::Graphics)) applyGraphicsSettings();
     }));
-    m_connections.emplace_back(m_console->cvarChanged.connect([this](const std::string& name) {
-        if (name.starts_with("r.") || name.starts_with("sg.")) {
-            m_settings->captureFromCVars();
-            applyGraphicsSettings();
+    // r.*/sg.* changes typed by a user (console, CVarRegistry::set/execute, Lua cvar.set) update the user settings
+    // and re-apply graphics. The listener may run on any thread, so it only flags; the main thread applies at the
+    // start of the next frame (or right away for the in-game console).
+    m_cvarListener = CVarRegistry::instance().addChangeListener([this](ICVar& c, CVarSource source) {
+        if (source == CVarSource::Console && (c.name().starts_with("r.") || c.name().starts_with("sg."))) {
+            m_graphicsCVarsDirty.store(true, std::memory_order_release);
         }
-    }));
+    });
+    m_connections.emplace_back(m_console->cvarChanged.connect([this](const std::string&) { applyPendingGraphicsCVars(); }));
     m_connections.emplace_back(
         m_input->rebindsChanged.connect([this] { m_settings->setInputRebinds(m_input->rebinds()); }));
 
@@ -213,6 +232,7 @@ Status Engine::createServices() {
     if (m_config.loadUserSettings) {
         if (auto st = m_settings->load(); !st) OX_LOG_WARN("engine", "user settings: {}", st.error().message);
     }
+    if (!m_settings->hasUserFile()) m_settings->seedUserFromProject(); // first launch: project defaults win
     m_settings->apply();
     applyCommandLineOverrides();
 
@@ -311,6 +331,10 @@ void Engine::shutdown() {
         m_settings->captureFromCVars();
         if (m_input) m_settings->user().inputRebinds = m_input->rebinds();
         if (auto st = m_settings->save(); !st) OX_LOG_WARN("engine", "saving user settings: {}", st.error().message);
+    }
+    if (m_cvarListener) {
+        CVarRegistry::instance().removeChangeListener(m_cvarListener);
+        m_cvarListener = 0;
     }
     m_connections.clear();
     if (m_world) {
@@ -516,6 +540,12 @@ Result<LoadResult> Engine::loadGame(std::string_view slot) { return m_saves->loa
 
 // ---- settings ---------------------------------------------------------------------------------------------------
 
+void Engine::applyPendingGraphicsCVars() {
+    if (!m_graphicsCVarsDirty.exchange(false, std::memory_order_acq_rel)) return;
+    m_settings->captureFromCVars();
+    applyGraphicsSettings();
+}
+
 void Engine::applyGraphicsSettings() {
     if (m_platform) m_platform->applyWindowSettings(m_settings->user().graphics);
     m_pipeline.requestSettingsChanged();
@@ -578,6 +608,7 @@ bool Engine::frame(f64 realDt, bool) {
         }
     }
     m_jobs->runMainThreadQueue();
+    applyPendingGraphicsCVars();
     if (m_config.fileWatching) m_services.get<FileWatcher>().poll();
     m_services.get<EventBus>().dispatch();
     updateLevelLoading();

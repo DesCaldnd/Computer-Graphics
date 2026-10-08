@@ -144,6 +144,20 @@ public:
     void insertLabel(std::string_view name);
     void beginTimestamp(std::string_view name);
     void endTimestamp();
+    // Manual Tracy GPU zone (shows up on the "Graphics queue" GPU track next to the render graph passes). Only
+    // recorded on the graphics queue while a Tracy profiler is connected (OX_ENABLE_TRACY builds); otherwise a cheap
+    // no-op. Zones nest and must be closed in the same command list.
+    void beginGpuZone(std::string_view name);
+    void endGpuZone();
+    [[nodiscard]] u32 openGpuZones() const { return u32(m_gpuZones.size()); }
+
+    struct ScopedGpuZone {
+        CommandList& cmd;
+        ScopedGpuZone(CommandList& c, std::string_view name) : cmd(c) { cmd.beginGpuZone(name); }
+        ~ScopedGpuZone() { cmd.endGpuZone(); }
+        ScopedGpuZone(const ScopedGpuZone&) = delete;
+        ScopedGpuZone& operator=(const ScopedGpuZone&) = delete;
+    };
 
     struct ScopedLabel {
         CommandList& cmd;
@@ -160,6 +174,13 @@ private:
     i32 m_frameSlot = -1; // frame context owning this list (timestamps); -1 for immediate submits
     bool m_secondary = false;
     std::vector<u32> m_openTimestamps;
+    std::vector<void*> m_gpuZones; // Tracy zone objects (nullptr when not recording)
 };
+
+// OX_RHI_GPU_ZONE(cmd, "Bloom") — scoped manual Tracy GPU zone on a CommandList.
+#define OX_RHI_GPU_ZONE_CAT2(a, b) a##b
+#define OX_RHI_GPU_ZONE_CAT(a, b) OX_RHI_GPU_ZONE_CAT2(a, b)
+#define OX_RHI_GPU_ZONE(cmd, name) \
+    ::ox::rhi::CommandList::ScopedGpuZone OX_RHI_GPU_ZONE_CAT(oxGpuZone_, __LINE__)((cmd), (name))
 
 } // namespace ox::rhi

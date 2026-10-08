@@ -1,5 +1,6 @@
 #include <oxwald/core/log.hpp>
 #include <oxwald/render/editor_viewport.hpp>
+#include <oxwald/render/features/reflections/reflections.hpp>
 #include <oxwald/rhi/device.hpp>
 #include <oxwald/scene/world.hpp>
 
@@ -60,12 +61,22 @@ RenderSettings EditorViewportRenderer::settingsFor(const EditorViewportFrame& f)
     return s;
 }
 
-void EditorViewportRenderer::render(const EditorViewportFrame& f, rhi::TextureHandle target, rhi::CommandList& cmd) {
-    buildSnapshot(f);
+void EditorViewportRenderer::setBakedDataReader(std::function<std::optional<std::vector<u8>>(const std::string&)> reader) {
+    m_bakedReader = std::move(reader);
+    m_bakedAttempted.clear();
+}
+
+void EditorViewportRenderer::applyViewFlags(const EditorViewportFrame& f) {
+    if (m_bakedReader) reflections::installBakedData(*m_renderer, m_snapshot, m_bakedReader, m_bakedAttempted);
     RenderView* v = m_renderer->view(m_view);
     v->desc().flags.grid = f.grid;
     v->desc().flags.debugDraw = f.debugDraw;
     v->desc().flags.selectionOutline = f.selectionOutline;
+}
+
+void EditorViewportRenderer::render(const EditorViewportFrame& f, rhi::TextureHandle target, rhi::CommandList& cmd) {
+    buildSnapshot(f);
+    applyViewFlags(f);
     m_renderer->beginFrame(m_snapshot);
     ViewRenderRequest req;
     req.view = m_view;
@@ -97,6 +108,7 @@ rhi::TextureHandle EditorViewportRenderer::offscreen(u32 w, u32 h) {
 std::vector<u8> EditorViewportRenderer::renderToImage(const EditorViewportFrame& f, u32 w, u32 h) {
     const rhi::TextureHandle t = offscreen(w, h);
     buildSnapshot(f);
+    applyViewFlags(f); // same show flags as on screen (thumbnails/screenshots used to keep the previous ones)
     m_device->beginFrame();
     m_renderer->beginFrame(m_snapshot);
     ViewRenderRequest req;

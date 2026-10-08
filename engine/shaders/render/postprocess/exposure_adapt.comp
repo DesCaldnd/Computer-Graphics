@@ -48,7 +48,7 @@ void main() {
             sumW += inside;
             acc += c;
         }
-        if (sumW > 0.0) target = sumEV / sumW;
+        if (sumW > 0.0) target = sumEV / sumW - kExposureMiddleGreyEV;
     }
     target = clamp(target, pc.minEV, pc.maxEV) - pc.compensation;
     float ev = target;

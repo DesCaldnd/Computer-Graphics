@@ -39,6 +39,8 @@ protected:
     bool filterAcceptsRow(int row, const QModelIndex& parent) const override;
 
 private:
+    template <class Fn>
+    void changeRowFilter(Fn&& change);
     unsigned m_mask = 0b111100; // Info, Warn, Error, Fatal
     QString m_category;
     QString m_text;

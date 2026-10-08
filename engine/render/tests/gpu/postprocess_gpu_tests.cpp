@@ -313,7 +313,7 @@ TEST_F(PostProcessTest, DlssSelectionFallsBackToTaauWhereUnavailable) {
     const Image img = renderFrames(colorfulCamera(), {.frames = 4});
     EXPECT_GT(meanLuminance(img), 0.1);
     bool taau = false;
-    for (const PassTiming& p : renderer->stats().passes) taau |= p.name == "TAAU";
+    for (const PassTiming& p : renderer->stats().passes) taau |= p.name.ends_with("/TAAU");
     EXPECT_TRUE(taau) << "r.Upscaler=DLSS without DLSS must run TAAU";
 }
 
@@ -611,6 +611,7 @@ TEST_F(PostProcessTest, PerfReport1080p) {
         std::map<std::string, f64> groups;
         for (const PassTiming& p : st.passes) {
             std::string g = p.name;
+            if (auto slash = g.find('/'); slash != std::string::npos) g = g.substr(slash + 1); // "<view>/<pass>"
             if (auto dot = g.find('.'); dot != std::string::npos) g = g.substr(0, dot);
             groups[g] += p.gpuMs;
         }

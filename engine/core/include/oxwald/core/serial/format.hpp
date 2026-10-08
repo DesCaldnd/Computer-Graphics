@@ -36,6 +36,12 @@ enum class Format { Binary, Json };
 
 [[nodiscard]] std::vector<std::byte> encodeBinary(const Document& doc);
 [[nodiscard]] Result<Document> decodeBinary(std::span<const std::byte> data);
+// Partial decode: only the listed fields of the root object are decoded, the others are skipped by their record
+// size without being parsed (e.g. reading a save game's header without its world). Empty list = everything.
+struct BinaryDecodeOptions {
+    std::vector<std::string> rootFields;
+};
+[[nodiscard]] Result<Document> decodeBinary(std::span<const std::byte> data, const BinaryDecodeOptions& options);
 [[nodiscard]] bool isBinaryArchive(std::span<const std::byte> data);
 
 [[nodiscard]] nlohmann::ordered_json encodeJson(const Document& doc);

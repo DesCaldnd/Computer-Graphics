@@ -88,6 +88,9 @@ public:
     void resize(glm::uvec2 size) override { m_inner->resize(size); }
     void settingsChanged() override { m_inner->settingsChanged(); }
     RenderStats stats() const override { return m_inner->stats(); }
+    bool requestScreenshot(std::filesystem::path path, std::function<void(bool)> done) override {
+        return m_inner->requestScreenshot(std::move(path), std::move(done));
+    }
 
 private:
     std::unique_ptr<IRenderer> m_inner;

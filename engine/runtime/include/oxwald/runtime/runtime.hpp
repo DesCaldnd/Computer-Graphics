@@ -3,6 +3,7 @@
 // Umbrella header of the runtime module.
 #include <oxwald/runtime/console.hpp>
 #include <oxwald/runtime/engine.hpp>
+#include <oxwald/runtime/game_module.hpp>
 #include <oxwald/runtime/input.hpp>
 #include <oxwald/runtime/json_io.hpp>
 #include <oxwald/runtime/launch.hpp>

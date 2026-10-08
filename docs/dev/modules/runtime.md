@@ -196,6 +196,20 @@ to `.bak` → rename → directory fsync; failures roll back. Reads fall back to
 Opens a GLFW window unless headless; NullRenderer until the render module provides one. CTest:
 `OxwaldPlayer.HeadlessSmoke` (`--headless --frames 10`), `ServerSmoke`, `BadArgument` (add `apps` to `OX_MODULES`).
 
+## Game modules, game arguments, screenshots
+
+* **Game modules** (`<oxwald/runtime/game_module.hpp>`): native project code registers itself with
+  `OX_GAME_MODULE("Name", MyModule)` (static registration) and is linked into the hosts with WHOLE_ARCHIVE
+  (`samples/OxwaldShowcase/CMakeLists.txt` links `ox_showcase_game` into OxwaldPlayer and OxwaldEditor). `Engine::init`
+  adds a registered module only when the project lists it explicitly: `"modules": {"Name": true}`; it runs after the
+  built-ins and the host's own modules (UiModule), so it can use every service.
+* **Game arguments**: everything after `--` on the command line ends up in `LaunchOptions::gameArgs` →
+  `EngineConfig::gameArgs` (`OxwaldPlayer --project X -- --tour`).
+* **Screenshots**: `IRenderer::requestScreenshot(path, done)` (default: unsupported). The render module's headless
+  renderer reads the offscreen target back after the next frame and writes a PNG; `withUi()` forwards it. Player:
+  `--screenshot file.png` with `--frames N` writes the last frame (headless or windowed: the render module renders
+  the screenshot frame once more into a capture texture of the swapchain size).
+
 ## Tests
 
 `ctest --test-dir build/<you> -L runtime` — 44 tests core+scene only, 47 with physics/audio/script/async (+Lua
@@ -209,11 +223,16 @@ tsan.supp` documents this and has no active entries.
 
 ## Limits / TODO
 
-* `LaunchOptions::toEngineConfig` maps `--pak` to `EngineConfig::pakPath`; apps/player still prints a "not supported"
-  warning until its owner removes it (no other change needed).
 * One asset database root per project (first `assetDirs` entry).
-* Render module: implement `IRenderer`, add a factory the player calls; editor needs an `IPlatform` for its viewport.
-* Slot listing decodes whole files (fine for typical saves; a header-only read would be faster).
+* `listSlots()`/`slotInfo()` decode only the header and thumbnail of binary saves (the whole file is still read for
+  its CRC check).
+* `registerSaveableScoped(saveable)` returns a `SaveableRegistration` that unregisters on destruction (safe if the
+  SaveGameSystem dies first). `validateInputMappings()` (warned by `setMappings`) and
+  `ProjectSettings::unknownModules()` (warned by `Engine::init`) report typos instead of failing silently.
+* `r.*`/`sg.*` cvar changes with `CVarSource::Console` (console, `CVarRegistry::set/execute`, Lua `cvar.set`) are
+  captured into the user settings and re-applied at the start of the next frame.
+* The audio module pushes only bus volumes whose user setting changed (game-driven bus volumes survive unrelated
+  settings changes).
 * Header timestamps have 1 s resolution; autosave rotation uses file mtimes.
 * Gamepad sources read "any pad"; per-player device assignment (local multiplayer) is not implemented.
 * Net/AI have no engine-level service (gameplay owns their runtimes); no dedicated-server net loop wiring yet.

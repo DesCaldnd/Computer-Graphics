@@ -59,7 +59,19 @@ Uuid cubeMesh() { return Uuid::fromName("ox.builtin.mesh.cube"); }
 Uuid defaultMaterial() { return Uuid::fromName("ox.builtin.material.default"); }
 } // namespace builtin
 
+namespace {
+void registerAssetTypesOnce();
+} // namespace
+
+// Called from job threads too (loadMaterial, importers): re-registering replaces the field lists of the types, which
+// races with concurrent readers/registrations, so the (constant) registration runs exactly once per process.
 void registerAssetTypes() {
+    static std::once_flag once;
+    std::call_once(once, registerAssetTypesOnce);
+}
+
+namespace {
+void registerAssetTypesOnce() {
     using namespace ox::attr;
     OX_REFLECT_ENUM(AssetType, "AssetType")
         .value("Unknown", AssetType::Unknown)
@@ -187,5 +199,6 @@ void registerAssetTypes() {
 
     detail::registerImporterSettingsTypes();
 }
+} // namespace
 
 } // namespace ox::assets

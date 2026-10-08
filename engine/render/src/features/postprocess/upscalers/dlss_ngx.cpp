@@ -9,6 +9,7 @@
 #include "dlss_backend.hpp"
 
 #include <oxwald/core/log.hpp>
+#include <oxwald/core/paths.hpp>
 #include <oxwald/rhi/command_list.hpp>
 #include <oxwald/rhi/device.hpp>
 #include <oxwald/rhi/vulkan.hpp>
@@ -39,7 +40,8 @@ struct NgxState {
     Status status;
     NVSDK_NGX_Parameter* params = nullptr;
     std::wstring dataPath;
-    std::wstring featurePath;
+    std::wstring featurePath; // executable directory
+    std::wstring cwdPath;
 };
 
 NgxState& state() {
@@ -116,11 +118,18 @@ Status probe(rhi::Device& device) {
     const std::filesystem::path data = std::filesystem::temp_directory_path(ec) / "oxwald_ngx";
     std::filesystem::create_directories(data, ec);
     s.dataPath = data.wstring();
-    s.featurePath = std::filesystem::current_path(ec).wstring();
-    const wchar_t* paths[] = {s.featurePath.c_str()};
+    // The DLSS feature library (nvngx_dlss.dll / libnvidia-ngx-dlss.so.*) is deployed next to the executable by
+    // ox_deploy_vulkan_runtime; the working directory is only a fallback (tools started from elsewhere).
+    s.featurePath = paths::executableDir().wstring();
+    s.cwdPath = std::filesystem::current_path(ec).wstring();
+    const wchar_t* searchPaths[] = {s.featurePath.c_str(), s.cwdPath.c_str()};
     NVSDK_NGX_FeatureCommonInfo info{};
-    info.PathListInfo.Path = paths;
-    info.PathListInfo.Length = 1;
+    info.PathListInfo.Path = searchPaths;
+    info.PathListInfo.Length = s.featurePath.empty() ? 0 : 1;
+    if (!s.cwdPath.empty() && s.cwdPath != s.featurePath) {
+        if (info.PathListInfo.Length == 0) searchPaths[0] = s.cwdPath.c_str();
+        ++info.PathListInfo.Length;
+    }
     info.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_OFF;
     NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_Init_with_ProjectID(
         kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, s.dataPath.c_str(), device.vkInstance(),

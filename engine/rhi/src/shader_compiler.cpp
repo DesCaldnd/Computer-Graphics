@@ -254,14 +254,16 @@ namespace {
 
 class Includer final : public shaderc::CompileOptions::IncluderInterface {
 public:
-    Includer(const ShaderCompiler& c, std::set<fs::path>& deps) : m_compiler(c), m_deps(deps) {}
+    Includer(const ShaderCompiler& c, std::set<fs::path>& deps, std::vector<fs::path> extraDirs)
+        : m_compiler(c), m_deps(deps), m_extraDirs(std::move(extraDirs)) {}
 
     shaderc_include_result* GetInclude(const char* requested, shaderc_include_type type, const char* requesting,
                                        size_t) override {
         auto* data = new IncludeData;
         auto* result = new shaderc_include_result{};
         result->user_data = data;
-        auto path = m_compiler.resolveInclude(requested, fs::path(requesting), type == shaderc_include_type_relative);
+        auto path = m_compiler.resolveInclude(requested, fs::path(requesting), type == shaderc_include_type_relative,
+                                              m_extraDirs);
         std::optional<std::string> content;
         if (path) {
             content = readTextFile(*path);
@@ -288,6 +290,7 @@ public:
 private:
     const ShaderCompiler& m_compiler;
     std::set<fs::path>& m_deps;
+    std::vector<fs::path> m_extraDirs;
 };
 
 bool writeCache(const fs::path& file, const std::vector<fs::path>& deps, const std::vector<u32>& spirv) {
@@ -372,7 +375,7 @@ ShaderCompiler::ShaderCompiler(ShaderCompilerOptions options) : m_impl(std::make
 ShaderCompiler::~ShaderCompiler() = default;
 
 std::optional<fs::path> ShaderCompiler::resolveInclude(std::string_view requested, const fs::path& requester,
-                                                       bool relative) const {
+                                                       bool relative, std::span<const fs::path> extraDirs) const {
     std::error_code ec;
     const fs::path req(requested);
     if (req.is_absolute()) {
@@ -380,6 +383,12 @@ std::optional<fs::path> ShaderCompiler::resolveInclude(std::string_view requeste
     }
     if (relative && requester.has_parent_path()) {
         fs::path candidate = requester.parent_path() / req;
+        if (fs::is_regular_file(candidate, ec)) {
+            return normalized(candidate);
+        }
+    }
+    for (const auto& dir : extraDirs) {
+        fs::path candidate = dir / req;
         if (fs::is_regular_file(candidate, ec)) {
             return normalized(candidate);
         }
@@ -456,6 +465,11 @@ ShaderCompileResult ShaderCompiler::compile(const ShaderCompileDesc& desc) {
     for (const auto& r : m_roots) {
         key = hashString(r.string(), key);
     }
+    std::vector<fs::path> includeDirs;
+    for (const auto& d : desc.includeDirs) {
+        includeDirs.push_back(normalized(d));
+        key = hashString("-I" + includeDirs.back().string(), key);
+    }
     out.cacheKey = key;
 
     const bool useCache = !m_options.cacheDirectory.empty();
@@ -496,7 +510,7 @@ ShaderCompileResult ShaderCompiler::compile(const ShaderCompileDesc& desc) {
         opts.AddMacroDefinition(d.name, d.value);
     }
     std::set<fs::path> includes;
-    opts.SetIncluder(std::make_unique<Includer>(*this, includes));
+    opts.SetIncluder(std::make_unique<Includer>(*this, includes, includeDirs));
 
     const std::string inputName = mainPath.string();
     auto result = m_impl->compiler.CompileGlslToSpv(source, toShadercKind(stage), inputName.c_str(),

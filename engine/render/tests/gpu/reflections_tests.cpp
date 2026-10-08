@@ -7,6 +7,9 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <unordered_set>
 
 using namespace ox;
 using namespace ox::render;
@@ -288,6 +291,58 @@ TEST_F(ReflectionsTest, BakeReadbackAndInstall) {
     const glm::vec3 c = average(installed, 50, 111, 58, 116);
     EXPECT_GT(c.g, c.r + 0.2f) << c.r << " " << c.g << " " << c.b;
     (void)baked;
+}
+
+TEST_F(ReflectionsTest, BakedDataFilesSaveAndInstall) {
+    CVarScope ssr("r.SSR", "false");
+    sphereScene(0.35f);
+    Entity p = probe({0.0f, 1.0f, 0.0f}, {9.0f, 5.0f, 9.0f});
+    const Uuid id = p.get<IdComponent>().id;
+    const CameraParams cam = sphereCamera();
+    reflections::requestBake(*renderer);
+    (void)render(cam, {.frames = 3});
+    ASSERT_FALSE(reflections::bakeInProgress(*renderer));
+    const auto dir = std::filesystem::temp_directory_path() / ("oxwald_baked_" + Uuid::generate().toString());
+    auto written = reflections::saveBakedData(*renderer, dir);
+    ASSERT_TRUE(written) << written.error().message;
+    EXPECT_EQ(*written, 1u);
+    const auto file = dir / reflections::bakedProbeFileName(id);
+    auto cube = reflections::loadOxCube(file);
+    ASSERT_TRUE(cube) << cube.error().message;
+    for (usize i = 0; i + 8 <= cube->data.size(); i += 8) { // recolour: uniform green
+        const u16 px[4] = {0x0000, 0x7000, 0x0000, 0x3C00};
+        std::memcpy(&cube->data[i], px, 8);
+    }
+    ASSERT_TRUE(reflections::saveOxCube(file, *cube));
+
+    // Fresh renderer + scene (what the player / a reopened editor sees): data comes from the directory.
+    device->waitIdle();
+    renderer.reset();
+    renderer = Renderer::create(*device);
+    view = 0;
+    world = std::make_unique<World>();
+    materialCounter = 0;
+    sphereScene(0.35f);
+    probe({0.0f, 1.0f, 0.0f}, {9.0f, 5.0f, 9.0f}).get<IdComponent>().id = id;
+    world->updateTransforms();
+    RenderSnapshot snap;
+    extract(*world, snap, {});
+    std::unordered_set<Uuid> attempted;
+    usize reads = 0;
+    auto reader = [&](const std::string& name) -> std::optional<std::vector<u8>> {
+        ++reads;
+        std::ifstream in(dir / name, std::ios::binary);
+        if (!in) return std::nullopt;
+        return std::vector<u8>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    };
+    EXPECT_EQ(reflections::installBakedData(*renderer, snap, reader, attempted), 1u);
+    EXPECT_EQ(reflections::installBakedData(*renderer, snap, reader, attempted), 0u) << "each UUID is tried once";
+    EXPECT_EQ(reads, 1u);
+    const Image installed = render(cam, {.frames = 2});
+    const glm::vec3 c = average(installed, 50, 111, 58, 116);
+    EXPECT_GT(c.g, c.r + 0.2f) << c.r << " " << c.g << " " << c.b;
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
 }
 
 TEST_F(ReflectionsTest, RealtimeProbeFollowsTheScene) {

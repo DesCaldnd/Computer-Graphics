@@ -163,6 +163,11 @@ struct InputMappingConfig {
 // Reflection for the mapping types (idempotent).
 void registerInputTypes();
 
+// Problems in a mapping config that would otherwise only show up as silently dead bindings: unknown input sources
+// (typos like "Key.Spcae"), bindings/chords referring to undeclared actions, unknown active contexts, duplicate
+// action/context names. One human readable message per problem; InputSystem::setMappings logs them as warnings.
+[[nodiscard]] std::vector<std::string> validateInputMappings(const InputMappingConfig& config);
+
 // ---- sources ---------------------------------------------------------------------------------------------------
 
 struct InputSource {

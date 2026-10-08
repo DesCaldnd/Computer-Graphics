@@ -54,6 +54,27 @@ TEST(Integration, OptionalModuleServices) {
     for (int i = 0; i < 3; ++i) engine.tick(1.0 / 64.0);
 }
 
+#if OX_HAS_AUDIO
+TEST(Integration, AudioSettingsOnlyTouchChangedBuses) {
+    test::TempDir dir;
+    Engine engine;
+    ASSERT_TRUE(engine.init(cfg(dir)));
+    auto& a = engine.services().get<audio::AudioEngine>();
+    ASSERT_NE(a.bus("Music"), nullptr);
+    a.bus("Music")->setVolume(0.1f); // game code ducks the music
+
+    AudioSettings s = engine.settings().user().audio;
+    s.masterVolume = 0.5f;
+    engine.settings().setAudio(s);
+    EXPECT_FLOAT_EQ(a.master()->volume(), 0.5f);
+    EXPECT_FLOAT_EQ(a.bus("Music")->volume(), 0.1f) << "unrelated settings change keeps the game's bus volume";
+
+    s.busVolumes["Music"] = 0.8f;
+    engine.settings().setAudio(s);
+    EXPECT_FLOAT_EQ(a.bus("Music")->volume(), 0.8f) << "the user's own Music slider still applies";
+}
+#endif
+
 TEST(Integration, ModuleTogglesFromProject) {
     test::TempDir dir;
     ProjectSettings p;

@@ -17,6 +17,9 @@
 //   OX_REFLECT_TYPE(RigidBodyComponent, "RigidBody").field(...);
 //   ox::ComponentRegistry::instance().add<RigidBodyComponent>({.category = "Physics", .icon = "cube"});
 //
+// Empty structs work as tag components (`struct EnemyTag {}; OX_REFLECT_TYPE(EnemyTag, "EnemyTag");`): they are
+// saved/loaded, copied, shown in the inspector and queryable with world.registry().view<EnemyTag>().
+//
 // The registry is process-wide like the reflection TypeRegistry (it is type metadata, not an engine service).
 namespace ox {
 
@@ -89,7 +92,6 @@ private:
 
 template <class C>
 ComponentInfo& ComponentRegistry::add(ComponentOptions options) {
-    static_assert(!std::is_empty_v<C>, "registered components need at least one field (entt drops storage for empty types)");
     const reflect::TypeInfo& type = reflect::typeOf<C>();
     OX_ASSERT(type.registered, "reflect component type before registering it");
     ComponentInfo info;
@@ -102,15 +104,31 @@ ComponentInfo& ComponentRegistry::add(ComponentOptions options) {
     info.serializable = options.serializable;
     info.typeId = entt::type_hash<C>::value();
     info.has = [](const World& w, entt::entity e) { return w.registry().all_of<C>(e); };
-    info.add = [](World& w, entt::entity e) -> void* { return &w.registry().get_or_emplace<C>(e); };
     info.remove = [](World& w, entt::entity e) { w.registry().remove<C>(e); };
-    info.get = [](World& w, entt::entity e) -> void* { return w.registry().try_get<C>(e); };
-    info.copy = [](World& dst, entt::entity de, const World& src, entt::entity se) {
-        dst.registry().emplace_or_replace<C>(de, src.registry().get<C>(se));
-    };
-    info.notifyChanged = [](World& w, entt::entity e) {
-        if (w.registry().all_of<C>(e)) w.registry().patch<C>(e);
-    };
+    if constexpr (std::is_empty_v<C>) {
+        // Tag (marker) components: EnTT keeps no instances for empty types, so the registry hands out a shared
+        // dummy object (no fields to read or write) while the entity has the tag.
+        info.add = [](World& w, entt::entity e) -> void* {
+            if (!w.registry().all_of<C>(e)) w.registry().emplace<C>(e);
+            return &detail::tagInstance<C>();
+        };
+        info.get = [](World& w, entt::entity e) -> void* {
+            return w.registry().all_of<C>(e) ? &detail::tagInstance<C>() : nullptr;
+        };
+        info.copy = [](World& dst, entt::entity de, const World&, entt::entity) {
+            if (!dst.registry().all_of<C>(de)) dst.registry().emplace<C>(de);
+        };
+        info.notifyChanged = [](World&, entt::entity) {};
+    } else {
+        info.add = [](World& w, entt::entity e) -> void* { return &w.registry().get_or_emplace<C>(e); };
+        info.get = [](World& w, entt::entity e) -> void* { return w.registry().try_get<C>(e); };
+        info.copy = [](World& dst, entt::entity de, const World& src, entt::entity se) {
+            dst.registry().emplace_or_replace<C>(de, src.registry().get<C>(se));
+        };
+        info.notifyChanged = [](World& w, entt::entity e) {
+            if (w.registry().all_of<C>(e)) w.registry().patch<C>(e);
+        };
+    }
     return upsert(std::move(info));
 }
 

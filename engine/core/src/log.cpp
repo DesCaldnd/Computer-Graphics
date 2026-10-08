@@ -14,7 +14,6 @@ struct State {
     std::mutex mutex;
     std::vector<std::pair<int, Sink>> sinks;
     int nextId = 1;
-    bool defaultSink = true;
 };
 
 State& state() {
@@ -23,6 +22,7 @@ State& state() {
 }
 
 std::atomic<Level> g_minLevel{Level::Info};
+std::atomic<bool> g_stderrSink{true};
 
 } // namespace
 
@@ -38,6 +38,9 @@ void removeSink(int id) {
     std::lock_guard lock(s.mutex);
     std::erase_if(s.sinks, [id](const auto& p) { return p.first == id; });
 }
+
+void setStderrSinkEnabled(bool enabled) { g_stderrSink.store(enabled, std::memory_order_relaxed); }
+bool stderrSinkEnabled() { return g_stderrSink.load(std::memory_order_relaxed); }
 
 void setMinLevel(Level level) { g_minLevel.store(level, std::memory_order_relaxed); }
 Level minLevel() { return g_minLevel.load(std::memory_order_relaxed); }
@@ -58,8 +61,10 @@ void write(Level level, std::string_view category, std::string_view message) {
     auto& s = state();
     std::lock_guard lock(s.mutex);
     const Record record{level, category, message};
-    std::fprintf(stderr, "[%.*s] [%.*s] %.*s\n", int(levelName(level).size()), levelName(level).data(),
-                 int(category.size()), category.data(), int(message.size()), message.data());
+    if (level == Level::Fatal || g_stderrSink.load(std::memory_order_relaxed)) {
+        std::fprintf(stderr, "[%.*s] [%.*s] %.*s\n", int(levelName(level).size()), levelName(level).data(),
+                     int(category.size()), category.data(), int(message.size()), message.data());
+    }
     for (auto& [id, sink] : s.sinks) {
         sink(record);
     }

@@ -72,8 +72,27 @@ ChunkStreamer::~ChunkStreamer() {
             chunk.cancel->store(true);
         }
     }
-    std::unique_lock lk(m_shared->mutex);
-    m_shared->cv.wait(lk, [this] { return m_shared->pending == 0; });
+    {
+        std::unique_lock lk(m_shared->mutex);
+        m_shared->cv.wait(lk, [this] { return m_shared->pending == 0; });
+    }
+    // Loaded chunks leave the world like on a regular unload (entities removed, GPU data released, payload saved);
+    // the save runs synchronously here because no worker may outlive the streamer.
+    for (auto& [c, chunk] : m_chunks) {
+        if (chunk.state != ChunkState::Loaded || !chunk.payload) {
+            continue;
+        }
+        if (m_callbacks.onUnload) {
+            m_callbacks.onUnload(c, *chunk.payload);
+        }
+        if (m_callbacks.save) {
+            try {
+                m_callbacks.save(c, *chunk.payload);
+            } catch (...) {
+            }
+        }
+    }
+    m_chunks.clear();
 }
 
 f32 ChunkStreamer::distanceToChunk(ChunkCoord c, glm::vec3 p) const {
