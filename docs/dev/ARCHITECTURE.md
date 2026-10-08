@@ -57,6 +57,7 @@ Module targets: `ox_<name>` with alias `Oxwald::<name>`. Modules:
 | `ai` | core, Recast/Detour | navmesh, path finding, behaviour trees, perception |
 | `net` | core, ENet | client/server transport, replication, prediction/interpolation |
 | `script` | core, Lua 5.4, sol2 | Lua VM, bindings, hot reload |
+| `async` | core | C++20 coroutines for gameplay: `Task<T>`, `Future<T>`, frame/time awaiters, thread hops, `whenAll/Any`, cancellation bound to entities, Lua `await` bridge |
 | `ui` | render, imgui, RmlUi | in-game debug UI/profiler (ImGui), game UI (RmlUi) |
 | `world` | core, scene | terrain heightfields, vegetation placement, day/night, chunk streaming (CPU side) |
 | `gameplay` | scene + physics/animation/spline/audio/ai/net/script | ECS components & systems binding the CPU modules to the world |
@@ -74,7 +75,8 @@ A module never includes another module's `src/`. Only public headers.
 - Errors that callers can handle → return `std::expected`-like `ox::Result<T>` (core) or `bool` + log. No exceptions
   across module boundaries (third-party exceptions are caught at the boundary).
 - No global mutable singletons for engine services — services are registered in `ox::Services` (DI) and passed in.
-  Logging, the type/reflection registry and the cvar registry are the only process-wide registries.
+  Logging, the type/reflection registry, the component registry and the cvar registry are the only process-wide
+  registries (they hold type metadata, not runtime state).
 - Math: glm, right-handed, **Y-up**, −Z forward for cameras, depth range [0,1] (`GLM_FORCE_DEPTH_ZERO_TO_ONE`),
   **reversed-Z** depth buffers in the renderer (near = 1, far = 0). Rotations are quaternions everywhere — never Euler
   angles in runtime state (Euler only as an editor display convenience).
