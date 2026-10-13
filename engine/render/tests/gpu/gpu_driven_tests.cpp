@@ -590,6 +590,15 @@ TEST_F(GpuDrivenTest, StressSceneAsyncComputeAndParallelRecording) {
 namespace ox::render::test {
 
 TEST_F(GpuDrivenTest, SteadyStateExtractAndDrawListsDoNotAllocate) {
+    // Not a compile-time constant on purpose: an unconditional skip makes the rest of the body unreachable (C4702).
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL > 0
+    static volatile bool debugContainers = true;
+#else
+    static volatile bool debugContainers = false;
+#endif
+    if (debugContainers) {
+        GTEST_SKIP() << "MSVC debug containers allocate a proxy object each: allocation counts are meaningless here";
+    }
     Random rng(9);
     std::vector<Uuid> mats;
     for (int i = 0; i < 16; ++i) mats.push_back(material({rng.nextFloat(), rng.nextFloat(), rng.nextFloat(), 1}, 0.0f, 0.5f));

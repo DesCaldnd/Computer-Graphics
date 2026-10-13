@@ -21,17 +21,32 @@ namespace {
         EXPECT_TRUE(gr_.matched) << gr_.message << "\n" << asciiArt(img);                                              \
     } while (0)
 
-f64 psnr(const Image& a, const Image& b) {
+// Rows [skipBegin, skipEnd) are left out of the comparison.
+f64 psnr(const Image& a, const Image& b, u32 skipBegin = 0, u32 skipEnd = 0) {
     f64 se = 0.0;
-    const usize n = usize(a.width) * a.height;
-    for (usize i = 0; i < n; ++i) {
-        for (u32 c = 0; c < 3; ++c) {
-            const f64 d = f64(a.rgba[i * 4 + c]) - f64(b.rgba[i * 4 + c]);
-            se += d * d;
+    usize n = 0;
+    for (u32 y = 0; y < a.height; ++y) {
+        if (y >= skipBegin && y < skipEnd) continue;
+        for (u32 x = 0; x < a.width; ++x, ++n) {
+            const usize i = usize(y) * a.width + x;
+            for (u32 c = 0; c < 3; ++c) {
+                const f64 d = f64(a.rgba[i * 4 + c]) - f64(b.rgba[i * 4 + c]);
+                se += d * d;
+            }
         }
     }
     const f64 mse = se / (f64(n) * 3.0);
     return mse <= 1e-12 ? 99.0 : 10.0 * std::log10(255.0 * 255.0 / mse);
+}
+
+// PSNR of a DLSS image. Debug builds run the development NGX runtime, which stamps a "do not distribute" banner
+// across the lower part of every frame: that band is not compared.
+f64 psnrDlss(const Image& dlss, const Image& reference) {
+#if defined(NDEBUG)
+    return psnr(dlss, reference);
+#else
+    return psnr(dlss, reference, dlss.height * 80 / 100, dlss.height * 95 / 100);
+#endif
 }
 
 // Box-filtered downsample (supersampled reference).
@@ -376,7 +391,7 @@ TEST_F(PostProcessTest, DlssRendersOnRtx) {
     writeOut("postprocess_dlss_quality", img);
     writeOut("postprocess_dlss_reference_native", native);
     writeOut("postprocess_dlss_reference_taau_quality", taau);
-    const f64 pDlss = psnr(img, native), pTaau = psnr(taau, native);
+    const f64 pDlss = psnrDlss(img, native), pTaau = psnr(taau, native);
     std::printf("DLSS Quality (67 %%) PSNR vs native: %.2f dB (TAAU 67 %%: %.2f dB), mean luminance %.4f (native %.4f), "
                 "DLSS pass %.3f ms\n", pDlss, pTaau, meanLuminance(img), meanLuminance(native), passMs("DLSS"));
     EXPECT_GT(pDlss, 35.0) << "not the native image: flipped, shifted or badly exposed?";
@@ -413,7 +428,7 @@ TEST_F(PostProcessTest, DlssQualityModesSetRenderResolutionAndMipBias) {
         EXPECT_TRUE(ranPass("DLSS")) << m.name;
         EXPECT_FALSE(ranPass("TAAU")) << m.name;
         if (width == native.width) {
-            EXPECT_GT(psnr(img, native), 27.0) << m.name;
+            EXPECT_GT(psnrDlss(img, native), 27.0) << m.name;
             EXPECT_NEAR(meanLuminance(img), meanLuminance(native), 0.015) << m.name;
             writeOut(std::format("postprocess_dlss_mode_{}", m.name), img);
         }
@@ -454,8 +469,8 @@ TEST_F(PostProcessTest, DlssStaticSceneConvergesAndStaysStable) {
     writeOut("postprocess_dlss_static_reference_ssaa", reference);
     writeOut("postprocess_dlss_static_reference_taau", taau);
     writeOut("postprocess_dlss_static_reference_bilinear", bilinear);
-    const f64 pDlss = psnr(dlss, reference), pTaau = psnr(taau, reference), pBilinear = psnr(bilinear, reference);
-    const f64 stability = psnr(dlss, previous);
+    const f64 pDlss = psnrDlss(dlss, reference), pTaau = psnr(taau, reference), pBilinear = psnr(bilinear, reference);
+    const f64 stability = psnrDlss(dlss, previous);
     std::printf("DLSS 50%% static: PSNR vs 16x SSAA %.2f dB (TAAU %.2f, bilinear %.2f), edge error %.2f (TAAU %.2f, "
                 "bilinear %.2f), frame 47 vs 48: %.2f dB\n", pDlss, pTaau, pBilinear, edgeError(dlss, reference),
                 edgeError(taau, reference), edgeError(bilinear, reference), stability);
@@ -503,7 +518,7 @@ TEST_F(PostProcessTest, DlssFollowsCameraMotion) {
     writeOut("postprocess_dlss_moving_quality", dlss);
     writeOut("postprocess_dlss_moving_reference_ssaa", reference);
     writeOut("postprocess_dlss_moving_reference_taau", taau);
-    const f64 pDlss = psnr(dlss, reference), pTaau = psnr(taau, reference);
+    const f64 pDlss = psnrDlss(dlss, reference), pTaau = psnr(taau, reference);
     std::printf("moving camera, last frame vs 16x SSAA: DLSS %.2f dB, TAAU %.2f dB; checker sharpness DLSS %.4f, TAAU "
                 "%.4f, SSAA %.4f\n", pDlss, pTaau, sharpness(dlss, 64, 200, 448, 330), sharpness(taau, 64, 200, 448, 330),
                 sharpness(reference, 64, 200, 448, 330));
@@ -535,7 +550,7 @@ TEST_F(PostProcessTest, DlssWithAutoExposureAndPreExposure) {
     writeOut("postprocess_dlss_auto_exposure", dlss);
     writeOut("postprocess_dlss_auto_exposure_reference_ssaa", reference);
     writeOut("postprocess_dlss_auto_exposure_reference_taau", taau);
-    const f64 pDlss = psnr(dlss, reference), pTaau = psnr(taau, reference);
+    const f64 pDlss = psnrDlss(dlss, reference), pTaau = psnr(taau, reference);
     std::printf("auto exposure, 67%%: PSNR vs 16x SSAA DLSS %.2f dB, TAAU %.2f dB; mean luminance DLSS %.4f, "
                 "TAAU %.4f, SSAA %.4f\n", pDlss, pTaau, meanLuminance(dlss), meanLuminance(taau), meanLuminance(reference));
     EXPECT_NEAR(meanLuminance(dlss), meanLuminance(reference), 0.02);
