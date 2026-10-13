@@ -69,14 +69,17 @@ int main(int argc, char** argv) {
 #endif
 #if OX_HAS_RENDER && OX_RENDER_HAS_RUNTIME
     // Vulkan renderer (headless runs render offscreen). Dedicated servers keep the NullRenderer.
+    ox::render::RuntimeRendererOptions rendererOptions;
+    if (options->width) rendererOptions.headlessWidth = static_cast<ox::u32>(*options->width); // offscreen target size
+    if (options->height) rendererOptions.headlessHeight = static_cast<ox::u32>(*options->height);
 #if OX_HAS_UI
     // Debug overlay (F1 / ~) and RmlUi game UI on top of the renderer.
     if (!config.dedicatedServer) {
         engine.addModule(std::make_unique<ox::ui::UiModule>());
-        engine.setRenderer(ox::ui::withUi(ox::render::createRenderer()));
+        engine.setRenderer(ox::ui::withUi(ox::render::createRenderer(rendererOptions)));
     }
 #else
-    if (!config.dedicatedServer) engine.setRenderer(ox::render::createRenderer());
+    if (!config.dedicatedServer) engine.setRenderer(ox::render::createRenderer(rendererOptions));
 #endif
 #endif
 

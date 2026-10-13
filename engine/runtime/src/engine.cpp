@@ -147,6 +147,8 @@ Status Engine::init(const EngineConfig& config) {
     }
 
     m_connections.emplace_back(m_settings->changed.connect([this](SettingsCategory c) {
+        // Settings::apply() rewrote the cvars from the user file: --cvar / --quality / --width still win this run.
+        applyCommandLineOverrides();
         if (hasCategory(c, SettingsCategory::Graphics)) applyGraphicsSettings();
     }));
     // r.*/sg.* changes typed by a user (console, CVarRegistry::set/execute, Lua cvar.set) update the user settings
