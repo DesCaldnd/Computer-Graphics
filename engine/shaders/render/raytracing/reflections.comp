@@ -46,7 +46,7 @@ void main() {
             RtSurface s = oxRtFetchSurface(pc.scene, pc.rt, h.instance, h.primitive, h.bary, L, lod);
             radiance = oxRtShadeHit(pc.view, pc.scene, pc.rt, s, -L, rng, (pc.flags & 1u) != 0u);
         } else {
-            radiance = oxRtMissRadiance(pc.view, pc.scene, L, roughness < 0.2);
+            radiance = oxRtMissLighting(pc.view, pc.scene, L, roughness < 0.2);
         }
         float lum = oxLuminance(radiance);
         if (lum > maxLum) radiance *= maxLum / lum;

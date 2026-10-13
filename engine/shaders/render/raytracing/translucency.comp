@@ -15,7 +15,7 @@ OX_RENDER_PUSH(RtSceneBuffer rt; uint depth; uint sceneColor; uint width; uint h
 
 vec3 shadeEnvironmentRay(vec3 origin, vec3 dir, inout uint rng, bool colored) {
     RtHit h = oxRtTraceClosest(pc.scene, pc.rt, origin, dir, 0.0, 1e4, OX_RT_MASK_SOLID);
-    if (!h.hit) return oxRtMissRadiance(pc.view, pc.scene, dir, true);
+    if (!h.hit) return oxRtMissLighting(pc.view, pc.scene, dir, true);
     RtSurface s = oxRtFetchSurface(pc.scene, pc.rt, h.instance, h.primitive, h.bary, dir, oxRtConeLod(h.t, 0.002, 512.0));
     return oxRtShadeHit(pc.view, pc.scene, pc.rt, s, -dir, rng, colored);
 }

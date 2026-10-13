@@ -19,7 +19,7 @@ void main() {
     RtHit h = oxRtTraceClosest(pc.scene, pc.rt, origin, dir, 0.0, 1e4, OX_RT_MASK_SOLID);
     vec4 result;
     if (!h.hit) {
-        result = vec4(oxRtMissRadiance(pc.view, pc.scene, dir, false), 1e4);
+        result = vec4(oxRtMissLighting(pc.view, pc.scene, dir, false), 1e4);
     } else {
         RtSurface s = oxRtFetchSurface(pc.scene, pc.rt, h.instance, h.primitive, h.bary, dir, 4.0);
         if (!s.frontFace && (s.blend & 7u) == OX_BLEND_OPAQUE) {
