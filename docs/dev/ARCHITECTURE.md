@@ -22,14 +22,20 @@ The product roadmap is in `OxwaldEngine — план развития.md` (Russi
   cmake --build build/<you> --target ox_scene_tests && ctest --test-dir build/<you> -L scene
   ```
 - macOS: the project is compiled with AppleClang (`/usr/bin/clang++`), same as the vcpkg ports.
+- Windows: MSVC (Visual Studio 2022), triplet `x64-windows`, built from a VS developer prompt; configure with
+  `-DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_TARGET_TRIPLET=x64-windows` after installing the dependencies (README,
+  "Сборка на Windows"). Linux has code and CMake but has not been built on hardware yet.
 - Dependencies: `tools/bootstrap.sh` installs everything into `vcpkg_installed`; `tools/bootstrap.sh --no-editor` skips
-  Qt (engine, player and tests only).
+  Qt (engine, player and tests only). On Windows: `vcpkg install --x-install-root=vcpkg_installed --triplet
+  x64-windows` (or the script from Git Bash).
 - Options (top-level `CMakeLists.txt`): `OX_BUILD_TESTS` (ON), `OX_BUILD_EDITOR` (ON; declared but currently
   unused — the editor is built whenever Qt 6 is found), `OX_ENABLE_TRACY` (ON), `OX_ENABLE_DLSS` (ON; only has an
   effect where the NGX runtime exists), `OX_MODULES` (empty = everything; also filters the top-level dirs `editor`,
   `apps`, `tools`, `samples`), and `OX_WARNINGS_AS_ERRORS` (option default OFF; **ON in the `dev` and `debug`
   presets**; adds `-Werror` / `/WX` to targets using `ox_set_warnings` — all modules and their tests, the editor,
-  the player and the tools. Code under `samples/` gets the same warnings but they stay non-fatal). The `release`
+  the player and the tools. Code under `samples/` gets the same warnings but they stay non-fatal). Warning sets:
+  `-Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers` on clang/gcc, `/W4 /permissive- /utf-8
+  /wd4100 /wd4127 /wd4201 /wd4324` on MSVC (the `dev` preset builds clean with `/WX` there). The `release`
   preset turns off `OX_BUILD_TESTS` and `OX_ENABLE_TRACY`. On macOS the link step passes
   `-no_warn_duplicate_libraries` (CMake repeats static archives on purpose; Apple's ld warned about each).
 

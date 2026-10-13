@@ -92,10 +92,10 @@ u32 phases = upscalerJitterPhases(scale);                         // 8 × (1/0.5
 | Тип | Пространственный (EASU + RCAS, порт MIT на GLSL) | Временной (ядро TAA с историей в output-разрешении) | Нейросеть NVIDIA (NGX, Vulkan) |
 | AA | Берёт кадр после TAA/FXAA в render-разрешении | Встроен | Встроен (DLAA при 100 %) |
 | Платформы | Везде | Везде | NVIDIA RTX на Windows/Linux |
-| Качество (50 %, тест против SSAA / билинейного) | 37.7 дБ против 35.0 | 32.1 дБ против 25.9 | на Mac не измерить |
-| Цена 540p→1080p, M4 Pro | EASU 0.32 + RCAS 0.15 мс | 0.55 мс (+0.18 CAS) | — |
+| Качество (50 %, тест против SSAA / билинейного) | 37.7 дБ против 35.0 | 32.1 дБ против 25.9 | на другой сцене (RTX 3080, шаг 4): 40.6 дБ против 39.2 у TAAU |
+| Цена 540p→1080p, M4 Pro | EASU 0.32 + RCAS 0.15 мс | 0.55 мс (+0.18 CAS) | на Mac нет; RTX 3080 — см. шаг 4 |
 
-`r.Upscaler.Sharpness` (0.2) управляет резкостью: RCAS для FSR, CAS для TAAU, sharpness для DLSS. Что выбирается в кадре:
+`r.Upscaler.Sharpness` (0.2) управляет резкостью: RCAS для FSR, CAS для TAAU. **На DLSS он не влияет**: параметр резкости в NGX устарел, и текущие модели DLSS его игнорируют. Если после DLSS нужна резкость, используйте `r.Sharpen` (CAS после апскейла). Что выбирается в кадре:
 
 ```cpp
 RenderSettings s;
@@ -136,7 +136,7 @@ for (const UpscalerAvailability& a : upscalerAvailability(&device)) {
 - `NVIDIA::DLSS` — только с рантаймом. Тогда в `ox_render` линкуется `dlss_ngx.cpp` и появляется публичный дефайн `OX_RENDER_HAS_DLSS=1`. Иначе работает заглушка `dlss_stub.cpp`, которая отвечает причиной;
 - `NVIDIA_DLSS_RUNTIME_FILES` → кэш-переменная `OX_DLSS_RUNTIME_FILES`: на Windows это `*.dll` из `bin/` порта (`nvngx_dlss.dll`), на Linux — `libnvidia-ngx-*.so.*`.
 
-**Где NGX ищет рантайм.** `NVSDK_NGX_VULKAN_Init_with_ProjectID` получает единственный путь поиска фич — **текущий рабочий каталог процесса** (`std::filesystem::current_path()`). Служебные данные NGX пишет в `<temp>/oxwald_ngx`. Значит, файлы из `OX_DLSS_RUNTIME_FILES` должны лежать в каталоге, из которого запускается игра. Автоматического копирования к исполняемым файлам пока нет — добавьте в свой таргет:
+**Где NGX ищет рантайм.** `NVSDK_NGX_VULKAN_Init_with_ProjectID` получает два пути поиска фич: **каталог исполняемого файла** и текущий рабочий каталог процесса. Служебные данные NGX пишет в `<temp>/oxwald_ngx`. Таргетам движка (плеер, редактор, тесты, инструменты) рантайм копирует рядом с exe `ox_deploy_vulkan_runtime`: для Release и RelWithDebInfo — релизные библиотеки, для Debug — библиотеки для разработчиков с отладочным оверлеем. В своём таргете вызовите `ox_deploy_dlss_runtime(MyGame)` или скопируйте файлы сами:
 
 ```cmake
 if(OX_DLSS_RUNTIME_FILES)
@@ -145,7 +145,7 @@ if(OX_DLSS_RUNTIME_FILES)
 endif()
 ```
 
-и запускайте игру из каталога исполняемого файла (или кладите DLL рядом с рабочим каталогом ярлыка).
+После этого игру можно запускать из любого рабочего каталога.
 
 **Как включить**
 
@@ -170,13 +170,31 @@ if (upscalerAvailability(UpscalerType::DLSS, device.get()).available) {
 | «this build was configured with OX_ENABLE_DLSS=OFF» | Пересобрать с `-DOX_ENABLE_DLSS=ON` |
 | «this build has no NVIDIA DLSS runtime…» | Порт `nvidia-dlss` без рантайма (не та платформа или нет git LFS при сборке порта) |
 | «NVIDIA DLSS requires an NVIDIA RTX GPU (this GPU: …)» | Не NVIDIA |
-| «NGX initialisation failed: …» | Чаще всего нет `nvngx_dlss.dll` / `.so` в рабочем каталоге |
+| «the Vulkan device was created without the extensions NVIDIA NGX needs (…)» | Вызвать `appendUpscalerVulkanExtensions(desc)` до `rhi::Device::create`. NGX в этом случае не вызывается вовсе |
+| «NGX initialisation failed: …» | Чаще всего нет `nvngx_dlss.dll` / `.so` рядом с исполняемым файлом |
 | «NVIDIA DLSS needs a newer driver (at least X.Y)» | Обновить драйвер |
 | «NVIDIA DLSS is not supported on this GPU/driver: …» | GTX без тензорных ядер и т. п. |
 
-Что передаётся в DLSS: цвет в HDR (`IsHDR`), глубина с reversed-Z (`DepthInverted`), векторы движения в render-разрешении (`MVLowRes`, масштаб `−render size`), джиттер в пикселях рендера, текстура экспозиции и `InPreExposure`. Без текстуры экспозиции включается флаг `AutoExposure`. При смене камеры история сбрасывается, при смене размера или качества фича пересоздаётся. Frame generation и ray reconstruction не интегрированы.
+Что передаётся в DLSS: цвет в HDR (`IsHDR`), глубина с reversed-Z (`DepthInverted`), векторы движения в render-разрешении (`MVLowRes`, масштаб `−render size`), джиттер в пикселях рендера, текстура экспозиции и `InPreExposure`. Без текстуры экспозиции включается флаг `AutoExposure`. Режимы `UltraPerformance` и `Performance` входы экспозиции игнорируют и считают её сами. При смене камеры история сбрасывается, при смене размера или качества фича пересоздаётся. Frame generation и ray reconstruction не интегрированы.
 
-> На Mac DLSS только компилируется. Запуск на RTX стоит один раз проверить с отладочным оверлеем NGX: знак джиттера взят по соглашению UE. Тест `PostProcessTest.DlssRendersOnRtx` в `ox_render_gpu_tests` на RTX-машине сравнивает DLSS Quality с нативным кадром (PSNR > 25 дБ).
+**Режимы и разрешение рендера.** DLSS сам сообщает оптимальное разрешение для режима, поэтому оно может на пиксель-другой отличаться от процента из таблицы шага 3. Измерено на RTX 3080 при выходе 960×540:
+
+| `r.Upscaler.Quality` | Разрешение рендера | Mip bias |
+| --- | --- | --- |
+| `UltraPerformance` | 320×180 | −2.585 |
+| `Performance` | 480×270 | −2.000 |
+| `Balanced` | 557×313 | −1.785 |
+| `Quality` | 640×360 | −1.585 |
+| `Native` (DLAA) | 960×540 | −1.000 |
+
+**Что проверено.** DLSS проверен на Windows 11 с NVIDIA RTX 3080 (драйвер 617.42) тестами `PostProcessTest.Dlss*` из `ox_render_gpu_tests`: все режимы качества и DLAA, смена режима и размера выхода на лету, статичная сцена, движение камеры, авто-экспозиция, пересоздание рендерера и устройства. Знаки джиттера и векторов движения подтверждены измерением и менять их не пришлось:
+
+- статичная сцена тонкой геометрии, режим `Performance`, против эталона 16× SSAA: DLSS 40.6 дБ, TAAU 39.2 дБ;
+- камера в движении, режим `Quality`, последний кадр против 16× SSAA: DLSS 31.0 дБ, TAAU 29.5 дБ.
+
+Время прохода DLSS на RTX 3080 при 1080p: `Performance` 6.2 мс, `Quality` 3.95 мс, DLAA 2.9 мс. Это грубые цифры: измерение шло с включённой валидацией, а GPU делили другие процессы.
+
+> Пока не проверено: оконный запуск плеера и редактора с DLSS «на глаз» (включая ресайз окна), сборка Debug с отладочным оверлеем NGX, время кадра в 4K и Linux.
 
 ## Шаг 5. Постобработка
 
@@ -302,7 +320,8 @@ PostProcessSettings s2 = resolvePostProcessSettings(snapshot, settings, cameraPo
 - **Двойное сглаживание.** TAAU и DLSS заменяют TAA. FSR 1 его не заменяет — для FSR держите `r.AntiAliasing = 2` (TAA) или хотя бы FXAA.
 - **Ghosting за частицами и прозрачными объектами.** Они не пишут векторы движения (реактивной маски пока нет). Уменьшите размер быстрых частиц или используйте `StretchedBillboard` ([глава 23](23-transparency-water-particles.md)).
 - **Тонкие провода «рвутся» в TAAU 50 %.** Субпиксельные детали TAAU сохраняет частично. Поднимите режим или используйте DLSS.
-- **DLSS «включён», но работает TAAU.** Это фолбэк: смотрите `upscalerAvailability(UpscalerType::DLSS, &device).reason`. Частая причина на Windows — `nvngx_dlss.dll` нет в *рабочем каталоге* процесса.
+- **DLSS «включён», но работает TAAU.** Это фолбэк: смотрите `upscalerAvailability(UpscalerType::DLSS, &device).reason`. Частые причины: устройство создано без `appendUpscalerVulkanExtensions(desc)` или рядом с исполняемым файлом нет `nvngx_dlss.dll`.
+- **`r.Upscaler.Sharpness` не меняет картинку с DLSS.** Так и должно быть: DLSS этот параметр игнорирует. Резкость после DLSS даёт `r.Sharpen`.
 - **`DLAA` и `Native` — одно и то же.** Канонически значение называется `Native` (так его печатают консоль и
   `toString()`), но cvar принимает и синоним `DLAA` (`r.Upscaler.Quality DLAA`) — им пользуются меню и
   `UserSettings::graphics.upscalerQuality`.

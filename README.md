@@ -76,9 +76,12 @@ OxwaldEngine — игровой движок на C++20 с рендерером 
 - [vcpkg](https://github.com/microsoft/vcpkg), переменная окружения `VCPKG_ROOT` указывает на его checkout.
 - Компилятор с поддержкой C++20. На macOS используется AppleClang (`/usr/bin/clang++`), тот же, что собирает порты
   vcpkg; также нужны Xcode Command Line Tools и `brew install autoconf autoconf-archive automake libtool pkg-config`
-  (инструменты сборки для некоторых портов).
+  (инструменты сборки для некоторых портов). На Windows — Visual Studio 2022 (MSVC v143) с компонентом «Desktop
+  development with C++»; подробности — в разделе [Сборка на Windows](#сборка-на-windows).
 - GPU с Vulkan 1.2+ и набором возможностей 1.3 (dynamic rendering, synchronization2, descriptor indexing,
-  buffer device address, timeline semaphores). На macOS MoltenVK собирается из overlay-порта vcpkg.
+  buffer device address, timeline semaphores). На macOS MoltenVK собирается из overlay-порта vcpkg. На Windows
+  загрузчик Vulkan и слои валидации приходят из vcpkg, драйвер — от производителя GPU.
+- Git LFS на Windows и Linux: overlay-порт `nvidia-dlss` забирает бинарные файлы DLSS SDK через LFS.
 - Для редактора — Qt 6 из vcpkg. Первая сборка Qt занимает много времени; без редактора можно обойтись
   (`--no-editor`).
 
@@ -114,6 +117,55 @@ build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor                      
 build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor --project MyGame.oxproj
 ```
 
+На Windows исполняемые файлы лежат прямо в `build\devin\` (`OxwaldPlayer.exe`, `OxwaldEditor.exe`).
+
+### Сборка на Windows
+
+Проверено на Windows 11 с NVIDIA RTX 3080 (драйвер 617.42): Visual Studio 2022 17.14 (MSVC 14.44), CMake 3.30,
+Ninja 1.12.1. Собирается всё: движок, плеер, инструменты, тесты, примеры руководства, демо-проект и редактор.
+
+Что поставить:
+- Visual Studio 2022 с компонентом «Desktop development with C++»;
+- CMake ≥ 3.25 и Ninja;
+- Git и Git LFS (`git lfs install`) — без LFS не установится порт `nvidia-dlss` (он скачивает около 700 МБ);
+- Python 3;
+- свежий драйвер GPU;
+- vcpkg: `git clone https://github.com/microsoft/vcpkg C:\devcpkg`, затем `bootstrap-vcpkg.bat` и переменная
+  окружения `VCPKG_ROOT`.
+
+Репозиторий клонируйте в короткий путь без пробелов. Переводы строк фиксирует `.gitattributes` (LF), настраивать
+`core.autocrlf` не нужно. Все команды запускайте из **«x64 Native Tools Command Prompt for VS 2022»**, из корня
+репозитория: Ninja должен видеть `cl.exe`.
+
+```bat
+%VCPKG_ROOT%cpkg install --x-install-root=vcpkg_installed --triplet x64-windows
+
+cmake --preset dev -DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_TARGET_TRIPLET=x64-windows
+cmake --build --preset dev
+ctest --preset dev -j8 --output-on-failure
+```
+
+Установка зависимостей вместе с Qt заняла около 44 минут на i9-9900K (без бинарного кэша vcpkg). Пресет `dev`
+собирается под MSVC с предупреждениями как ошибками (`/W4 /WX`).
+
+Подводные камни:
+- **Не запускайте тесты от имени администратора.** В процессах с повышенными правами загрузчик Vulkan игнорирует
+  `VK_ADD_LAYER_PATH`, и слой валидации из каталога сборки не находится.
+- **Запрос брандмауэра Windows** про сетевой доступ для тестовых exe — это клиент Tracy, который слушает порт.
+  На результат тестов ответ не влияет.
+- **Пропуск `DeviceLifecycle.SurfaceDeviceAfterHeadlessDevice`** — норма: драйвер NVIDIA на Windows не предоставляет
+  `VK_EXT_headless_surface`.
+- **Пути с не-ASCII символами** вне системной ANSI-кодировки пока не поддерживаются (см.
+  [BACKLOG](docs/dev/BACKLOG.md)).
+
+### Сборка на Linux
+
+**На железе не проверялась.** Код и CMake для Linux есть (включая xcb-surface во вьюпорте редактора и рантайм DLSS
+в overlay-порте), но ни сборка, ни тесты на Linux-машине не запускались. Ожидаемый порядок тот же, что на macOS:
+`tools/bootstrap.sh` (триплет vcpkg по умолчанию), затем `cmake --preset dev` и `ctest --preset dev`. Нужны Git LFS
+и dev-пакеты X11/xcb/Wayland для Qt и GLFW. Wayland-surface во вьюпорте редактора не реализован: там редактор
+переключается на программный вьюпорт.
+
 Полезные опции CMake:
 - `-DOX_MODULES="core;scene;physics"` — сконфигурировать только перечисленные модули и каталоги верхнего уровня
   (`editor`, `apps`, `tools`, `samples`); удобно для частичной сборки.
@@ -145,12 +197,24 @@ vcpkg-overlays/         overlay-порты (MoltenVK, NVIDIA DLSS, Vulkan) и т
 
 ## Платформы
 
-Движок разрабатывается и тестируется на **macOS arm64** (Apple GPU через MoltenVK). На этой платформе нет
-аппаратного ray tracing, DLSS и меш-шейдеров: соответствующие эффекты отключены, переключатели в UI неактивны
-и показывают причину, а GPU-тесты таких функций пропускаются (`GTEST_SKIP`), а не падают.
+| Платформа | Состояние |
+| --- | --- |
+| macOS arm64 (Apple GPU, MoltenVK) | Основная платформа разработки: полная сборка, все тесты |
+| Windows 11 x64 (MSVC, NVIDIA RTX 3080) | Проверена: полная сборка с редактором, `ctest` (см. ниже) |
+| Linux x64 | Код и CMake есть, на железе не проверялась |
 
-Windows и Linux должны работать: код и CMake для них есть, DLSS (NGX) доступен только на Windows/Linux с NVIDIA RTX.
-Но в этом репозитории эти платформы пока не проверялись.
+На **macOS** нет аппаратного ray tracing, DLSS и меш-шейдеров: соответствующие эффекты отключены, переключатели в UI
+неактивны и показывают причину, а GPU-тесты таких функций пропускаются (`GTEST_SKIP`), а не падают.
+
+На **Windows с NVIDIA RTX** эти пути исполняются. На RTX 3080 проверены DLSS (все режимы качества и DLAA),
+меш-шейдеры, `drawIndirectCount`, async compute и ray tracing: GPU-тесты всех RT-эффектов и path tracer'а в обоих
+режимах проходят, станции демо-проекта отрисованы с `r.RayTracing` без ошибок валидации (что осталось непроверенным —
+в [главе 24](docs/guide/24-ray-tracing.md)). Полный `ctest`: 1249 тестов, ни один не падает, 3 пропускаются по
+делу: нет `VK_EXT_headless_surface`; тест неактивного переключателя RT на машине с RT; оконный скриншот в
+headless-запуске. Редактор открывает демо-проект с Vulkan-вьюпортом и корректно завершается. Изменения после 0.1.0,
+включая найденные портом ошибки, описаны в [истории изменений](CHANGELOG.md).
+
+DLSS (NGX) доступен только на Windows и Linux с NVIDIA RTX.
 
 ## Лицензия
 

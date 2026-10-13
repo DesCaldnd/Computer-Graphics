@@ -47,6 +47,15 @@ while (running) {
   cross-queue dependencies. `immediateSubmit(fn)` records + submits + waits (tools, tests, loading).
 * Queues: graphics, async compute and transfer get separate `VkQueue`s when available (MoltenVK exposes 4 identical
   families with one queue each → three different families, so queue-family ownership transfers are exercised on Mac).
+  On NVIDIA the async compute queue comes from a dedicated family (compute | transfer, no graphics). Barriers may
+  only name pipeline stages the command buffer's queue family can execute: every physical queue stores the stage
+  mask of its family (`queueFamilyStages` in `device.cpp`) and `DeviceState::sanitizeStages` filters with it.
+* `Device::hasInstanceExtension(name)` / `hasDeviceExtension(name)` report what the device was really created with
+  (required, optional and `DeviceDesc::optionalInstanceExtensions` / `optionalDeviceExtensions`, which are skipped
+  silently when unsupported).
+* `Device::addShutdownCallback(fn)`: runs once in `~Device` with the GPU idle and every rhi resource still alive,
+  last registered first, before `vkDestroyDevice`. For libraries that keep their own Vulkan objects on the device
+  (NVIDIA NGX, see `render_postprocess.md`).
 * `destroy(handle)` is deferred until the GPU finished every submission that could reference the object; bindless
   indices are recycled at the same time. Stale handles resolve to nothing (`isAlive()` is false).
 * Only one `Device` may exist at a time (volk keeps global function pointers).
@@ -148,6 +157,20 @@ Imported resources and `markOutput()` resources are culling roots, as are `sideE
 more than one queue are never aliased. Resource granularity is the whole resource (per-mip barriers: use
 `CommandList::textureBarrier` inside a pass). Destroy graphs before the device (`releaseResources(device)`).
 
+Async batches (queue hints with `RGCompileOptions::asyncCompute`, families from `RGCompileOptions::queueFamilies`).
+The rules below were fixed on the first device with a dedicated compute family (NVIDIA RTX 3080); before that the
+measured overlap was zero:
+
+* A batch is split before the first pass that touches a resource another queue's batch used — any access, even a
+  read after a read, because the resource changes its owning queue family. Passes before the split do not wait, so
+  they overlap with the async batch.
+* The cross-frame ordering barrier (last frame's readers and writers of a reused transient) is skipped when the two
+  passes run on different queue families: those stages would be invalid on the other family. `execute()` waits on
+  the previous execution's timeline points of the other queues instead.
+* `execute()` holds an async batch back until the following graphics batch is recorded and submits the two back to
+  back. Submitted on its own, the async batch was already finished by the time the CPU had recorded the graphics
+  passes meant to overlap with it.
+
 ## Shaders and hot reload
 
 * GLSL 4.60 → SPIR-V 1.5 (Vulkan 1.2 env) via shaderc. `#include "x"` searches the including file's directory, then
@@ -231,7 +254,24 @@ device/caps, buffer + texture upload/readback, async uploads with ownership tran
 stress with deferred destruction, compute via BDA, offscreen triangle, reversed-Z depth, MSAA resolve, bindless
 sampling + storage images, hot reload, pipeline cache, render graph frames (graphics→compute, aliasing,
 async compute), BLAS/TLAS (skipped on MoltenVK). `tools/rhi_window_smoke --frames 120 [--resize] [--present mailbox]`
-checks the swapchain path manually.
+checks the swapchain path manually. Planner tests added with the NVIDIA bring-up:
+`RenderGraphPlan.AsyncComputeBarriersNameNoGraphicsStages`,
+`RenderGraphPlan.IndependentGraphicsPassesDoNotWaitForAsyncCompute` (run on Windows only so far).
+
+## Windows / NVIDIA notes
+
+Verified on Windows 11 with an NVIDIA RTX 3080 (driver 617.42, Vulkan 1.4), MSVC 14.44.
+
+* The loader (`vulkan-1.dll`) and the validation layer come from vcpkg and are deployed by
+  `ox_deploy_vulkan_runtime` like on macOS; the NVIDIA ICD comes from the driver. The Windows loader treats a
+  manifest `library_path` as manifest-relative only when it contains a backslash, so the deployed layer manifest
+  uses `.\\`.
+* Do not run tests elevated: the loader ignores `VK_ADD_LAYER_PATH` in elevated processes.
+* `DeviceLifecycle.SurfaceDeviceAfterHeadlessDevice` skips: the NVIDIA Windows driver has no
+  `VK_EXT_headless_surface`.
+* The SPIR-V disk cache writes through unique temporary names (several test processes share the cache under
+  `ctest -j`; a fixed `<path>.tmp` raced).
+* Mesh shaders and `drawIndirectCount` are available and used by the GPU-driven path (`render.md` §13).
 
 ## Polish additions (0.1.0)
 * Manual Tracy GPU zones: `CommandList::beginGpuZone(name)` / `endGpuZone()`, `ScopedGpuZone`,
@@ -260,7 +300,8 @@ checks the swapchain path manually.
 * Async pipelines: `Device::createGraphicsPipelineAsync` / `createComputePipelineAsync(desc, jobs)`, `isPipelineReady`,
   `pendingPipelineCompiles`; results are published in `beginFrame` (never during recording).
 * `CommandList::drawMeshTasksIndirect`. `GpuTiming::startMs` / `queue` (overlap analysis). The graph splits a batch
-  before the first pass that waits on another queue (independent passes keep overlapping with async compute).
+  before the first pass that waits on another queue (independent passes keep overlapping with async compute); see
+  "Render graph" for the exact rules.
 * `ox_add_module` passes `TEST_LABELS` unescaped to `gtest_discover_tests` (a list becomes extra properties) —
   rhi registers its GPU tests itself with `LABELS "rhi\;gpu"`.
 * Modules configured before `engine/rhi` alphabetically (`render`) must `include()` `OxwaldVulkanRuntime.cmake`

@@ -537,6 +537,14 @@ fallback, alpha = max(1/len, 1/maxHistory), luminance moments) → variance (tem
 the history) → optional joint-bilateral upsample (half resolution) → RGBA16F / RGBA8 / R8 output. `lumaWeights`
 selects the guiding signal (colour, scalar AO, 4 shadow channels).
 
+`DenoiserSettings::clampHistory` (default false): the temporal pass clamps the reprojected history to the range of
+the current 5×5 signal neighbourhood. Reprojection validates geometry only, so without it the shadow of a moving
+caster on a static floor kept its history and faded over `maxHistory` (32) frames: a ghost trail behind the shadow
+and a faint shadow under the moving object. Penumbrae span the whole range and keep accumulating. ShadowsRT sets it
+for the visibility signals (sun, local lights, ReSTIR); it costs +0.06 ms per signal at 1080p on an RTX 3080. It is
+meant for visibility signals only: heavy-tailed signals (glossy radiance) would lose energy, so reflections and AO
+do not use it (their lag under moving occluders is an open item, see BACKLOG).
+
 ### CVars (Scalability::RayTracing, Low / Medium / High / Ultra)
 
 | CVar | Default | Levels |
@@ -557,7 +565,44 @@ selects the guiding signal (colour, scalar AO, 4 shadow channels).
 
 ### What is verified where
 
-Verified on the Mac (MoltenVK, no ray tracing), `ctest -L render`:
+**Verified on hardware (2026-10):** Windows 11 Pro, NVIDIA GeForce RTX 3080 10 GB, driver 617.42, Vulkan 1.3
+device, validation layers 1.4.341, MSVC 14.44, preset `dev` (RelWithDebInfo). This was the first time the ray
+tracing code ran at all; before that it had only been compiled and unit tested on the Mac. Full `ctest` on that
+machine: 1249 tests, 0 failed, 3 skipped (`RayTracingCheckboxIsInertWithoutSupport` — the machine has ray tracing,
+`DeviceLifecycle.SurfaceDeviceAfterHeadlessDevice`, `UiEngine.WindowedScreenshot`).
+
+GPU tests that execute rays (`ox_render_gpu_tests`, all `GTEST_SKIP` without ray tracing). `RayTracingTest.*`: 20
+pass, 1 skipped (the inert-checkbox test, which only runs without support). Every effect image is written to
+`<temp>/oxwald_render_out/rt_*.png`.
+
+| Test | What it asserts |
+| --- | --- |
+| `RtShadowsMatchShadowMapsLoosely` | TLAS active; RT sun shadows agree with the shadow-mapped image |
+| `RtLocalLightShadowsWithoutRestir` | `RT.Shadows` + `RT.Shadows.PublishLocal` run, no ReSTIR pass; explicit local light channels agree with shadow maps and differ from the unshadowed image |
+| `RtShadowsOfAlphaTestedAndTintedCasters` | opaque plate: full shadow; alpha-tested caster: holes and solid cells, like the alpha-tested shadow map; glass: green shadow, uncoloured when `.Colored` is off |
+| `RestirShadowsManyLights` | 32 lights: shadow depth against the unshadowed image, the 4-light fallback and the path traced reference (0.206 vs 0.203); temporally stable |
+| `RtAmbientOcclusionDarkensContacts` | RTAO darkens the image |
+| `RtReflectionsSeeOffscreenObjects` | the floor mirrors a red sphere that is above the frame |
+| `RtGlobalIlluminationBleedsColour` | red excess on the floor: raster none, DDGI within 0.4–1.6× of the path traced reference (measured 0.052 vs 0.078) |
+| `RtRefractionThroughGlass` | ray traced refraction replaces the screen-space one and stays in the same ballpark |
+| `RtVolumetricFogVisibility` | `RT.VolumetricVisibility` runs only with fog; the roof shadows the fog like the shadow-mapped fog, sunlit fog unchanged |
+| `PathTracerConvergesAndResetsOnCameraChange` | progressive convergence, loose agreement with raster, reset on a camera change |
+| `PathTracerPipelineMatchesRayQuery` | mode 1 (RT pipeline + SBT, all hit groups) against mode 0 (ray query), 512 spp each |
+| `RuntimeToggleRebuildsGraphWithoutLeaks` | toggling r.RayTracing swaps the pass set, TLAS instance count == live instances, texture / buffer counts do not grow |
+| `TlasFollowsMovingInstancesWithoutLeaks` | 300 frames of moving instances: no BLAS rebuilt, VRAM flat; 8 frames after the motion stops the shadows are at the end position (no trail) |
+| `SkinningTest.RayTracedShadowFollowsAnimation` | BLAS refit from the compute skinning output (with the periodic full rebuild): the shadow shows the animated pose and agrees with the shadow-mapped image |
+| `PerfReportRayTracing` | per-pass GPU timings (below); a 640×360 smoke run without `OX_RT_PERF` |
+
+Also on that machine:
+* plain validation: no errors in `RayTracingTest.*`; synchronization validation (`VK_LAYER_VALIDATE_SYNC=1`, checked
+  to be active with a deliberate race) is clean on `RayTracingTest.*`; GPU-assisted validation: see below;
+* showcase stations 01, 02, 03, 04, 08 and 13 rendered headless at 1920×1080 with r.RayTracing on and off,
+  validation on: zero validation errors. RT shadows match the raster ones in position and direction, the mirror
+  floor and the chrome spheres reflect off-screen objects, and the station-13 panel lists the RT passes
+  (`RT.Shadows`, `RT.DDGI.*`, `RT.Reflections`, the denoiser À-trous passes);
+* GI and ReSTIR are judged against the path tracer, not only against raster.
+
+Verified on the Mac as before (MoltenVK, no ray tracing), `ctest -L render`:
 * every RT shader and define variant compiles to optimized SPIR-V (`RtShaders.*`, plus the rhi all-shaders test):
   ray query compute shaders and all RT pipeline stages, push blocks ≤ 128 B;
 * CPU logic: TLAS masks / SBT offsets / transform packing / update-vs-rebuild classification, BLAS scheduling
@@ -569,35 +614,157 @@ Verified on the Mac (MoltenVK, no ray tracing), `ctest -L render`:
   border + apply with synthetic probe rays (L = max(y,0) → 0.659 for 2/3; constant field; scrolling resets), ReSTIR
   reservoirs sample lights ∝ their contribution (0.784 for a 4:1 pair) with spatial/temporal reuse and M clamping,
   and r.RayTracing being inert without support.
-Needs an RTX-class GPU (written, `GTEST_SKIP` here): BLAS/TLAS builds and refits, every ray query / RT pipeline
-dispatch, effect images (RT shadows vs shadow maps, RTAO darkening, off-screen reflections, GI colour bleeding,
-refraction, ReSTIR with 32 lights, path tracer convergence + reset), runtime toggling without leaks, TLAS instance
-count == live instances.
+
+**Not verified:** Nsight Graphics capture (checklist item 10, BLAS compaction ratio not measured); interactive
+toggling of r.RayTracing in a window (only the automated `RuntimeToggleRebuildsGraphWithoutLeaks`); the in-game
+settings menu; Linux; any other GPU vendor; the parts of the checklist marked "not done" below. The fixes of this
+session were not re-run on the Mac.
+
+### Bugs found by the first hardware run
+
+* **`RayTracingSceneApi::activeThisFrame()` was always false after a frame** (`rt_scene_gpu.cpp`): it compared
+  against `Device::frameNumber()`, which `endFrame()` has already advanced. "This frame" now also covers the frame
+  that just ended; `sceneHeaderAddress()` stays strict (the header lives in frame memory).
+* **Miss lighting ignored the IBL intensity**: DDGI misses, reflection misses and the glass reflection ray used the
+  unscaled sky radiance, while the raster IBL they replace is scaled by `ambientIntensity × r.IBL.Intensity`, so
+  toggling r.RayTracing changed the ambient level whenever `ambientIntensity != 1`. New `oxRtMissLighting`
+  (`rt_common.glsl`) applies the view's `iblIntensity`.
+* **Shadow denoiser ghosting**: the shadow of a moving caster left a trail and a faint shadow under moving objects
+  → `DenoiserSettings::clampHistory` (see Denoiser).
+* **SBT base alignment** (`rhi/src/pipelines.cpp`): the shader binding table started at the buffer address, but
+  region addresses must be multiples of `shaderGroupBaseAlignment` and the allocator only guarantees the buffer's
+  own memory alignment. The table now starts at the first aligned address inside a padded buffer.
+* **Compacted BLAS address** (`rhi/src/acceleration_structure.cpp`): after the uncompacted original is destroyed
+  the address of the compacted BLAS is queried again. The address does not change; this keeps GPU-assisted
+  validation working (see below).
+* **`oxDdgiMod`** (`ddgi.glsl`): `%` with a negative operand is undefined in GLSL; only non-negative operands reach
+  it now. No other `%` with signed negative operands is left in the shaders.
+* **Wrong test scenes** (tests, not engine): reflections — the red sphere sat behind the camera, which a flat floor
+  cannot mirror; it is now in front of the camera above the frame. GI — the sun now lights the visible wall face
+  and the wall is sized for the 2 m probe grid. ReSTIR — dim sky, the 32 lights form a panel so the shadows are
+  coherent.
+
+Not bugs: the "diagonal stripes" in `rt_restir_unshadowed.png` are tonemap dithering of ±1 LSB (present in raster
+too), the blotches next to the cylinder are AO that has not converged in 4 frames.
+
+### GPU-assisted validation (layer 1.4.341)
+
+The validation layer reads its settings from the environment: `VK_LAYER_GPUAV_ENABLE=1` turns on GPU-assisted
+validation, `VK_LAYER_VALIDATE_SYNC=1` synchronization validation (the engine side is `OX_VULKAN_VALIDATION=0/1`).
+Do not run the tests elevated: the loader ignores `VK_ADD_LAYER_PATH` in elevated processes.
+
+* **`VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-12281` is a false positive of the layer.** Whenever an
+  acceleration structure is destroyed, the layer drops the most recently created one from its table of known
+  addresses. With BLAS compaction every TLAS instance was reported and the layer substituted a dummy BLAS, so ray
+  traced effects stopped working under GPU-AV. Evidence that the compaction sequence is correct: leaking the
+  original, or re-querying the (unchanged) address of the compacted BLAS, both silence it — the engine now does the
+  latter and static scenes are clean. The periodic full rebuild of a deformable BLAS still triggers it; there the
+  message points at the new, live BLAS. Reproduce: `SkinningTest.RayTracedShadowFollowsAnimation` with
+  `VK_LAYER_GPUAV_ENABLE=1`.
+* **Unresolved:** "Descriptor index N references a resource that was destroyed" in `IBL.Generate`
+  (`ibl/prefilter.comp:14/31`), occasionally in `HiZ.Early` / `GpuCull.Late`. Not ray tracing code, intermittent,
+  not analysed (BACKLOG). Reproduce: `RayTracingTest.RestirShadowsManyLights` or
+  `PathTracerPipelineMatchesRayQuery` with `VK_LAYER_GPUAV_ENABLE=1`.
 
 ### Manual checklist on an NVIDIA RTX machine
 
-1. `ox_render_gpu_tests --gtest_filter=RayTracingTest.*`: nothing skipped, no validation errors; look at
-   `<temp>/oxwald_render_out/rt_shadows.png`.
+Status after the RTX 3080 session: **[test]** asserted by an automated test, **[image]** judged by looking at a
+rendered image, **[not done]**. The windowed player / editor was not used: everything below was done through the
+GPU tests and headless station renders.
+
+1. `ox_render_gpu_tests --gtest_filter=RayTracingTest.*`: nothing skipped except
+   `RayTracingCheckboxIsInertWithoutSupport`, no validation errors; look at `<temp>/oxwald_render_out/rt_shadows.png`.
+   **[test]** 20 pass, 1 skipped; **[image]** the `rt_*.png` images were looked at.
 2. Player/editor: toggle r.RayTracing at runtime several times — no hitch beyond BLAS builds, VRAM stable
    (`r.GpuTimings`, stats overlay), all RT passes listed (`RT.BuildAS`, `RT.Shadows`, …).
+   **[test]** `RuntimeToggleRebuildsGraphWithoutLeaks`; **[image]** passes listed in the station-13 panel;
+   **[not done]** interactive toggling in a window (10× in a row), hitches.
 3. Shadows: contact hardening with sun `sourceRadius` 0.5° vs 3°; alpha-tested foliage shadows have holes; glass
    casts tinted shadows; with r.RayTracing.Shadows.ReSTIR and 100+ shadowed point lights the shadows stay stable.
-4. Reflections: mirror floor shows objects behind the camera; roughness sweep 0 → 1 fades smoothly into probes;
-   no fireflies on the sun; camera motion: acceptable smearing on mirrors.
+   **[test]** alpha-tested holes and tinted glass shadow (`RtShadowsOfAlphaTestedAndTintedCasters`), ReSTIR with 32
+   lights (`RestirShadowsManyLights`); **[image]** station shadows match raster in position and direction;
+   **[not done]** the 0.5° vs 3° comparison, 100+ lights.
+4. Reflections: a mirror floor shows objects that are off screen (in front of or above the view; a flat floor
+   cannot show what is behind the camera — only a curved mirror such as a chrome sphere can); roughness sweep
+   0 → 1 fades smoothly into probes; no fireflies on the sun; camera motion: acceptable smearing on mirrors.
+   **[test]** `RtReflectionsSeeOffscreenObjects`; **[image]** mirror floor and chrome spheres on stations 03 and 13;
+   **[not done]** roughness sweep, camera motion. Visible residual: fine speckle noise on rough metals and around
+   bright emissive objects (BACKLOG).
 5. AO/GI: contact darkening without screen-space halos; red wall bleeds onto a white floor; walking through a level
    the DDGI window scrolls without popping (new slices converge in ~1 s); no light leaks through thin walls.
+   **[test]** AO darkens (`RtAmbientOcclusionDarkensContacts`), colour bleed against the path tracer
+   (`RtGlobalIlluminationBleedsColour`); **[not done]** scrolling while walking, light leaks.
 6. Glass sphere: refraction flips the background, TIR ring at grazing angles, coloured absorption with
    absorptionDistance, reflections of off-screen objects.
+   **[test]** `RtRefractionThroughGlass` (image-level difference only); **[image]** `rt_refraction.png`, glass on
+   station 13; **[not done]** the sub-items one by one.
 7. Volumetric fog with RT: god rays from off-screen occluders, local light shafts.
+   **[test]** `RtVolumetricFogVisibility` (sun under a roof); **[image]** station 04 on/off; **[not done]**
+   off-screen occluders and local light shafts specifically.
 8. r.PathTracing 1 (both Mode 0 and Mode 1): converges to a noise-free image in ~1000 spp, resets on any camera or
    object move, roughly matches the raster image (raster lacks GI / soft shadows).
+   **[test]** `PathTracerConvergesAndResetsOnCameraChange`, `PathTracerPipelineMatchesRayQuery`; **[not done]**
+   interactive run.
 9. Skinned character with a DeformedGeometryProvider: shadow follows the animation (refit), no stale bind pose.
+   **[test]** `SkinningTest.RayTracedShadowFollowsAnimation`; **[image]** station 08 on/off.
 10. Nsight Graphics capture: TLAS instance count = visible instances, compacted BLAS sizes ~50 % of uncompacted.
+    **[not done]**. TLAS instance count == live instances is asserted by `RuntimeToggleRebuildsGraphWithoutLeaks`
+    and `TlasFollowsMovingInstancesWithoutLeaks`; the compaction ratio was not measured.
 
 ### Performance (Apple M4 Pro, 1080p, plain-compute parts only)
 
 Denoiser on an RGBA16F 1080p signal (`DenoiserCost1080p`): temporal 0.56 ms, variance 0.29 ms, À-trous 1.2 ms per
 iteration → 5.7 ms with 4 iterations (half resolution: ~1/4). Ray traced passes cannot be measured here.
+
+### Performance (RTX 3080, `PerfReportRayTracing`)
+
+Reproduce: `OX_RT_PERF=1 OX_VULKAN_VALIDATION=0 ox_render_gpu_tests --gtest_filter=RayTracingTest.PerfReportRayTracing`
+(`OX_RT_PERF=<width>x<height>` measures one custom size; without the variable it is a 640×360 smoke run).
+Conditions: preset `dev` (RelWithDebInfo), validation off, default cvars, no upscaler. Scene: 240 cubes / spheres /
+cylinders on a 120 m plane, a mirror-like floor patch, 4 glass spheres, 8 shadowed point lights, sun, height fog.
+48 warm-up frames, then the average of 8 frames with one moving instance (TLAS update every frame). One run on
+2026-10-14; the totals agree with the session's first measurement (9.1 ms and 31 ms of ray tracing passes).
+
+| Configuration | 1080p: GPU frame ms | 1080p: RT passes ms | 4K: GPU frame ms | 4K: RT passes ms |
+| --- | --- | --- | --- | --- |
+| raster | 1.51 | — | 3.50 | — |
+| ray tracing (default) | 9.84 | 9.18 | 32.88 | 31.24 |
+| ray tracing + ReSTIR | 9.67 | 9.04 | 33.69 | 32.02 |
+| path tracer, mode 0 (ray query) | 10.57 | 9.95 | 37.16 | 35.44 |
+| path tracer, mode 1 (RT pipeline) | 11.14 | 10.46 | 38.69 | 36.87 |
+
+Per pass, "ray tracing (default)". Denoiser rows are the sum of all denoiser stages of one signal (temporal,
+variance, À-trous).
+
+| Pass | 1080p ms | 4K ms |
+| --- | --- | --- |
+| `RT.BuildAS` (TLAS update) | 0.01 | 0.01 |
+| `RT.Shadows` | 1.08 | 4.41 |
+| `RtShadowSun` (denoise) | 1.49 | 5.77 |
+| `RtShadowLocal` (denoise) | 1.55 | 5.70 |
+| `RT.Shadows.PublishLocal` | 0.02 | 0.06 |
+| `RT.DDGI.Trace` | 0.25 | 0.25 |
+| `RT.DDGI.UpdateIrradiance` | 0.15 | 0.27 |
+| `RT.DDGI.UpdateDepth` | 0.69 | 0.63 |
+| `RT.DDGI.Border` | 0.03 | 0.03 |
+| `RT.DDGI.Apply` | 0.25 | 0.88 |
+| `RT.AO` | 0.09 | 0.35 |
+| `RtAO` (denoise) | 1.52 | 5.68 |
+| `RT.Reflections` | 0.22 | 0.82 |
+| `RtReflections` (denoise) | 1.38 | 5.36 |
+| `RT.VolumetricVisibility` | 0.22 | 0.18 |
+| `RT.Translucency` | 0.23 | 0.81 |
+
+Other configurations: `RT.ReSTIR.Initial` 0.64 / 2.53 ms and `RT.ReSTIR.Spatial` 0.37 / 1.23 ms (`RT.Shadows` drops
+to about 0.4 / 1.3 ms); `RT.PathTrace` 1.13 / 4.45 ms, `RT.PathTrace.Pipeline` 1.46 / 5.84 ms at 1 sample per
+frame.
+
+Reading: the four denoised signals cost 5.9 ms of 9.2 ms at 1080p and 22.5 ms of 31.2 ms at 4K — the denoiser, not
+the rays, dominates. The DDGI probe passes and the froxel visibility do not depend on the resolution. The hybrid RT
+passes keep running under the path tracer (its rows above include them; open item). VRAM reported by the device
+(`totalUsageBytes`) in that test process: 810 MB raster → 1398 MB with ray tracing at 1080p, 1959 MB → 3555 MB at
+4K (the configurations run one after another in the same process, so later rows may include resources of earlier
+ones).
 
 ### Shared files touched (additive)
 
@@ -609,7 +776,17 @@ geometry)` overload, `renderer.cpp` registration line + include.
 
 * ShadowsRT replaces shadow maps entirely: without ReSTIR only 4 local lights per view are ray traced (the rest are
   unshadowed); non screen-space consumers (translucency) get unshadowed sun/local light in RT mode.
-* The raster passes still run under the path tracer (the image is replaced before post-processing).
+* The raster passes still run under the path tracer (the image is replaced before post-processing), and so do the
+  hybrid RT passes (shadows, DDGI, AO, reflections and their denoisers: about 9 ms at 1080p on an RTX 3080).
+* Path tracer mode 1 (RT pipeline) casts no shadows from translucent objects (opaque shadows only).
+* The first build of a skinned BLAS reads the arena before that frame's compute skinning. The pose is corrected by
+  the refits of the following frames (in the test the shadow is right by frame 4), but the tree may be suboptimal
+  until the next scheduled rebuild; not measured.
+* DDGI resolves nothing smaller than about the probe spacing (2 m by default), and its colour bleed is about 2/3 of
+  the path traced reference in the test scene (0.052 vs 0.078).
+* AO and reflection histories are not clamped (`clampHistory` is for visibility signals), so they lag under moving
+  occluders. Fine speckle noise remains on rough metals and around bright emissive objects with RT reflections
+  (not investigated).
 * DDGI: single camera-centred volume, no per-probe relocation / classification; translucency has no denoiser for
   rough glass (deterministic smooth refraction only).
 * No async-compute AS builds (see above); AS memory sizes are estimates (rhi does not report them).
@@ -699,7 +876,10 @@ public helpers `<oxwald/render/features/gpu_driven/gpu_driven.hpp>`. Measurement
   RESET → CULL → PREFIX → SCATTER, all jobs of a pass in one dispatch per stage) do flags / frustum / sphere /
   draw distance / LOD selection and write compacted instance ids. Draws: `vkCmdDrawIndexedIndirect` over a fixed max
   count with zero-instance padding (one call per pipeline variant), `drawIndexedIndirectCount` with compacted
-  commands when the device supports it (`r.GpuDriven.DrawCount`).
+  commands when the device supports it (`r.GpuDriven.DrawCount`). The count path is verified on an NVIDIA RTX 3080:
+  every indirect call takes its draw count from the GPU (`RenderStats::indirectCountDrawCalls ==
+  indirectDrawCalls`, asserted in `MatchesCpuPathWithShadows`), the image matches the CPU path, and it costs the
+  same as the padded variant there.
 * **Two-phase occlusion (`r.GpuDriven.Occlusion`)**: phase 1 draws what was visible last frame (per-view visibility
   buffer), `HiZ.Early` builds a half-resolution pyramid from that depth, phase 2 (`GpuCull.Late`) tests everything
   against it and `DepthPrepass.Late` draws the newly visible instances; ForwardOpaque draws both lists. No reprojection,
@@ -711,18 +891,28 @@ public helpers `<oxwald/render/features/gpu_driven/gpu_driven.hpp>`. Measurement
 * **Meshlets (`r.GpuDriven.Meshlets`, default off)**: instances whose LOD has meshlets go to `meshlet_cull.comp`
   (frustum, backface cone, HiZ in phase 2) which writes a compacted index buffer (`slot << 7 | local vertex`, drawn by
   `meshlet.vert`, one indirect draw per variant). `r.GpuDriven.MeshShaders` uses `meshlet.task` / `meshlet.mesh`
-  (VK_EXT_mesh_shader) instead — compile-tested here, only enabled on devices with mesh + task shaders.
+  (VK_EXT_mesh_shader) instead, only on devices with mesh + task shaders. On MoltenVK it is compile-tested only; on
+  an NVIDIA RTX 3080 the path runs (`RenderStats::meshShaderDrawCalls` > 0: 16 `drawMeshTasksIndirect` calls of 24
+  draw calls in `MeshShaderPathCompilesAndMatchesWhenSupported`) and its image matches the compute meshlet path.
 * **API for features**: `FeatureContext::cullDrawList(filter, instanceMultiplier)` (GPU-culled when possible,
   otherwise `buildDrawList`), `lodSelection()`, `DrawFilter::lod`; `DrawList` gained indirect fields (`gpuDriven()`,
   `indirectRuns`, …): always draw lists with `drawBatches()`. `drawLists()` still returns the CPU-culled lists of all
   four buckets (built lazily when the frame is GPU-driven).
 * **Async compute**: `asyncComputeHint(caps)` (`r.AsyncCompute` Off/On/Auto; Auto = off on portability devices).
-  LightCulling and HiZ use it. The render graph now splits a batch before the first pass that waits on another
-  queue, and `RenderStats` reports `asyncComputeMs` / `asyncOverlapMs` / `gpuFrameWallMs` from timestamps.
+  LightCulling and HiZ use it. The render graph splits a batch before the first pass that waits on another
+  queue, and `RenderStats` reports `asyncComputeMs` / `asyncOverlapMs` / `gpuFrameWallMs` from timestamps. On
+  NVIDIA the compute queue is a separate family without graphics stages; the first run there found three problems
+  in the graph (barriers naming graphics stages on the compute queue, batches not split on read-after-read across
+  queues, the compute batch submitted before the next graphics batch was recorded), all fixed in rhi (see
+  `modules/rhi.md`, "Render graph"). The overlap is now real on the RTX 3080: 0.075 of 0.076 ms in the stress scene,
+  a small but consistent GPU wall-time gain (perf.md). The `Auto` heuristic was not changed.
 * **CPU**: `ExtractOptions::jobs` (+ `parallelThreshold`) extracts mesh renderers with `parallelFor`; extract and the
   camera draw lists allocate nothing in steady state (test with a counting `operator new`). `r.ParallelRecording`
   (Off/On/Auto, needs `RendererDesc::jobs`) records large CPU-path prepass/forward passes into secondary command
-  lists on the job system.
+  lists on the job system. On the RTX 3080 it showed no gain without validation (measured under load, not
+  conclusive), so `Auto` stays as it is. `GpuScene::updateInstances` is the CPU hotspot on Windows (perf.md): the
+  `InstanceKey` hash is a murmur-style mix because the MSVC STL takes the bucket index from the low bits of the
+  hash, and the selection lookup uses a sorted scratch vector (an empty `std::unordered_set` allocates there).
 * **Texture streaming (`r.Streaming*`, budget `r.Streaming.PoolSizeMB` in Scalability::Textures 256/512/1024/2048)**:
   textures start with their ≤ 64 px tail; wanted mips from screen-space texel density (bounding sphere × UV tiling),
   budget enforced by coarsening the least important textures, residency changes via async uploads + swap one frame
@@ -734,8 +924,10 @@ public helpers `<oxwald/render/features/gpu_driven/gpu_driven.hpp>`. Measurement
   `user://cache/pipeline_cache.bin`, the editor its user data dir). `render::createRenderer()` also calls
   `registerSceneTypes()` + `registerRenderTypes()` so scenes with render components load in the player.
 * **Stats**: `RenderStats::gpuCulling` (tested / frustum / occluded / visible, draws, triangles, average LOD, meshlets,
-  shadow jobs; read back `latencyFrames` late), `indirectDrawCalls`, `indirectCommands`, `streaming`, `vram`
-  (geometry, textures, gpu-driven buffers, transient targets), `parallelRecordedChunks`, async timings.
+  shadow jobs; read back `latencyFrames` late), `indirectDrawCalls`, `indirectCommands`, `indirectCountDrawCalls`
+  (indirect calls whose draw count comes from the GPU), `meshShaderDrawCalls` (`drawMeshTasksIndirect` calls),
+  `streaming`, `vram` (geometry, textures, gpu-driven buffers, transient targets), `parallelRecordedChunks`, async
+  timings. `toString()` prints "indirect: N calls (M with GPU draw count), K commands".
 
 | CVar | Default | Group: levels |
 | --- | --- | --- |
@@ -753,8 +945,16 @@ through a reference miscompiles, arrays of buffer references inside a buffer-ref
 
 Tests: `tests/gpu/gpu_driven_tests.cpp` (CPU vs GPU path images, occlusion behind a wall, same-frame disocclusion,
 LOD switch distance, meshlets vs instanced, runtime toggle, steady-state allocations, parallel recording, streaming
-budget, async compute, async PSO, mesh shader compile, padding cost, stress scene). Goldens `gpu_driven_shadows`,
-`gpu_driven_streaming`.
+budget, async compute, async PSO, mesh shader compile, padding cost, stress scene, stress scene with async compute /
+parallel recording on and off). Goldens `gpu_driven_shadows`, `gpu_driven_streaming`.
+
+Verified on Windows 11 + NVIDIA RTX 3080 (driver 617.42): all `GpuDrivenTest.*` pass without validation errors.
+Notes from that run: the test scenes no longer draw several random numbers inside one argument list (the evaluation
+order is unspecified, MSVC built a different scene than clang — the cause of the `MatchesCpuPathWithShadows`
+mismatch there, not the renderer); `TextureStreamingRespectsBudget` allows 5 % differing pixels because NVIDIA
+selects LODs differently with 16× anisotropy (3.66 % measured, same residency, golden not regenerated). The
+planner now splits more batches when async compute is on; this and the new planner tests have not been re-run on
+macOS (where `Auto` keeps async compute off, so the defaults do not change).
 
 
 ## World: terrain, vegetation, sky, skinning (world-skinning area)

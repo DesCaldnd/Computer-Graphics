@@ -10,20 +10,22 @@
 
 | Что | Версия / примечание |
 | --- | --- |
-| ОС | macOS (Apple Silicon, триплет `arm64-osx`), Windows, Linux |
-| Компилятор | C++20. На macOS — **AppleClang** из Xcode Command Line Tools (`xcode-select --install`); тот же компилятор, что собирает порты vcpkg |
+| ОС | macOS (Apple Silicon, триплет `arm64-osx`) и Windows 11 x64 (триплет `x64-windows`) — проверены; Linux — код есть, на железе не проверялся |
+| Компилятор | C++20. На macOS — **AppleClang** из Xcode Command Line Tools (`xcode-select --install`); тот же компилятор, что собирает порты vcpkg. На Windows — **MSVC** из Visual Studio 2022 (компонент «Desktop development with C++») |
 | CMake | ≥ 3.25 |
 | Генератор | Ninja (используется всеми пресетами) |
 | vcpkg | любой свежий checkout; переменная окружения `VCPKG_ROOT` должна указывать на него |
 | Vulkan | 1.2+ с набором возможностей 1.3 (dynamic rendering, synchronization2, descriptor indexing, buffer device address, timeline semaphores). Загрузчик, заголовки и слои валидации ставятся из vcpkg |
 | macOS: Vulkan | **MoltenVK** — ставится из vcpkg автоматически (порт из `vcpkg-overlays/ports`), отдельно Vulkan SDK не нужен |
 | macOS: для редактора (Qt) | `brew install autoconf autoconf-archive automake libtool pkg-config` — хост-инструменты autotools для некоторых портов (например, libb2, который тянет Qt) |
+| Windows: дополнительно | Git LFS (`git lfs install`) — нужен порту `nvidia-dlss`; Python 3; драйвер GPU от производителя. Загрузчик Vulkan и слои валидации приходят из vcpkg |
 
 Все сторонние библиотеки (glm, EnTT, Jolt, Lua/sol2, miniaudio, Recast, ENet, Tracy, Qt, …) приходят **только из
 vcpkg** (манифест `vcpkg.json`). FetchContent, git-сабмодули и библиотеки из Homebrew не используются.
 
 > Ray tracing и DLSS требуют соответствующего GPU (DLSS — только NVIDIA RTX на Windows/Linux). Без них движок
-> работает, просто эти опции будут недоступны. На MoltenVK/Apple GPU ray tracing выключен.
+> работает, просто эти опции будут недоступны. На MoltenVK/Apple GPU ray tracing выключен. DLSS и ray tracing
+> проверены на Windows с RTX 3080 ([глава 24](24-ray-tracing.md), шаг 6).
 
 ## Установка зависимостей
 
@@ -38,6 +40,50 @@ tools/bootstrap.sh --no-editor       # без Qt — заметно быстре
 Скрипт вызывает `vcpkg install --x-install-root=vcpkg_installed` в режиме манифеста. На macOS он дополнительно
 выбирает триплет `arm64-osx`, убирает из окружения `CC/CXX/LDFLAGS` (чтобы Homebrew LLVM не попал в сборку портов)
 и подкладывает `glibtoolize` под именем `libtoolize`. Первая установка с Qt занимает долго — это нормально.
+
+### Windows
+
+Проверено на Windows 11, Visual Studio 2022 17.14 (MSVC 14.44), CMake 3.30, Ninja 1.12.1, NVIDIA RTX 3080
+(драйвер 617.42).
+
+1. Поставьте Visual Studio 2022 с компонентом «Desktop development with C++», CMake ≥ 3.25, Ninja, Git и Git LFS
+   (`git lfs install`), Python 3 и свежий драйвер GPU.
+2. Поставьте vcpkg и задайте `VCPKG_ROOT`:
+
+   ```bat
+   git clone https://github.com/microsoft/vcpkg C:\devcpkg
+   C:\devcpkgootstrap-vcpkg.bat
+   setx VCPKG_ROOT C:\devcpkg
+   ```
+
+3. Клонируйте репозиторий в короткий путь без пробелов. Переводы строк фиксирует `.gitattributes` (LF для текста),
+   настраивать `core.autocrlf` не нужно.
+4. Откройте **«x64 Native Tools Command Prompt for VS 2022»** — Ninja должен видеть `cl.exe` — и из корня
+   репозитория поставьте зависимости, затем соберите и запустите тесты:
+
+   ```bat
+   %VCPKG_ROOT%cpkg install --x-install-root=vcpkg_installed --triplet x64-windows
+
+   cmake --preset dev -DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_TARGET_TRIPLET=x64-windows
+   cmake --build --preset dev
+   ctest --preset dev -j8 --output-on-failure
+   ```
+
+Установка зависимостей вместе с Qt заняла около 44 минут на i9-9900K без бинарного кэша vcpkg. Порт `nvidia-dlss`
+скачивает через Git LFS около 700 МБ. Без редактора быстрее: добавьте к `vcpkg install` флаг
+`--x-no-default-features` (то же, что делает `tools/bootstrap.sh --no-editor`).
+
+Собирается всё, включая редактор; пресет `dev` идёт с предупреждениями как ошибками (`/W4 /WX`). Исполняемые файлы
+лежат в `build\devin\` (`OxwaldPlayer.exe`, `OxwaldEditor.exe`). Рядом сборка кладёт DLL Qt и рантайм NGX
+(`nvngx_dlss.dll`), а в подкаталог `vulkan\` — `vulkan-1.dll` и слой валидации.
+
+### Linux
+
+> **На железе не проверено.** Код и CMake для Linux есть, но сборка и тесты на Linux-машине не запускались.
+
+Ожидаемый порядок тот же, что на macOS: `tools/bootstrap.sh` (триплет vcpkg по умолчанию), затем `cmake --preset dev`.
+Нужен Git LFS (порт `nvidia-dlss`) и dev-пакеты X11/xcb/Wayland для Qt и GLFW. Вьюпорт редактора создаёт
+Vulkan-surface через xcb; под Wayland surface не реализован, и редактор переключается на программный вьюпорт.
 
 ## Сборка
 
@@ -57,7 +103,7 @@ ctest --preset dev               # все тесты (GPU-тесты сами п
 ```
 
 Полезные опции CMake: `OX_BUILD_TESTS` (ON), `OX_BUILD_EDITOR` (ON), `OX_ENABLE_TRACY` (ON),
-`OX_ENABLE_DLSS` (ON), `OX_WARNINGS_AS_ERRORS` (OFF).
+`OX_ENABLE_DLSS` (ON), `OX_WARNINGS_AS_ERRORS` (OFF; в пресетах `dev` и `debug` — ON, в том числе под MSVC).
 
 ### Сборка только части движка
 
@@ -97,7 +143,7 @@ build/dev/bin/OxwaldPlayer --project MyGame --quality low --cvar r.VSync=false -
 | `--headless` | без окна; рендерер-заглушка `NullRenderer`, звук офлайн |
 | `--server` | выделенный сервер (подразумевает `--headless`, без рендера и звука) |
 | `--frames <n>` | выйти после n кадров (0 — работать до закрытия) |
-| `--width <px> --height <px>` | размер окна |
+| `--width <px> --height <px>` | размер окна; в режиме `--headless` — размер offscreen-кадра |
 | `--fullscreen \| --borderless \| --windowed` | режим окна |
 | `--monitor <i>` | монитор для полноэкранного режима |
 | `--quality low\|medium\|high\|ultra` | общий уровень качества (см. [04](04-cvars-quality.md)) |
@@ -121,7 +167,8 @@ build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor                      
 build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor --project MyGame.oxproj
 ```
 
-Вне macOS (без app bundle) исполняемый файл лежит прямо в `build/dev/bin/`. Тур по редактору — в главе [30. Редактор](30-editor.md).
+Вне macOS (без app bundle) исполняемый файл лежит прямо в `build/dev/bin/` — на Windows это
+`build\devin\OxwaldEditor.exe`. Тур по редактору — в главе [30. Редактор](30-editor.md).
 
 Тот же разбор аргументов доступен вашей программе: `ox::parseLaunchOptions` возвращает `LaunchOptions`, а
 `toEngineConfig()` превращает их в конфигурацию движка.
@@ -277,6 +324,18 @@ ctest --test-dir build/dev -L guide -R GuideGettingStarted     # только э
   используйте `tools/bootstrap.sh --no-editor`.
 - **Повторная установка vcpkg при каждой конфигурации.** В своих каталогах сборки передавайте
   `-DVCPKG_MANIFEST_INSTALL=OFF`.
+- **Windows: обычная консоль вместо консоли разработчика.** Запускайте `vcpkg`, `cmake` и `ctest` из «x64 Native
+  Tools Command Prompt for VS 2022»: иначе Ninja не найдёт `cl.exe`.
+- **Windows: нет Git LFS.** Порт `nvidia-dlss` забирает бинарные файлы DLSS SDK через LFS; без `git lfs install`
+  установка зависимостей падает на нём.
+- **Windows: тесты от имени администратора.** В процессах с повышенными правами загрузчик Vulkan игнорирует
+  `VK_ADD_LAYER_PATH`. Запускайте тесты из обычной (не elevated) консоли.
+- **Windows: запрос брандмауэра.** Тестовые exe содержат клиент Tracy, который слушает сетевой порт. На результат
+  тестов ответ не влияет.
+- **Windows: пропущен `DeviceLifecycle.SurfaceDeviceAfterHeadlessDevice`.** Это норма: драйвер NVIDIA на Windows не
+  предоставляет `VK_EXT_headless_surface`.
+- **Windows: пути с не-ASCII символами.** Часть файлового ввода-вывода идёт через системную ANSI-кодировку; пути
+  с символами вне неё пока не поддерживаются. Держите репозиторий и проекты в ASCII-путях.
 - **`OX_MODULES` без зависимостей.** Если вы перечислили `runtime`, но забыли `scene`, конфигурация упадёт:
   указывайте модуль вместе с тем, от чего он зависит (`core;scene;runtime`).
 - **Результат `engine.init()` проигнорирован.** `init` возвращает `ox::Status`; при ошибке (битый проект, нет
