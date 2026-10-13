@@ -3,11 +3,10 @@
 find_path(OX_MINIAUDIO_INCLUDE_DIR miniaudio.h REQUIRED)
 
 set(_ox_audio_impl ${CMAKE_CURRENT_SOURCE_DIR}/src/miniaudio_impl.c)
-set_source_files_properties(${_ox_audio_impl} PROPERTIES COMPILE_OPTIONS "-w")
-if(MSVC)
-    # The miniaudio implementation is the one translation unit that wants the full Win32 audio API (WASAPI,
-    # DirectSound, WinMM); the project-wide WIN32_LEAN_AND_MEAN strips mmsystem.h / ole2.h from <windows.h>.
-    set_source_files_properties(${_ox_audio_impl} PROPERTIES COMPILE_OPTIONS "-w;/UWIN32_LEAN_AND_MEAN")
+if(NOT MSVC)
+    # MSVC: both headers come from a SYSTEM include directory and compile at /external:W0 (the source file disables
+    # the one code generation warning that is left); a -w after /W4 would be a D9025 command line warning.
+    set_source_files_properties(${_ox_audio_impl} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
 ox_add_module(audio
