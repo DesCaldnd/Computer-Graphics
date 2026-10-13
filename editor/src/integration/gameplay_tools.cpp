@@ -200,10 +200,8 @@ BakeResult bakeNavMesh(EditorContext& ctx, const Uuid& surfaceId) {
     if (!ai) return {false, QObject::tr("The AI runtime is not running (engine without gameplay)")};
     Entity surface = surfaceId.isNil() ? Entity{} : w.find(surfaceId);
     if (!surface) {
-        for (auto [h, s] : w.registry().view<NavMeshSurfaceComponent>().each()) {
-            surface = w.wrap(h);
-            break;
-        }
+        auto surfaces = w.registry().view<NavMeshSurfaceComponent>();
+        if (auto first = surfaces.begin(); first != surfaces.end()) surface = w.wrap(*first);
     }
     if (!surface || !surface.has<NavMeshSurfaceComponent>()) return {false, QObject::tr("No NavMeshSurface in the scene")};
     const Uuid id = surface.uuid();

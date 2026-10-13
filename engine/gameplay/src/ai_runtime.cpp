@@ -629,9 +629,9 @@ void AIRuntime::updateNavigation(f32 dt) {
     entt::registry& r = m_world->registry();
     if (!activeMesh() && !m_surfaceChecked) {
         m_surfaceChecked = true;
-        for (auto [handle, s] : r.view<NavMeshSurfaceComponent>().each()) {
-            loadSurface(m_world->wrap(handle), s.bakeOnStart);
-            break;
+        auto surfaces = r.view<NavMeshSurfaceComponent>();
+        if (auto first = surfaces.begin(); first != surfaces.end()) {
+            loadSurface(m_world->wrap(*first), surfaces.get<NavMeshSurfaceComponent>(*first).bakeOnStart);
         }
     }
     if (!m_crowd) return;

@@ -216,13 +216,14 @@ void PainterViewportRenderer::render(const ViewportFrame& frame, const ViewportT
             points.push_back({ent.worldPosition(), l.color, std::max(0.1f, l.range), std::clamp(l.intensity / 800.0f, 0.1f, 4.0f)});
         }
     }
-    for (auto [e, env] : world->view<EnvironmentComponent>().each()) {
+    auto environments = world->view<EnvironmentComponent>();
+    if (auto first = environments.begin(); first != environments.end()) { // the first environment wins
+        const EnvironmentComponent& env = environments.get<EnvironmentComponent>(*first);
         ambient = 0.25f + 0.15f * std::clamp(env.ambientIntensity, 0.0f, 3.0f);
         if (env.fogEnabled && frame.showFlags.fog) {
             fogColor = env.fogColor;
             fogDensity = std::clamp(env.fogDensity, 0.0f, 0.2f);
         }
-        break;
     }
 
     // ---- geometry ----
