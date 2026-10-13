@@ -18,6 +18,10 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <format>
+#include <functional>
 
 using namespace ox;
 using namespace ox::render;
@@ -36,6 +40,80 @@ protected:
         mesh(Primitive::Sphere, grey, {0.2f, 0.4f, 1.0f}, glm::vec3(0.8f));
         mesh(Primitive::Cylinder, grey, {1.4f, 0.75f, 0.8f}, glm::vec3(0.4f, 1.5f, 0.4f));
         environment(sky, 1.0f);
+    }
+    Uuid materialEx(const assets::MaterialAsset& m) {
+        const Uuid id = Uuid::fromName(std::format("test.material.{}", materialCounter++));
+        renderer->resources().addMaterial(id, m);
+        return id;
+    }
+    // Alpha-tested checker: 8x8 cells, every other one cut out (alpha 0).
+    Uuid cutoutMaterial(glm::vec3 color) {
+        constexpr u32 kSize = 64;
+        assets::TextureData t;
+        t.format = assets::TextureFormat::RGBA8Srgb;
+        t.width = t.height = kSize;
+        t.mipCount = 1;
+        t.filter = assets::TextureFilter::Nearest;
+        assets::TextureMip mip;
+        mip.width = mip.height = kSize;
+        mip.data.resize(usize(kSize) * kSize * 4);
+        for (u32 y = 0; y < kSize; ++y) {
+            for (u32 x = 0; x < kSize; ++x) {
+                const bool solid = (((x / 8) + (y / 8)) & 1) != 0;
+                const u8 px[4] = {255, 255, 255, u8(solid ? 255 : 0)};
+                std::memcpy(&mip.data[(usize(y) * kSize + x) * 4], px, 4);
+            }
+        }
+        t.mips.push_back(std::move(mip));
+        const Uuid tex = Uuid::fromName(std::format("test.rt.texture.{}", materialCounter++));
+        renderer->resources().addTexture(tex, t);
+        assets::MaterialAsset m;
+        m.baseColor = glm::vec4(color, 1.0f);
+        m.roughness = 0.7f;
+        m.blendMode = assets::BlendMode::AlphaTest;
+        m.alphaCutoff = 0.5f;
+        m.doubleSided = true;
+        m.albedoTexture = tex;
+        return materialEx(m);
+    }
+    // Like render(), but the world is changed and extracted again before every frame (moving objects).
+    Image renderAnimated(const CameraParams& cam, u32 frames, const std::function<void(u32)>& beforeFrame) {
+        ensureTarget(256, 256, VK_FORMAT_R8G8B8A8_UNORM);
+        ensureView(false);
+        for (u32 f = 0; f < frames; ++f) {
+            beforeFrame(f);
+            extractSnapshot();
+            if (f == 0) renderer->resources().flush();
+            device->beginFrame();
+            renderer->beginFrame(snapshot);
+            ViewRenderRequest req;
+            req.view = view;
+            req.camera = cam;
+            req.target.texture = target;
+            req.target.finalAccess = rhi::Access::TransferRead;
+            renderer->renderView(req);
+            renderer->endFrame();
+            device->endFrame();
+        }
+        device->waitIdle();
+        Image img;
+        img.width = img.height = 256;
+        img.rgba = device->readTexture(target);
+        for (usize i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
+        return img;
+    }
+    [[nodiscard]] bool ranPass(std::string_view part) const {
+        for (const PassTiming& p : renderer->stats().passes) {
+            if (p.name.find(part) != std::string::npos) return true;
+        }
+        return false;
+    }
+    [[nodiscard]] f64 passMs(std::string_view part) const {
+        f64 ms = 0.0;
+        for (const PassTiming& p : renderer->stats().passes) {
+            if (p.name.find(part) != std::string::npos) ms += p.gpuMs;
+        }
+        return ms;
     }
     // Every ray traced effect image goes to <temp>/oxwald_render_out/<name>.png for inspection.
     static void dump(const char* name, const Image& img) {
@@ -813,4 +891,212 @@ TEST_F(RayTracingTest, RuntimeToggleRebuildsGraphWithoutLeaks) {
     const rhi::GpuMemoryStats last = device->memoryStats();
     EXPECT_LE(last.textureCount, first.textureCount + 2);
     EXPECT_LE(last.bufferCount, first.bufferCount + 4);
+}
+
+// --- path tracer: RT pipeline (shader binding table) against the ray query megakernel ---
+
+TEST_F(RayTracingTest, PathTracerPipelineMatchesRayQuery) {
+    OX_REQUIRE_RT();
+    if (!device->caps().rayTracingPipeline) GTEST_SKIP() << "needs VK_KHR_ray_tracing_pipeline";
+    // Every hit group is in the picture: opaque, alpha-tested (any-hit on radiance and shadow rays) and translucent.
+    aoScene();
+    mesh(Primitive::Plane, cutoutMaterial({0.9f, 0.5f, 0.1f}), {-0.4f, 1.3f, 1.6f}, glm::vec3(1.4f));
+    // Hovering clear of the others: mode 1 traces opaque shadows only, the sphere's tinted shadow falls outside the view.
+    mesh(Primitive::Sphere, material({0.9f, 0.3f, 0.3f, 0.5f}, 0.0f, 0.3f, glm::vec3(0.0f), assets::BlendMode::Transparent),
+         {2.2f, 1.6f, -1.5f}, glm::vec3(0.8f));
+    sun({-0.4f, -0.8f, -0.3f}, 20000.0f);
+    const CameraParams cam = camera({0.3f, 2.6f, 4.2f}, {0.2f, 0.3f, 0.0f}, 13.0f, 55.0f);
+    CVarScope on("r.RayTracing", "true");
+    CVarScope pt("r.PathTracing", "true");
+    CVarScope spf("r.PathTracing.SamplesPerFrame", "4");
+    const Image query = render(cam, {.frames = 128});
+    EXPECT_TRUE(ranPass("RT.PathTrace")) << "ray query kernel";
+    EXPECT_FALSE(ranPass("RT.PathTrace.Pipeline"));
+    CVarScope mode("r.PathTracing.Mode", "1");
+    const Image pipeline = render(cam, {.frames = 128});
+    EXPECT_TRUE(ranPass("RT.PathTrace.Pipeline")) << "RT pipeline with the shader binding table";
+    dump("rt_path_tracer_mode0", query);
+    dump("rt_path_tracer_mode1", pipeline);
+    const f64 diff = meanAbs(query, pipeline);
+    std::printf("[rt] path tracer mode 0 vs mode 1: mean abs %.3f\n", diff);
+    EXPECT_GT(meanLuminance(pipeline, 0, 0, 256, 256), 0.05) << "the pipeline renders an image";
+    EXPECT_LT(diff, 1.5) << "both implementations trace the same paths (512 spp each, independent noise)";
+    // The cutout's shadow on the floor has the same holes in both (any-hit on shadow rays).
+    EXPECT_NEAR(meanLuminance(query, 10, 150, 90, 210), meanLuminance(pipeline, 10, 150, 90, 210), 0.02);
+}
+
+// --- shadows: local lights without ReSTIR, alpha-tested casters, coloured transmission ---
+
+TEST_F(RayTracingTest, RtLocalLightShadowsWithoutRestir) {
+    OX_REQUIRE_RT();
+    aoScene(0.003f);
+    pointLight({-2.5f, 3.0f, 2.0f}, 60000.0f, 14.0f, glm::vec3(1.0f), true);
+    spotLight({3.0f, 4.0f, 1.0f}, {-3.0f, -4.0f, -1.0f}, 60000.0f, 14.0f, 25.0f, 40.0f, true, {1.0f, 0.8f, 0.6f});
+    const CameraParams cam = camera({0.3f, 2.6f, 4.2f}, {0.2f, 0.3f, 0.0f}, 9.0f, 55.0f);
+    const Image raster = render(cam, {.frames = 4});
+    CVarScope on("r.RayTracing", "true");
+    CVarScope a("r.RayTracing.AO", "false"), r("r.RayTracing.Reflections", "false"), g("r.RayTracing.GI", "false");
+    const Image unshadowed = [&] {
+        CVarScope s("r.Shadows", "false");
+        return render(cam, {.frames = 8});
+    }();
+    const Image rt = render(cam, {.frames = 24});
+    EXPECT_TRUE(ranPass("RT.Shadows"));
+    EXPECT_TRUE(ranPass("RT.Shadows.PublishLocal")) << "explicit local light channels";
+    EXPECT_FALSE(ranPass("RT.ReSTIR")) << "ReSTIR is off by default";
+    dump("rt_local_shadows_raster", raster);
+    dump("rt_local_shadows_unshadowed", unshadowed);
+    dump("rt_local_shadows", rt);
+    std::printf("[rt] local shadows: raster vs rt %.3f, unshadowed vs rt %.3f\n", meanAbs(raster, rt), meanAbs(unshadowed, rt));
+    // Same lights, same occluders: the ray traced shadows land where the shadow maps put them.
+    EXPECT_LT(meanAbs(raster, rt), 6.0);
+    EXPECT_GT(meanAbs(unshadowed, rt), meanAbs(raster, rt) * 2.0) << "shadows are present";
+}
+
+TEST_F(RayTracingTest, RtShadowsOfAlphaTestedAndTintedCasters) {
+    OX_REQUIRE_RT();
+    mesh(Primitive::Plane, material({0.8f, 0.8f, 0.8f, 1.0f}, 0.0f, 0.8f), {0, 0, 0}, glm::vec3(30.0f));
+    // Three plates hovering over the floor, sun from above: opaque, alpha-tested checker, green glass.
+    const glm::vec3 plate{1.2f};
+    mesh(Primitive::Plane, material({0.5f, 0.5f, 0.5f, 1.0f}, 0.0f, 0.8f), {-1.6f, 1.0f, 0.0f}, plate);
+    mesh(Primitive::Plane, cutoutMaterial({0.5f, 0.5f, 0.5f}), {0.0f, 1.0f, 0.0f}, plate);
+    assets::MaterialAsset glass;
+    glass.baseColor = {0.15f, 0.9f, 0.2f, 1.0f};
+    glass.roughness = 0.05f;
+    glass.blendMode = assets::BlendMode::Refractive;
+    mesh(Primitive::Plane, materialEx(glass), {1.6f, 1.0f, 0.0f}, plate);
+    sun({0.0f, -1.0f, -0.35f}, 20000.0f);
+    environment(0.2f, 1.0f);
+    // Looking down from the front: the shadows lie behind the plates (-z), in view above them.
+    const CameraParams cam = camera({0.0f, 4.5f, 3.2f}, {0.0f, 0.0f, -0.6f}, 13.0f, 50.0f);
+    const Image raster = render(cam, {.frames = 4});
+    CVarScope on("r.RayTracing", "true");
+    CVarScope a("r.RayTracing.AO", "false"), r("r.RayTracing.Reflections", "false"), g("r.RayTracing.GI", "false");
+    const Image rt = render(cam, {.frames = 24});
+    const Image plain = [&] {
+        CVarScope c("r.RayTracing.Shadows.Colored", "false");
+        return render(cam, {.frames = 200}); // long enough for the denoiser history to forget the tinted shadow
+    }();
+    dump("rt_shadow_casters_raster", raster);
+    dump("rt_shadow_casters", rt);
+    dump("rt_shadow_casters_uncoloured", plain);
+    // Floor regions: open floor, then the shadows of the opaque, the alpha-tested and the glass plate.
+    auto lit = [](const Image& i) { return meanColor(i, 100, 200, 160, 250); };
+    auto opaque = [](const Image& i) { return meanColor(i, 30, 149, 64, 157); };
+    auto cutout = [](const Image& i) { return meanColor(i, 104, 146, 150, 160); };
+    auto tinted = [](const Image& i) { return meanColor(i, 184, 149, 236, 157); };
+    auto lum = [](glm::vec3 c) { return glm::dot(c, glm::vec3(0.2126f, 0.7152f, 0.0722f)); };
+    std::printf("[rt] caster shadows (luminance): lit %.3f, opaque %.3f, alpha-tested %.3f (raster %.3f), glass rgb "
+                "%.3f %.3f %.3f, glass uncoloured %.3f\n",
+                lum(lit(rt)), lum(opaque(rt)), lum(cutout(rt)), lum(cutout(raster)), tinted(rt).r, tinted(rt).g, tinted(rt).b,
+                lum(tinted(plain)));
+    EXPECT_LT(lum(opaque(rt)), lum(lit(rt)) * 0.3f) << "opaque plate: full shadow";
+    // Half of the checker is cut out: its shadow lets about half of the sun through.
+    EXPECT_GT(lum(cutout(rt)), lum(opaque(rt)) + 0.15f) << "alpha-tested shadow has holes";
+    EXPECT_LT(lum(cutout(rt)), lum(lit(rt)) - 0.15f) << "and solid cells";
+    EXPECT_NEAR(lum(cutout(rt)), lum(cutout(raster)), 0.08f) << "like the alpha-tested shadow map";
+    // Green glass: the shadow is green (red and blue absorbed), not grey.
+    EXPECT_GT(tinted(rt).g, tinted(rt).r * 1.8f);
+    EXPECT_GT(tinted(rt).g, tinted(rt).b * 1.5f);
+    EXPECT_LT(lum(tinted(rt)), lum(lit(rt)) - 0.03f);
+    // Without coloured transmission translucent casters throw no shadow at all.
+    EXPECT_NEAR(lum(tinted(plain)), lum(lit(plain)), 0.02f);
+    EXPECT_NEAR(tinted(plain).g / tinted(plain).r, lit(plain).g / lit(plain).r, 0.02f);
+}
+
+// --- volumetric fog: ray traced froxel visibility ---
+
+TEST_F(RayTracingTest, RtVolumetricFogVisibility) {
+    OX_REQUIRE_RT();
+    // Fog under a roof: the sun comes in at an angle, the volume below the slab is in shadow.
+    const Uuid stone = material({0.55f, 0.52f, 0.48f, 1.0f}, 0.0f, 0.8f);
+    mesh(Primitive::Plane, stone, {0, 0, 0}, glm::vec3(80.0f));
+    mesh(Primitive::Cube, stone, {0.0f, 5.0f, -8.0f}, {14.0f, 0.4f, 10.0f});
+    sun(glm::normalize(glm::vec3(0.5f, -1.0f, 0.1f)), 60000.0f);
+    Entity e = environment(0.25f, 1.0f);
+    auto& env = e.get<EnvironmentComponent>();
+    env.fogEnabled = true;
+    env.fogDensity = 0.06f;
+    env.fogHeightFalloff = 0.02f;
+    env.fogColor = glm::vec3(0.9f);
+    const CameraParams cam = camera({0.0f, 2.0f, 12.0f}, {0.0f, 2.5f, -8.0f}, 13.5f, 55.0f);
+    const Image raster = render(cam, {.frames = 24});
+    CVarScope on("r.RayTracing", "true");
+    const Image without = [&] {
+        CVarScope v("r.RayTracing.Volumetrics", "false");
+        const Image img = render(cam, {.frames = 48});
+        EXPECT_FALSE(ranPass("RT.VolumetricVisibility"));
+        return img;
+    }();
+    const Image with = render(cam, {.frames = 48});
+    EXPECT_TRUE(ranPass("RT.VolumetricVisibility"));
+    dump("rt_fog_raster", raster);
+    dump("rt_fog_without_visibility", without);
+    dump("rt_fog", with);
+    // Fog below the roof. Ray traced shadows replace the shadow maps the fog would sample: without the ray traced
+    // visibility the fog there is fully lit, with it the roof shadows the fog like the shadow maps do in raster.
+    const f64 lRaster = meanLuminance(raster, 60, 100, 200, 140), lWithout = meanLuminance(without, 60, 100, 200, 140),
+              lWith = meanLuminance(with, 60, 100, 200, 140);
+    std::printf("[rt] fog under the roof: raster %.3f, rt without visibility %.3f, with %.3f; images raster vs rt %.3f\n",
+                lRaster, lWithout, lWith, meanAbs(raster, with));
+    EXPECT_GT(meanAbs(without, with), 0.5) << "the visibility pass changes the image";
+    EXPECT_LT(lWith, lWithout - 0.03) << "the roof shadows the fog";
+    EXPECT_NEAR(lWith, lRaster, 0.02) << "like the shadow mapped fog";
+    EXPECT_NEAR(meanLuminance(with, 60, 20, 200, 60), meanLuminance(raster, 60, 20, 200, 60), 0.02) << "sunlit fog unchanged";
+}
+
+// --- TLAS over many frames with moving instances ---
+
+TEST_F(RayTracingTest, TlasFollowsMovingInstancesWithoutLeaks) {
+    OX_REQUIRE_RT();
+    aoScene();
+    sun({-0.4f, -0.8f, -0.3f}, 20000.0f);
+    const Uuid red = material({0.8f, 0.2f, 0.2f, 1.0f}, 0.0f, 0.6f);
+    std::vector<Entity> movers;
+    for (int i = 0; i < 6; ++i) movers.push_back(mesh(Primitive::Cube, red, {0, 0, 0}, glm::vec3(0.35f)));
+    // The cubes circle above the floor: their shadows sweep over it.
+    auto place = [&](f32 t) {
+        for (usize i = 0; i < movers.size(); ++i) {
+            const f32 a = t + f32(i) * 1.047f;
+            movers[i].setPosition({std::cos(a) * 1.8f, 1.6f + 0.3f * std::sin(a * 3.0f), std::sin(a) * 1.8f});
+        }
+    };
+    const CameraParams cam = camera({0.3f, 2.6f, 4.2f}, {0.2f, 0.3f, 0.0f}, 13.0f, 55.0f);
+    constexpr f32 kEnd = 300.0f * 0.02f;
+    place(kEnd);
+    const Image rasterEnd = render(cam, {.frames = 4});
+    place(0.0f);
+    const Image rasterStart = render(cam, {.frames = 4});
+
+    CVarScope on("r.RayTracing", "true");
+    CVarScope a("r.RayTracing.AO", "false"), r("r.RayTracing.Reflections", "false"), g("r.RayTracing.GI", "false");
+    rt::RayTracingSceneApi* api = rt::RayTracingSceneApi::find(renderer->features());
+    ASSERT_NE(api, nullptr);
+    rhi::GpuMemoryStats early{};
+    u32 residentEarly = 0;
+    renderAnimated(cam, 300, [&](u32 f) {
+        place(f32(f + 1) * 0.02f);
+        if (f == 40) {
+            early = device->memoryStats();
+            residentEarly = api->blasStats().resident;
+        }
+    });
+    EXPECT_EQ(api->tlasInstanceCount(), renderer->scene().liveInstanceCount());
+    EXPECT_EQ(api->blasStats().resident, residentEarly) << "moving instances share their BLAS: nothing is rebuilt";
+    device->waitIdle();
+    const rhi::GpuMemoryStats late = device->memoryStats();
+    std::printf("[rt] tlas over 300 frames: buffers %u -> %u, textures %u -> %u, VRAM %.1f -> %.1f MB\n", early.bufferCount,
+                late.bufferCount, early.textureCount, late.textureCount, f64(early.totalUsageBytes) / 1048576.0,
+                f64(late.totalUsageBytes) / 1048576.0);
+    EXPECT_LE(late.bufferCount, early.bufferCount + 2);
+    EXPECT_LE(late.textureCount, early.textureCount + 2);
+    EXPECT_LE(late.totalUsageBytes, early.totalUsageBytes + (8u << 20)) << "VRAM stays flat";
+    // The cubes stopped at the end position: shadows are where the shadow maps put them, not where they started.
+    const Image rtEnd = renderAnimated(cam, 48, [&](u32) {});
+    dump("rt_tlas_moving_raster", rasterEnd);
+    dump("rt_tlas_moving", rtEnd);
+    std::printf("[rt] tlas moving: rt vs raster at the end position %.3f, vs the start position %.3f\n",
+                meanAbs(rtEnd, rasterEnd), meanAbs(rtEnd, rasterStart));
+    EXPECT_LT(meanAbs(rtEnd, rasterEnd), 3.0);
+    EXPECT_GT(meanAbs(rtEnd, rasterStart), meanAbs(rtEnd, rasterEnd) * 2.0);
 }

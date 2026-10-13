@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <optional>
 #include <ostream>
 
 using namespace ox;
@@ -543,7 +544,8 @@ protected:
         if (!m_rigMaterial.isValid()) m_rigMaterial = material({0.85f, 0.45f, 0.15f, 1.0f}, 0.0f, 0.45f);
         const Uuid mat = m_rigMaterial;
         o.frames = u32(times.size());
-        return renderFrames(camera({0.0f, 1.6f, 6.0f}, {0.4f, 1.4f, 0.0f}, 12.0f, 50.0f), o, [&](RenderSnapshot& s, u32 f) {
+        const CameraParams cam = m_rigCamera ? *m_rigCamera : camera({0.0f, 1.6f, 6.0f}, {0.4f, 1.4f, 0.0f}, 12.0f, 50.0f);
+        return renderFrames(cam, o, [&](RenderSnapshot& s, u32 f) {
             const std::vector<glm::mat4> cur = paletteAt(rig, times[f]), prev = paletteAt(rig, times[f > 0 ? f - 1 : 0]);
             SnapshotMesh m;
             m.entityId = 900;
@@ -561,6 +563,7 @@ protected:
         });
     }
     Uuid m_rigMaterial;
+    std::optional<CameraParams> m_rigCamera; // overrides the default view of renderRig
 };
 
 TEST_F(SkinningTest, ComputeSkinnedPosesAndMotionVectors) {
@@ -638,6 +641,64 @@ TEST_F(SkinningTest, OutputsExposedForRayTracing) {
     std::memcpy(&top, bytes.data() + (bytes.size() - o.stride), sizeof(top));
     EXPECT_LT(top.position.x, -0.3f);
     EXPECT_LT(top.position.y, 3.0f);
+}
+
+// Ray traced shadows of a skinned mesh: its BLAS is built and then refitted every frame from the compute skinning
+// output, so the shadow follows the animation (no bind pose, no pose of an earlier frame).
+TEST_F(SkinningTest, RayTracedShadowFollowsAnimation) {
+    if (!device->caps().rayTracingSupported()) GTEST_SKIP() << "needs ray tracing: " << device->caps().whyRayTracingUnavailable();
+    const SkinnedRig rig = makeRig();
+    mesh(Primitive::Plane, material({0.5f, 0.5f, 0.5f, 1.0f}, 0.0f, 0.8f), {0, 0, 0}, glm::vec3(12.0f));
+    sun({0.4f, -0.8f, -0.45f}, 30000.0f);
+    environment();
+    m_rigCamera = camera({0.0f, 7.0f, 5.0f}, {0.0f, 0.5f, -0.5f}, 12.0f, 50.0f); // from above: the shadow lies in view
+    const Options o{.width = 192, .height = 192};
+    const Image rasterBind = renderRig(rig, {0.0f, 0.0f, 0.0f}, false, o);
+    const Image rasterBent = renderRig(rig, {0.9f, 0.9f, 0.9f}, false, o);
+    writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / "rt_skinned_shadow_raster.png", rasterBent);
+    writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / "rt_skinned_shadow_raster_bind_pose.png", rasterBind);
+
+    CVarScope on("r.RayTracing", "true");
+    CVarScope a("r.RayTracing.AO", "false"), r("r.RayTracing.Reflections", "false"), g("r.RayTracing.GI", "false");
+    // Floor pixels that tell the shadows of the two poses apart, and which pose an image shows there. The orange
+    // tube itself is rasterised in every mode: only grey pixels (floor, lit or shadowed) count.
+    auto isFloor = [](const Image& img, u32 x, u32 y) {
+        const glm::u8vec4 c = img.at(x, y);
+        return std::abs(int(c.r) - int(c.g)) < 40;
+    };
+    auto closerToBent = [&](const Image& img) {
+        u32 differ = 0, bent = 0;
+        for (u32 y = 0; y < img.height; ++y) {
+            for (u32 x = 0; x < img.width; ++x) {
+                if (!isFloor(rasterBind, x, y) || !isFloor(rasterBent, x, y)) continue;
+                const f32 la = rasterBind.luminance(x, y), lb = rasterBent.luminance(x, y), l = img.luminance(x, y);
+                if (std::abs(la - lb) < 0.15f) continue;
+                ++differ;
+                bent += std::abs(l - lb) < std::abs(l - la) ? 1 : 0;
+            }
+        }
+        EXPECT_GT(differ, 300u) << "the shadows of the two poses differ on screen";
+        return f32(bent) / f32(std::max(differ, 1u));
+    };
+    // The very first ray traced frames already show the animated pose (the BLAS is not built from the bind pose).
+    const Image first = renderRig(rig, {0.9f, 0.9f, 0.9f, 0.9f}, false, o);
+    const f32 firstBent = closerToBent(first);
+    // Bind pose → bent over 140 frames (refits, with the periodic full rebuild after 90), then the pose is held.
+    std::vector<f32> times;
+    for (u32 i = 0; i < 140; ++i) times.push_back(0.9f * f32(i) / 139.0f);
+    times.insert(times.end(), 8, 0.9f);
+    const Image animated = renderRig(rig, times, false, o);
+    const f32 animatedBent = closerToBent(animated);
+    writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / "rt_skinned_shadow_first_frames.png", first);
+    writePng(std::filesystem::temp_directory_path() / "oxwald_render_out" / "rt_skinned_shadow.png", animated);
+    f64 diff = 0.0;
+    for (usize i = 0; i < animated.rgba.size(); ++i) diff += std::abs(int(animated.rgba[i]) - int(rasterBent.rgba[i]));
+    diff /= f64(animated.rgba.size());
+    std::printf("[rt] skinned shadow: pixels showing the bent pose: first frames %.3f, after the animation %.3f; "
+                "rt vs raster %.3f\n", firstBent, animatedBent, diff);
+    EXPECT_GT(firstBent, 0.9f);
+    EXPECT_GT(animatedBent, 0.9f) << "the shadow follows the animation";
+    EXPECT_LT(diff, 4.0) << "ray traced and shadow mapped images of the same pose agree";
 }
 
 #endif // OX_RENDER_TEST_HAS_ANIMATION
