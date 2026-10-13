@@ -1,0 +1,17 @@
+--- a/SPIRV/GlslangToSpv.cpp	2026-10-14 00:52:31.169837700 +0300
++++ b/SPIRV/GlslangToSpv.cpp	2026-10-14 00:52:31.342921000 +0300
+@@ -6198,9 +6198,13 @@
+         glslang::TType& glslangMember = *(*glslangMembers)[i].type;
+         int member = i;
+         if (type.getBasicType() == glslang::EbtBlock) {
+-            member = memberRemapper[glslangTypeToIdMap[glslangMembers]][i];
+             if (filterMember(glslangMember))
+                 continue;
++            // Types missing from glslangTypeToIdMap share the remapper of key 0, which a nested conversion may have
++            // resized below this block's member count: fall back to the identity mapping instead of reading past it.
++            const std::vector<int>& remapper = memberRemapper[glslangTypeToIdMap[glslangMembers]];
++            if (i < (int)remapper.size())
++                member = remapper[i];
+         }
+ 
+         // modify just this child's view of the qualifier
