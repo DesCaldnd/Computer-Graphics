@@ -1091,12 +1091,114 @@ TEST_F(RayTracingTest, TlasFollowsMovingInstancesWithoutLeaks) {
     EXPECT_LE(late.bufferCount, early.bufferCount + 2);
     EXPECT_LE(late.textureCount, early.textureCount + 2);
     EXPECT_LE(late.totalUsageBytes, early.totalUsageBytes + (8u << 20)) << "VRAM stays flat";
-    // The cubes stopped at the end position: shadows are where the shadow maps put them, not where they started.
-    const Image rtEnd = renderAnimated(cam, 48, [&](u32) {});
+    // The cubes stopped at the end position 8 frames ago: shadows are where the shadow maps put them, not where they
+    // started and not smeared along the way (the denoiser drops the history of a shadow that moved on).
+    const Image rtEnd = renderAnimated(cam, 8, [&](u32) {});
     dump("rt_tlas_moving_raster", rasterEnd);
     dump("rt_tlas_moving", rtEnd);
     std::printf("[rt] tlas moving: rt vs raster at the end position %.3f, vs the start position %.3f\n",
                 meanAbs(rtEnd, rasterEnd), meanAbs(rtEnd, rasterStart));
     EXPECT_LT(meanAbs(rtEnd, rasterEnd), 3.0);
     EXPECT_GT(meanAbs(rtEnd, rasterStart), meanAbs(rtEnd, rasterEnd) * 2.0);
+}
+
+// --- GPU timings of every ray traced pass ---
+// OX_RT_PERF=1 measures 1080p and 4K (OX_RT_PERF=<width>x<height>: one custom size); run it with
+// OX_VULKAN_VALIDATION=0 for real numbers. Without the variable the same configurations run as a quick smoke test at
+// 640x360. Configurations: raster baseline, the hybrid effects, + ReSTIR, path tracer in both modes. Prints the
+// average over the measured frames of every pass of the ray tracing area.
+
+TEST_F(RayTracingTest, PerfReportRayTracing) {
+    OX_REQUIRE_RT();
+    const char* perf = std::getenv("OX_RT_PERF");
+    const bool measure = perf && *perf && std::string_view(perf) != "0";
+    // 240 objects around the camera, a mirror-like floor patch, glass, 8 shadowed local lights, sun, fog.
+    Random rng(11);
+    mesh(Primitive::Plane, material({0.6f, 0.6f, 0.6f, 1.0f}, 0.0f, 0.8f), {0, 0, 0}, glm::vec3(120.0f));
+    mesh(Primitive::Cube, material({0.9f, 0.9f, 0.9f, 1.0f}, 1.0f, 0.1f), {0.0f, 0.02f, 8.0f}, {16.0f, 0.04f, 10.0f});
+    Entity mover;
+    for (int i = 0; i < 240; ++i) {
+        // One draw per statement: argument evaluation order differs between compilers.
+        const f32 cr = rng.nextFloat();
+        const f32 cg = rng.nextFloat();
+        const f32 cb = rng.nextFloat();
+        const f32 rough = rng.range(0.1f, 0.9f);
+        const f32 x = rng.range(-30.0f, 30.0f);
+        const f32 z = rng.range(-30.0f, 14.0f);
+        const f32 size = rng.range(0.6f, 2.0f);
+        const Primitive prim = i % 3 == 0 ? Primitive::Cube : i % 3 == 1 ? Primitive::Sphere : Primitive::Cylinder;
+        mover = mesh(prim, material({cr, cg, cb, 1.0f}, i % 7 == 0 ? 1.0f : 0.0f, rough), {x, size * 0.5f, z}, glm::vec3(size));
+    }
+    const glm::vec3 moverStart = mover.worldPosition();
+    assets::MaterialAsset glass;
+    glass.baseColor = {0.8f, 0.95f, 0.9f, 1.0f};
+    glass.roughness = 0.02f;
+    glass.blendMode = assets::BlendMode::Refractive;
+    const Uuid glassId = materialEx(glass);
+    for (int i = 0; i < 4; ++i) mesh(Primitive::Sphere, glassId, {-6.0f + 4.0f * f32(i), 1.2f, 10.0f}, glm::vec3(2.4f));
+    for (int i = 0; i < 8; ++i) {
+        pointLight({-21.0f + 6.0f * f32(i), 3.0f, 4.0f - 3.0f * f32(i % 3)}, 40000.0f, 14.0f, glm::vec3(1.0f, 0.9f, 0.8f), true);
+    }
+    sun(glm::normalize(glm::vec3(-0.5f, -1.0f, -0.3f)), 30000.0f);
+    Entity e = environment();
+    auto& env = e.get<EnvironmentComponent>();
+    env.fogEnabled = true;
+    env.fogDensity = 0.01f;
+    env.fogHeightFalloff = 0.05f;
+    const CameraParams cam = camera({0, 6, 25}, {0, 0, 0}, 13.0f, 60.0f, 300.0f);
+
+    std::vector<Extent2D> sizes{{640, 360}};
+    if (measure) sizes = {{1920, 1080}, {3840, 2160}};
+    if (unsigned w = 0, h = 0; measure && std::sscanf(perf, "%ux%u", &w, &h) == 2 && w > 0 && h > 0) sizes = {{w, h}};
+    const u32 warmUp = measure ? 48 : 4, frames = measure ? 8 : 2;
+    std::printf("[rt-perf] %s, validation %s\n", device->caps().gpuName.c_str(), device->caps().validationEnabled ? "ON" : "off");
+    auto report = [&](Extent2D size, const char* label) {
+        const u32 kFrames = frames;
+        render(cam, {.width = size.width, .height = size.height, .frames = warmUp}); // BLAS builds, histories, DDGI
+        std::vector<std::pair<std::string, f64>> passes; // first-appearance order
+        f64 frame = 0.0;
+        for (u32 f = 0; f < kFrames; ++f) {
+            mover.setPosition(moverStart + glm::vec3(0.0f, 0.01f * f32(f + 1), 0.0f)); // one moving instance: TLAS update
+            render(cam, {.width = size.width, .height = size.height, .frames = 1});
+            const RenderStats& st = renderer->stats();
+            frame += st.gpuFrameMs / kFrames;
+            for (const PassTiming& p : st.passes) {
+                std::string n = p.name;
+                if (auto slash = n.find('/'); slash != std::string::npos) n = n.substr(slash + 1); // "<view>/<pass>"
+                if (!n.starts_with("RT.") && !n.starts_with("Rt")) continue;
+                auto it = std::find_if(passes.begin(), passes.end(), [&](const auto& e) { return e.first == n; });
+                if (it == passes.end()) it = passes.insert(passes.end(), {n, 0.0});
+                it->second += p.gpuMs / kFrames;
+            }
+        }
+        f64 rt = 0.0;
+        for (const auto& [n, ms] : passes) rt += ms;
+        const rhi::GpuMemoryStats mem = device->memoryStats();
+        std::printf("[rt-perf] %ux%u %-22s GPU frame %7.3f ms, ray tracing passes %7.3f ms, VRAM %.0f MB\n", size.width,
+                    size.height, label, frame, rt, f64(mem.totalUsageBytes) / 1048576.0);
+        // Denoiser stages are summed per signal ("RtAO.Temporal" + ".Variance" + ".Atrous*" + ".Upsample").
+        std::vector<std::pair<std::string, f64>> rows;
+        for (const auto& [n, ms] : passes) {
+            const std::string key = n.starts_with("Rt") ? n.substr(0, n.find('.')) + " (denoise)" : n;
+            auto it = std::find_if(rows.begin(), rows.end(), [&](const auto& e) { return e.first == key; });
+            if (it == rows.end()) it = rows.insert(rows.end(), {key, 0.0});
+            it->second += ms;
+        }
+        for (const auto& [n, ms] : rows) std::printf("[rt-perf]     %-34s %7.3f ms\n", n.c_str(), ms);
+        return frame;
+    };
+    for (const Extent2D size : sizes) {
+        const f64 raster = report(size, "raster");
+        if (device->caps().timestampQueries) EXPECT_GT(raster, 0.0);
+        CVarScope on("r.RayTracing", "true");
+        report(size, "ray tracing (default)");
+        {
+            CVarScope restir("r.RayTracing.Shadows.ReSTIR", "true");
+            report(size, "ray tracing + ReSTIR");
+        }
+        CVarScope pt("r.PathTracing", "true");
+        report(size, "path tracer (mode 0)");
+        CVarScope mode("r.PathTracing.Mode", "1");
+        report(size, "path tracer (mode 1)");
+    }
 }
