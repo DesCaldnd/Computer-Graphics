@@ -33,7 +33,8 @@ struct DdgiVolume {
 // Reference to a DdgiVolume in memory (8-byte aligned: it contains a 64-bit address).
 layout(buffer_reference, scalar, buffer_reference_align = 8) buffer DdgiVolumeRef { DdgiVolume v; };
 
-int oxDdgiMod(int a, int m) { int r = a % m; return r < 0 ? r + m : r; }
+// Positive modulo. GLSL leaves % undefined when an operand is negative: only non-negative operands reach it.
+int oxDdgiMod(int a, int m) { return a >= 0 ? a % m : (m - 1) - ((-1 - a) % m); }
 
 uint oxDdgiStorageIndex(DdgiVolume v, ivec3 worldCoord) {
     ivec3 s = ivec3(oxDdgiMod(worldCoord.x, v.counts.x), oxDdgiMod(worldCoord.y, v.counts.y),
