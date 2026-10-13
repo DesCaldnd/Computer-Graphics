@@ -87,7 +87,12 @@ TEST(AsyncStress, HundredThousandTasksNoLeaks) {
                     "heap allocations: %llu during spawn, %llu total (pool %s, %llu chunks)\n",
                     kTasks, spawnMs, spawnMs * 1e6 / kTasks, runMs, ticks, spawnAllocs, totalAllocs,
                     st.poolEnabled ? "on" : "off", static_cast<unsigned long long>(st.chunkAllocations));
-        if (st.poolEnabled) {
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL > 0
+        const bool countAllocations = false; // MSVC debug containers allocate a proxy object each
+#else
+        const bool countAllocations = true;
+#endif
+        if (st.poolEnabled && countAllocations) {
             // Frames and records come from the warmed-up pool: only amortised vector growth may allocate.
             EXPECT_LT(spawnAllocs, static_cast<unsigned long long>(kTasks / 100));
         }
