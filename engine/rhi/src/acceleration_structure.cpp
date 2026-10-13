@@ -142,6 +142,12 @@ AccelStructHandle Device::createBlas(const BlasDesc& desc) {
             });
             vkDestroyAccelerationStructureKHR(s.device, rec.handle, nullptr);
             destroy(rec.buffer);
+            // The address does not change, but GPU-assisted validation (1.4.341) drops the compacted structure from
+            // its table of known addresses when the original is destroyed and then reports every TLAS instance
+            // (VUID 12281) and traces a dummy BLAS instead. Querying again registers it.
+            VkAccelerationStructureDeviceAddressInfoKHR ai{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+            ai.accelerationStructure = compact;
+            compactAddress = vkGetAccelerationStructureDeviceAddressKHR(s.device, &ai);
             rec.handle = compact;
             rec.buffer = compactBuffer;
             rec.address = compactAddress;
