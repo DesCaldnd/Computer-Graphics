@@ -386,8 +386,11 @@ VkPipeline buildRayTracing(Device& device, DeviceState& s, PipelineRecord& rec, 
                 std::memcpy(table.data() + offsets[r] + i * stride, handles.data() + g * handleSize, handleSize);
             }
         }
-        sbtOut = device.createBuffer({total, BufferUsage::ShaderBindingTable, MemoryUsage::Upload, d.name + ".sbt"}, table.data());
-        const VkDeviceAddress addr = device.address(sbtOut);
+        // Region addresses must be multiples of shaderGroupBaseAlignment; the allocator only guarantees the buffer's
+        // own memory alignment, so the table starts at the first aligned address inside a padded buffer.
+        sbtOut = device.createBuffer({total + base, BufferUsage::ShaderBindingTable, MemoryUsage::Upload, d.name + ".sbt"});
+        const VkDeviceAddress addr = alignUp(device.address(sbtOut), base);
+        device.writeBuffer(sbtOut, table.data(), total, addr - device.address(sbtOut));
         for (u32 r = 0; r < 4; ++r) {
             regions[r] = {counts[r] ? addr + offsets[r] : 0, counts[r] ? (r == 0 ? sizes[0] : stride) : 0,
                           counts[r] ? sizes[r] : 0};

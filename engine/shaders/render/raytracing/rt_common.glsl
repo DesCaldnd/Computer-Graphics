@@ -311,7 +311,7 @@ vec3 oxRtPrefilteredSpecular(ViewBuffer vb, vec3 R, float perceptualRoughness) {
 vec3 oxRtMissRadiance(ViewBuffer vb, SceneBuffer sb, vec3 dir, bool sunDisk) { return oxSkyRadiance(vb, sb, dir, sunDisk); }
 
 // Sky lighting a surface (GI probes, reflections): scaled like the raster IBL it replaces (the environment's
-// ambientIntensity × r.IBL.Intensity), so toggling ray tracing keeps the ambient level.
+// ambientIntensity Ã— r.IBL.Intensity), so toggling ray tracing keeps the ambient level.
 vec3 oxRtMissLighting(ViewBuffer vb, SceneBuffer sb, vec3 dir, bool sunDisk) {
     return oxSkyRadiance(vb, sb, dir, sunDisk) * vb.v.iblIntensity;
 }
