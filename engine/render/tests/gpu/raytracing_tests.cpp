@@ -25,15 +25,17 @@ using namespace ox::render::test;
 
 class RayTracingTest : public RenderTest {
 protected:
-    // Grey floor with a few occluders, ambient light only (AO-friendly).
-    void aoScene() {
+    // Grey floor with a few occluders, ambient light only (AO-friendly). `sky` dims the sky for scenes lit by
+    // local lights (the IBL follows the sky: ambientIntensity stays 1, so raster, ray traced and path traced
+    // images see the same environment).
+    void aoScene(f32 sky = 1.0f) {
         const Uuid grey = material({0.8f, 0.8f, 0.8f, 1.0f}, 0.0f, 0.6f);
         mesh(Primitive::Plane, grey, {0, 0, 0}, glm::vec3(30.0f));
         mesh(Primitive::Cube, grey, {-0.8f, 0.5f, 0.0f});
         mesh(Primitive::Cube, grey, {0.9f, 0.35f, -0.6f}, glm::vec3(0.7f));
         mesh(Primitive::Sphere, grey, {0.2f, 0.4f, 1.0f}, glm::vec3(0.8f));
         mesh(Primitive::Cylinder, grey, {1.4f, 0.75f, 0.8f}, glm::vec3(0.4f, 1.5f, 0.4f));
-        environment(1.0f, 1.0f);
+        environment(sky, 1.0f);
     }
     // Every ray traced effect image goes to <temp>/oxwald_render_out/<name>.png for inspection.
     static void dump(const char* name, const Image& img) {
@@ -653,10 +655,11 @@ TEST_F(RayTracingTest, RtAmbientOcclusionDarkensContacts) {
 TEST_F(RayTracingTest, RtReflectionsSeeOffscreenObjects) {
     OX_REQUIRE_RT();
     mesh(Primitive::Plane, material({0.9f, 0.9f, 0.9f, 1.0f}, 1.0f, 0.05f), {0, 0, 0}, glm::vec3(30.0f));
-    // A bright red sphere behind the camera: invisible on screen, visible only in a ray traced reflection.
-    mesh(Primitive::Sphere, material({1, 0, 0, 1}, 0.0f, 0.5f, glm::vec3(4.0f, 0.0f, 0.0f)), {0, 1.5f, 8}, glm::vec3(2.0f));
+    // A bright red sphere in front of the camera but above the frame: invisible on screen, visible only in a ray
+    // traced reflection (a flat floor mirrors what is above it, never what is behind the camera).
+    mesh(Primitive::Sphere, material({1, 0, 0, 1}, 0.0f, 0.5f, glm::vec3(4.0f, 0.0f, 0.0f)), {0, 5.0f, -6}, glm::vec3(2.0f));
     environment(0.2f, 0.2f);
-    const CameraParams cam = camera({0, 1.0f, 4}, {0, 0.6f, 0}, 9.0f, 50.0f);
+    const CameraParams cam = camera({0, 1.0f, 4}, {0, 0.0f, 0}, 9.0f, 50.0f);
     const Image raster = render(cam, {.frames = 4});
     CVarScope on("r.RayTracing", "true");
     const Image rt = render(cam, {.frames = 24});
@@ -668,19 +671,34 @@ TEST_F(RayTracingTest, RtReflectionsSeeOffscreenObjects) {
 
 TEST_F(RayTracingTest, RtGlobalIlluminationBleedsColour) {
     OX_REQUIRE_RT();
+    // A sunlit red wall next to a white floor. The wall is large against the DDGI probe spacing (2 m) and no probe
+    // lies inside it (probes sit at odd coordinates): a 2 m wall is below what the probe grid resolves.
     mesh(Primitive::Plane, material({0.9f, 0.9f, 0.9f, 1.0f}, 0.0f, 0.8f), {0, 0, 0}, glm::vec3(30.0f));
-    mesh(Primitive::Cube, material({0.9f, 0.05f, 0.05f, 1.0f}, 0.0f, 0.8f), {-1.0f, 1.0f, 0.0f}, {0.2f, 2.0f, 4.0f});
-    sun({0.6f, -0.7f, -0.2f}, 30000.0f);
-    environment(0.1f, 0.1f);
-    const CameraParams cam = camera({2.5f, 2.0f, 3.0f}, {-0.5f, 0.3f, 0.0f}, 13.0f, 55.0f);
+    mesh(Primitive::Cube, material({0.9f, 0.05f, 0.05f, 1.0f}, 0.0f, 0.8f), {-2.0f, 3.0f, 0.0f}, {0.4f, 6.0f, 12.0f});
+    sun({-0.6f, -0.7f, -0.2f}, 30000.0f); // lights the wall face the camera sees
+    environment(0.1f, 1.0f);
+    const CameraParams cam = camera({4.5f, 3.0f, 4.0f}, {-2.0f, 0.8f, 0.0f}, 13.0f, 55.0f);
     const Image raster = render(cam, {.frames = 4});
     CVarScope on("r.RayTracing", "true");
     const Image rt = render(cam, {.frames = 48});
+    const Image reference = [&] {
+        CVarScope pt("r.PathTracing", "true");
+        return render(cam, {.frames = 768});
+    }();
     dump("rt_gi_raster", raster);
     dump("rt_gi", rt);
-    // Floor next to the red wall picks up red light.
-    const glm::vec3 a = meanColor(rt, 60, 170, 120, 220), b = meanColor(raster, 60, 170, 120, 220);
-    EXPECT_GT(a.r / std::max(a.g, 1e-3f), b.r / std::max(b.g, 1e-3f) * 1.05f);
+    dump("rt_gi_path_traced", reference);
+    // Floor in front of the red wall picks up red light: red excess over green, against the path traced reference.
+    auto excess = [](const Image& img) {
+        const glm::vec3 c = meanColor(img, 40, 190, 140, 250);
+        return c.r / std::max(c.g, 1e-3f) - 1.0f;
+    };
+    const f32 eRaster = excess(raster), eRt = excess(rt), eRef = excess(reference);
+    std::printf("[rt] gi red excess on the floor: raster %.4f, ddgi %.4f, path traced %.4f\n", eRaster, eRt, eRef);
+    EXPECT_GT(eRef, 0.03f) << "the scene bleeds colour at all";
+    EXPECT_LT(std::abs(eRaster), 0.01f) << "raster has no bounce light";
+    EXPECT_GT(eRt, eRef * 0.4f) << "DDGI carries the wall's colour onto the floor";
+    EXPECT_LT(eRt, eRef * 1.6f) << "and does not overshoot the reference";
 }
 
 TEST_F(RayTracingTest, RtRefractionThroughGlass) {
@@ -727,24 +745,43 @@ TEST_F(RayTracingTest, PathTracerConvergesAndResetsOnCameraChange) {
 
 TEST_F(RayTracingTest, RestirShadowsManyLights) {
     OX_REQUIRE_RT();
-    aoScene();
+    aoScene(0.003f); // dim sky: the local lights dominate, their shadows are what the test looks at
+    // 32 shadow casting point lights as a panel on the left (-x): together they act as an area light, the
+    // occluders throw soft shadows to the right.
     for (int i = 0; i < 32; ++i) {
-        const f32 a = f32(i) * 0.196f;
-        pointLight({std::cos(a) * 3.0f, 1.2f, std::sin(a) * 3.0f}, 800.0f, 6.0f, glm::vec3(1.0f), true);
+        pointLight({-3.5f, 1.0f + f32(i / 8) * 0.6f, -1.75f + f32(i % 8) * 0.5f}, 16000.0f, 10.0f, glm::vec3(1.0f), true);
     }
     const CameraParams cam = camera({0.3f, 2.6f, 4.2f}, {0.2f, 0.3f, 0.0f}, 9.0f, 55.0f);
     CVarScope on("r.RayTracing", "true");
     const Image unshadowed = [&] {
         CVarScope s("r.Shadows", "false");
-        return render(cam, {.frames = 4});
+        return render(cam, {.frames = 16});
+    }();
+    const Image fourLights = render(cam, {.frames = 32}); // without ReSTIR only MaxLocalLights (4) are traced
+    const Image reference = [&] {
+        CVarScope pt("r.PathTracing", "true");
+        return render(cam, {.frames = 768});
     }();
     CVarScope restir("r.RayTracing.Shadows.ReSTIR", "true");
     const Image a = render(cam, {.frames = 32});
     const Image b = render(cam, {.frames = 8});
     dump("rt_restir_unshadowed", unshadowed);
+    dump("rt_restir_off_4_lights", fourLights);
     dump("rt_restir", b);
-    EXPECT_LT(meanLuminance(a, 0, 0, a.width, a.height), meanLuminance(unshadowed, 0, 0, a.width, a.height))
-        << "occluders cast shadows from many lights";
+    dump("rt_restir_path_traced", reference);
+    // Floor right of the sphere (shadowed from the whole panel) against the open floor in front (lit by all).
+    auto shadowRatio = [](const Image& img) {
+        return meanLuminance(img, 150, 150, 185, 170) / std::max(meanLuminance(img, 20, 190, 80, 250), 1e-3);
+    };
+    const f64 rUnshadowed = shadowRatio(unshadowed), rFour = shadowRatio(fourLights), rRestir = shadowRatio(a),
+              rRef = shadowRatio(reference);
+    std::printf("[rt] restir shadow/lit luminance: unshadowed %.3f, 4 lights %.3f, restir %.3f, path traced %.3f\n",
+                rUnshadowed, rFour, rRestir, rRef);
+    EXPECT_LT(rRestir, rUnshadowed * 0.6) << "occluders cast shadows from many lights";
+    EXPECT_LT(rRestir, rFour * 0.7) << "ReSTIR shadows every light, not only the 4 explicit ones";
+    EXPECT_NEAR(rRestir, rRef, 0.12) << "shadow depth matches the path traced reference";
+    EXPECT_NEAR(meanLuminance(a, 20, 190, 80, 250), meanLuminance(unshadowed, 20, 190, 80, 250), 0.03)
+        << "unoccluded surfaces keep their lighting";
     EXPECT_LT(meanAbs(a, b), 3.0) << "temporally stable after denoising";
 }
 
