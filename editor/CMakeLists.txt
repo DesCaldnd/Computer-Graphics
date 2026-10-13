@@ -18,15 +18,6 @@ endif()
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-# MSVC: /W4 reports far more than the -Wall -Wextra set the editor is kept clean against (unused parameters are
-# switched off there too; 64->32 bit narrowing and local shadowing are not part of it), and with
-# OX_WARNINGS_AS_ERRORS every one of them is fatal. Keep both compilers on the same set.
-function(ox_editor_compile_options target)
-    if(MSVC)
-        target_compile_options(${target} PRIVATE /bigobj /wd4100 /wd4244 /wd4267 /wd4456 /wd4457 /wd4458 /wd4459)
-    endif()
-endfunction()
-
 # Shared Qt on Windows (vcpkg x64-windows): the applocal step copies the Qt DLLs next to the executable but not the
 # plugins, and Qt looks for those in <exe dir>/<plugin type>/. Without platforms/qwindows.dll the editor does not
 # start, without qoffscreen.dll the tests and --screenshots do not. The imported plugin targets resolve to the
@@ -75,7 +66,6 @@ target_compile_definitions(ox_editor PUBLIC QT_NO_KEYWORDS
     OX_EDITOR_VERSION="${PROJECT_VERSION}"
     OX_EDITOR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 ox_set_warnings(ox_editor)
-ox_editor_compile_options(ox_editor)
 set_target_properties(ox_editor PROPERTIES FOLDER "editor")
 
 # Icons, theme and images (globbed so new icons need no list maintenance).
@@ -109,7 +99,6 @@ set(_app_icon "")
 add_executable(OxwaldEditor MACOSX_BUNDLE ${CMAKE_CURRENT_SOURCE_DIR}/src/app/main.cpp)
 target_link_libraries(OxwaldEditor PRIVATE ox_editor)
 ox_set_warnings(OxwaldEditor)
-ox_editor_compile_options(OxwaldEditor)
 ox_editor_deploy_qt_plugins(OxwaldEditor)
 set_target_properties(OxwaldEditor PROPERTIES
     FOLDER "editor"
@@ -149,7 +138,6 @@ if(OX_BUILD_TESTS)
         target_link_libraries(ox_editor_tests PRIVATE ox_editor Qt6::Test)
         target_include_directories(ox_editor_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
         ox_set_warnings(ox_editor_tests)
-        ox_editor_compile_options(ox_editor_tests)
         ox_editor_deploy_qt_plugins(ox_editor_tests)
         set_target_properties(ox_editor_tests PROPERTIES FOLDER "editor")
         if(TARGET Qt6::QOffscreenIntegrationPlugin)

@@ -35,14 +35,14 @@ function(ox_set_warnings target)
     endif()
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
-        # Keep /W4 comparable to the -Wall -Wextra set used with clang/gcc (which has no -Wconversion / -Wshadow and
-        # switches unused parameters off):
-        #   C4100 unused parameter                      C4127 conditional expression is constant
-        #   C4201 nameless struct/union                 C4324 structure padded due to alignas
-        #   C4244 C4267 C4305 narrowing conversions     C4245 signed constant converted to unsigned
-        #   C4456-C4459 declaration hides an outer one
-        target_compile_options(${target} PRIVATE /wd4100 /wd4127 /wd4201 /wd4324 /wd4244 /wd4267 /wd4305 /wd4245
-                                                 /wd4456 /wd4457 /wd4458 /wd4459)
+        # The only /W4 warnings switched off. Everything else (narrowing C4244/C4267/C4305/C4245, shadowing
+        # C4456-C4459, unreachable code, ...) is fixed in the code; third-party headers are silenced by the
+        # /external:W0 CMake applies to SYSTEM include directories (every imported vcpkg target).
+        #   C4100 unused parameter                    same as -Wno-unused-parameter below
+        #   C4127 conditional expression is constant  fires on `if (kConstant)` / template-dependent conditions
+        #   C4201 nameless struct/union               glm vector types, and an extension every supported compiler has
+        #   C4324 structure padded due to alignas     the padding is what alignas asks for
+        target_compile_options(${target} PRIVATE /wd4100 /wd4127 /wd4201 /wd4324)
         if(_werror)
             target_compile_options(${target} PRIVATE /WX)
         endif()

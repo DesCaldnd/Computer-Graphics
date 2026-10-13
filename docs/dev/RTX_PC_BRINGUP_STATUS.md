@@ -130,11 +130,11 @@ VS 2022 17.14 (MSVC 14.44.35207), CMake 3.30, Ninja 1.12.1, Git LFS 3.7.1, vcpkg
    выходе: `OxwaldEditor --project samples\OxwaldShowcase --smoke-seconds 10`.
 2. **GPU-driven и async compute** — исправлено (раздел 5), но влито одним WIP-коммитом и после слияния не
    пересобиралось. Перемерить CPU-цифры и `r.ParallelRecording` на простаивающей машине, решить по `Auto`.
-3. **Вернуть `OX_WARNINGS_AS_ERRORS=ON`.** Сейчас в `ox_set_warnings` (`cmake/OxwaldHelpers.cmake`) и в
-   `ox_editor_compile_options` (`editor/CMakeLists.txt`) стоят глобальные `/wd4100 /wd4127 /wd4201 /wd4324 /wd4244
-   /wd4267 /wd4305 /wd4245 /wd4456–4459`. По плану подавлять можно только стороннее: убрать как минимум
-   `/wd4244 /wd4267 /wd4305 /wd4245` и исправить сами места. Оставшиеся предупреждения при текущем наборе:
-   C4702 ×5, C4033 ×2 (корутины в `async/tests`), C4723 (`core/math.hpp:54`), C4146 (`rhi/src/swapchain.cpp:137`).
+3. **`OX_WARNINGS_AS_ERRORS=ON` возвращён (сделано).** В `ox_set_warnings` (`cmake/OxwaldHelpers.cmake`) остались
+   только `/wd4100 /wd4127 /wd4201 /wd4324`; сужения (C4244/C4267/C4305/C4245), затенения (C4456–C4459), C4702,
+   C4033, C4723, C4146 исправлены в коде, отдельного списка `/wd` у редактора больше нет. Сторонние заголовки
+   идут через `/external:W0` (SYSTEM-include импортированных целей vcpkg). Проверена конфигурация `dev`
+   (RelWithDebInfo); `debug` под MSVC с `/WX` не собиралась.
 4. **Ray tracing:**
    - исправить три сцены тестов (таблица выше), посмотреть картинки GI и ReSTIR;
    - GPU-assisted validation ругается `VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-12281` в `RT.BuildAS`
