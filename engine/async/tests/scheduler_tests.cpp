@@ -229,6 +229,7 @@ TEST(AsyncScheduler, ExceptionsPropagateAndFailRoot) {
     auto failing = []() -> Task<int> {
         co_await nextFrame();
         throw std::runtime_error("bad door");
+        co_return 0; // a Task<int> coroutine may not flow off its end
     };
     s.spawn([&]() -> Task<> {
         try {

@@ -48,14 +48,14 @@ inline constexpr glm::vec3 kWorldForward{0.0f, 0.0f, -1.0f};
 // Maps x from [inMin,inMax] to [outMin,outMax] (not clamped). Degenerate input range returns outMin.
 [[nodiscard]] inline f32 remap(f32 x, f32 inMin, f32 inMax, f32 outMin, f32 outMax) {
     const f32 range = inMax - inMin;
-    if (std::abs(range) < std::numeric_limits<f32>::min()) {
+    if (range > -std::numeric_limits<f32>::min() && range < std::numeric_limits<f32>::min()) {
         return outMin;
     }
     return outMin + (x - inMin) / range * (outMax - outMin);
 }
 [[nodiscard]] inline f32 remapClamped(f32 x, f32 inMin, f32 inMax, f32 outMin, f32 outMax) {
     const f32 range = inMax - inMin;
-    if (std::abs(range) < std::numeric_limits<f32>::min()) {
+    if (range > -std::numeric_limits<f32>::min() && range < std::numeric_limits<f32>::min()) {
         return outMin;
     }
     return outMin + saturate((x - inMin) / range) * (outMax - outMin);

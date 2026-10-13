@@ -149,8 +149,11 @@ f64 bbNumber(const ai::Blackboard* bb, const std::string& key) {
     return std::visit(
         [](const auto& x) -> f64 {
             using T = std::decay_t<decltype(x)>;
-            if constexpr (std::is_arithmetic_v<T>) return f64(x);
-            return -2.0;
+            if constexpr (std::is_arithmetic_v<T>) {
+                return f64(x);
+            } else {
+                return -2.0;
+            }
         },
         *v);
 }

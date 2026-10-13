@@ -122,7 +122,7 @@ inline fs::path writeTestGltf(const fs::path& dir, const std::string& name) {
         const glm::vec2 c[4] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
         for (auto k : c) verts.push_back({(n + u * k.x + v * k.y) * 0.5f, n, glm::vec2(k.x * 0.5f + 0.5f, 0.5f - k.y * 0.5f)});
         auto& dst = f == 2 ? idxTop : idxRest;
-        for (u16 i : {0, 1, 2, 0, 2, 3}) dst.push_back(u16(base + i));
+        for (int i : {0, 1, 2, 0, 2, 3}) dst.push_back(u16(base + i));
     }
     std::vector<std::byte> bin;
     auto append = [&](const void* data, usize size) {

@@ -81,6 +81,7 @@ TEST(AsyncCombinators, WhenAllRethrowsFirstErrorAfterAll) {
         auto failing = []() -> Task<int> {
             co_await nextFrame();
             throw std::runtime_error("branch failed");
+            co_return 0; // a Task<int> coroutine may not flow off its end
         };
         auto slow = [&]() -> Task<int> {
             co_await frames(3);

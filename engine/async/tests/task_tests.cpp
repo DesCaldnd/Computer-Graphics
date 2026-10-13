@@ -145,7 +145,9 @@ TEST(AsyncFuture, AwaitCallbackAndRunAsync) {
     Future<int> r = runAsync(pool, [] { return 6 * 7; });
     r.wait();
     EXPECT_EQ(r.get(), 42);
-    Future<int> bad = runAsync(pool, []() -> int { throw std::logic_error("x"); });
+    // std::invalid_argument is a std::logic_error; a callable that can only throw makes the value path of runAsync
+    // unreachable code (MSVC C4702).
+    Future<int> bad = runAsync(pool, []() -> int { return std::stoi("x"); });
     bad.wait();
     EXPECT_THROW(bad.get(), std::logic_error);
 }

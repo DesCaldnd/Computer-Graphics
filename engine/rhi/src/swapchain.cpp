@@ -134,7 +134,7 @@ bool Swapchain::build() {
                                                                                         : caps.currentTransform;
     ci.compositeAlpha = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
                             ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
-                            : VkCompositeAlphaFlagBitsKHR(caps.supportedCompositeAlpha & -caps.supportedCompositeAlpha);
+                            : VkCompositeAlphaFlagBitsKHR(caps.supportedCompositeAlpha & (~caps.supportedCompositeAlpha + 1u));
     ci.presentMode = presentMode;
     ci.clipped = VK_TRUE;
     ci.oldSwapchain = m_swapchain;
