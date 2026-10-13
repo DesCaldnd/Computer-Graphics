@@ -245,6 +245,11 @@ public:
         }
         out.gpuIndex = float(r.score);
         out.levels = r.levels;
+        // The caps provider is what the settings UI trusts: never recommend what it reports as unavailable.
+        auto clampToCaps = [&caps](BenchmarkResult& b) {
+            if (!caps.rayTracingSupported) b.levels[usize(Scalability::RayTracing)] = QualityLevel::Low;
+            if (!caps.dlssSupported && b.upscaler == int(render::UpscalerType::DLSS)) b.upscaler = int(render::UpscalerType::TAAU);
+        };
         // Auto quality incl. AA + upscaler (DLSS on RTX, TAAU/FSR 1 elsewhere).
         if (rhi::Device* device = VulkanViewportHub::device()) {
             const render::RecommendedSettings rec = render::recommendedSettings(*device, r.score);
@@ -253,9 +258,11 @@ public:
             out.upscaler = int(rec.upscaler);
             out.upscalerQuality = int(rec.upscalerQuality);
             out.details = QStringLiteral("CPU index %1 · GPU score %2 · %3").arg(out.cpuIndex, 0, 'f', 0).arg(r.score, 0, 'f', 0).arg(QString::fromStdString(rec.rationale));
+            clampToCaps(out);
             return out;
         }
         out.details = QStringLiteral("CPU index %1 · GPU score %2 (%3)").arg(out.cpuIndex, 0, 'f', 0).arg(r.score, 0, 'f', 0).arg(QString::fromStdString(r.toString()));
+        clampToCaps(out);
         return out;
     }
 };

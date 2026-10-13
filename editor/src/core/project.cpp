@@ -362,7 +362,9 @@ void Project::captureCVarSettings() {
     static const std::set<std::string> userOwned = {"r.VSync",    "r.WindowMode", "r.ResolutionX", "r.ResolutionY",
                                                     "r.Monitor",  "t.MaxFPS",     "g.FOV",         "a.MasterVolume"};
     json cvars = json::object();
-    for (const auto& [name, value] : CVarRegistry::instance().saveOverrides(false).items()) {
+    // Named: items() only references the json, and a temporary would die before the loop body runs.
+    const json overrides = CVarRegistry::instance().saveOverrides(false);
+    for (const auto& [name, value] : overrides.items()) {
         if (name.starts_with("sg.") || members.contains(name) || userOwned.contains(name)) continue;
         cvars[name] = cvarValueString(value);
     }
