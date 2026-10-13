@@ -236,7 +236,7 @@ public:
             desc.shaderHotReload = false;
             VulkanViewportHub::prepareDeviceDesc(desc);
             std::string err;
-            if (auto device = rhi::Device::create(desc, &err)) r = render::autoDetectQuality(*device);
+            if (auto headless = rhi::Device::create(desc, &err)) r = render::autoDetectQuality(*headless);
             else OX_LOG_WARN("editor", "benchmark device: {}", err);
         }
         if (!r.valid) {

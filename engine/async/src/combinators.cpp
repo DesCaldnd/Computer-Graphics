@@ -5,13 +5,13 @@
 namespace ox::detail {
 
 std::coroutine_handle<> DriverPromise::Final::await_suspend(DriverHandle h) noexcept {
-    AsyncContext* ctx = h.promise().ctx;
-    if (ctx->record && ctx->offThread) {
+    AsyncContext* context = h.promise().ctx;
+    if (context->record && context->offThread) {
         // Completion logic runs on the scheduler thread. Nothing may touch the frame after the push.
-        ctx->record->inbox->push(InboxItem{InboxItem::Kind::DriverDone, ctx, {}, 0, {}});
+        context->record->inbox->push(InboxItem{InboxItem::Kind::DriverDone, context, {}, 0, {}});
         return std::noop_coroutine();
     }
-    std::coroutine_handle<> next = ctx->when->driverDone(ctx->index);
+    std::coroutine_handle<> next = context->when->driverDone(context->index);
     return next ? next : std::noop_coroutine();
 }
 

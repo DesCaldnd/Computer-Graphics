@@ -418,10 +418,10 @@ TEST_P(WorldSkyTest, SkyTimeOfDay) {
     sunFrom(st.mainLightDirection, st.mainLightIlluminance, st.mainLightColor);
     environment(1.0f, 1.0f);
     // Look towards the sun (or the moon) azimuth, horizon in the lower third.
-    const glm::vec3 target = sc.lookAtMoon ? st.moonDirection : st.sunDirection;
-    glm::vec3 flat = glm::normalize(glm::vec3(target.x, 0.0f, target.z));
+    const glm::vec3 body = sc.lookAtMoon ? st.moonDirection : st.sunDirection;
+    glm::vec3 flat = glm::normalize(glm::vec3(body.x, 0.0f, body.z));
     const glm::vec3 eye(0.0f, 1.7f, 0.0f);
-    const f32 pitch = sc.lookAtMoon ? std::clamp(std::asin(target.y), 0.1f, 1.0f) * 0.8f : 0.18f;
+    const f32 pitch = sc.lookAtMoon ? std::clamp(std::asin(body.y), 0.1f, 1.0f) * 0.8f : 0.18f;
     const glm::vec3 dir = glm::normalize(flat * std::cos(pitch) + glm::vec3(0.0f, std::sin(pitch), 0.0f));
     mesh(Primitive::Sphere, chrome, eye + flat * 9.0f + glm::vec3(-2.2f, -0.7f, 0.0f), glm::vec3(1.6f));
     mesh(Primitive::Sphere, white, eye + flat * 9.0f + glm::vec3(2.2f, -0.7f, 0.0f), glm::vec3(1.6f));
@@ -728,7 +728,7 @@ TEST_F(WorldSkinningTest, PerfReport1080p) {
     }
     {
         CVarScope low("r.Foliage.Density", "0.35");
-        CVarScope layers("r.Terrain.MaxLayers", "2");
+        CVarScope fewLayers("r.Terrain.MaxLayers", "2");
         renderWith(cam, {.width = 1920, .height = 1080, .frames = 8}, fill);
         std::printf("  foliage density 0.35 + 2 terrain layers: GPU %.2f ms\n", renderer->stats().gpuFrameMs);
     }

@@ -190,11 +190,11 @@ bool deserializeChunk(std::span<const u8> bytes, ChunkData& out, std::string* er
             holes = body;
         } else if (tag == kSplt) {
             const u32 res = b.get<u32>(), layers = b.get<u32>();
-            const f32 ox = b.get<f32>(), oz = b.get<f32>(), size = b.get<f32>();
+            const f32 ox = b.get<f32>(), oz = b.get<f32>(), worldSize = b.get<f32>();
             if (!b.ok || res < 2 || res > 16385 || layers < 1 || layers > kMaxSplatLayers) {
                 return fail(err, "invalid splat section");
             }
-            SplatMap s(res, layers, {ox, oz}, size);
+            SplatMap s(res, layers, {ox, oz}, worldSize);
             auto dst = s.rawMutable();
             const auto src = b.bytes(dst.size());
             if (!b.ok) {

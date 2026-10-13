@@ -11,15 +11,15 @@ namespace ox {
 namespace detail {
 
 void CancelState::cancel() {
-    std::vector<std::pair<u64, std::function<void()>>> callbacks;
+    std::vector<std::pair<u64, std::function<void()>>> pending;
     {
         std::lock_guard lock(mutex);
         if (cancelled.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
-        callbacks.swap(this->callbacks);
+        pending.swap(callbacks);
     }
-    for (auto& [id, fn] : callbacks) {
+    for (auto& [id, fn] : pending) {
         fn();
     }
 }

@@ -15,11 +15,11 @@ bool ProjectSettings::moduleEnabled(std::string_view module) const {
 
 std::vector<std::string> ProjectSettings::unknownModules(std::span<const std::string> registered) const {
     std::vector<std::string> out;
-    for (const auto& [name, enabled] : modules) {
-        const bool engine = std::find(std::begin(kEngineModuleNames), std::end(kEngineModuleNames), name) !=
+    for (const auto& [module, enabled] : modules) {
+        const bool engine = std::find(std::begin(kEngineModuleNames), std::end(kEngineModuleNames), module) !=
                             std::end(kEngineModuleNames);
-        const bool game = std::find(registered.begin(), registered.end(), name) != registered.end();
-        if (!engine && !game) out.push_back(name);
+        const bool game = std::find(registered.begin(), registered.end(), module) != registered.end();
+        if (!engine && !game) out.push_back(module);
     }
     return out;
 }
