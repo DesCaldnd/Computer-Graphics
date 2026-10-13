@@ -177,7 +177,7 @@ DenoiserOutputs SvgfDenoiser::denoise(FeatureContext& ctx, std::string_view name
             pc.width = e.width;
             pc.height = e.height;
             pc.scale = std::max(i.scale, 1u);
-            pc.flags = (historyValid ? 1u : 0u) | (st.temporal ? 2u : 0u);
+            pc.flags = (historyValid ? 1u : 0u) | (st.temporal ? 2u : 0u) | (st.clampHistory ? 4u : 0u);
             pc.maxHistory = maxHistory;
             pc.luma = st.lumaWeights;
             p.cmd.bindPipeline(m_temporal);

@@ -252,14 +252,18 @@ public:
 
         // --- denoise + publish ---
         const std::optional<Extent2D> up = se == in.render ? std::nullopt : std::optional<Extent2D>(in.render);
-        const DenoiserOutputs sun = m_shared->denoiser.denoise(
-            ctx, "RtShadowSun", denoiserInputs(in, sunSig, se),
-            denoiserSettings(st.shadowDenoiser, DenoiseOutput::RGBA8, {1.0f / 3, 1.0f / 3, 1.0f / 3, 0.0f}), up);
+        // Visibility signals: stale history (a shadow that moved on) is clamped away instead of fading out.
+        DenoiserSettings sunSettings =
+            denoiserSettings(st.shadowDenoiser, DenoiseOutput::RGBA8, {1.0f / 3, 1.0f / 3, 1.0f / 3, 0.0f});
+        sunSettings.clampHistory = true;
+        const DenoiserOutputs sun = m_shared->denoiser.denoise(ctx, "RtShadowSun", denoiserInputs(in, sunSig, se), sunSettings, up);
         R.setTexture(ox::render::res::kShadowMask, sun.result);
         if (anyLocal) {
-            const DenoiserOutputs local = m_shared->denoiser.denoise(
-                ctx, "RtShadowLocal", denoiserInputs(in, localSig, se),
-                denoiserSettings(st.shadowDenoiser, DenoiseOutput::RGBA8, {0.25f, 0.25f, 0.25f, 0.25f}), up);
+            DenoiserSettings localSettings =
+                denoiserSettings(st.shadowDenoiser, DenoiseOutput::RGBA8, {0.25f, 0.25f, 0.25f, 0.25f});
+            localSettings.clampHistory = true;
+            const DenoiserOutputs local =
+                m_shared->denoiser.denoise(ctx, "RtShadowLocal", denoiserInputs(in, localSig, se), localSettings, up);
             const rhi::RGTexture src = local.result;
             graph.addPass("RT.Shadows.PublishLocal", rhi::PassType::Transfer)
                 .read(src, rhi::Access::TransferRead)

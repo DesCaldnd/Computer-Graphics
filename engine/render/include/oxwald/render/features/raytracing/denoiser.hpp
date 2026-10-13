@@ -33,6 +33,10 @@ struct DenoiserSettings {
     glm::vec4 lumaWeights{0.2126f, 0.7152f, 0.0722f, 0.0f}; // channel weights of the guiding luminance
     DenoiseOutput output = DenoiseOutput::RGBA16F;
     bool temporal = true;          // false: spatial only
+    // Clamp the reprojected history to the range of the current 5x5 signal neighbourhood: a history the signal
+    // no longer supports anywhere nearby is stale (a shadow moved over a static surface). For visibility
+    // signals; heavy-tailed ones (glossy radiance) would lose energy.
+    bool clampHistory = false;
 };
 
 struct DenoiserInputs {

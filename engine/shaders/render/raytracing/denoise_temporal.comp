@@ -13,6 +13,7 @@ OX_RENDER_PUSH(uint signal; uint depth; uint normals; uint velocity; uint prevCo
 
 const uint kHistoryValid = 1u;
 const uint kTemporal = 2u;
+const uint kClampHistory = 4u;
 
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -73,6 +74,20 @@ void main() {
                 valid = true;
             }
         }
+    }
+
+    if (valid && (pc.flags & kClampHistory) != 0u) {
+        // Geometry reprojection cannot see a shadow that moved over a static surface: without this the old shadow
+        // fades out over maxHistory frames. Noisy regions (penumbrae) span the whole range and keep accumulating.
+        vec4 lo = c, hi = c;
+        for (int y = -2; y <= 2; ++y) {
+            for (int x = -2; x <= 2; ++x) {
+                vec4 s = OX_FETCH_2D(pc.signal, clamp(p + ivec2(x, y), ivec2(0), size - 1), 0);
+                lo = min(lo, s);
+                hi = max(hi, s);
+            }
+        }
+        prevC = clamp(prevC, lo, hi);
     }
 
     float len = valid ? min(prevM.z + 1.0, pc.maxHistory) : 1.0;
