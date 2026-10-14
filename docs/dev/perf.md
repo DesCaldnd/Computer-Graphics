@@ -160,8 +160,24 @@ Parallel recording: no gain without validation, a gain with it. Not conclusive u
 
 GPU time of the `DLSS` pass at 1080p: Performance 6.2 ms, Quality 3.95 ms, DLAA 2.9 ms. Rough numbers (same
 conditions as above). Render resolutions per mode and the image quality checks are in
-`modules/render_postprocess.md`. Frame times of the showcase stations at 4K (Off / TAA / FSR 1 / TAAU / DLSS) were
-not measured.
+`modules/render_postprocess.md`.
+
+Showcase stations at 4K (3840×2160, headless player, quality High, ray tracing off, validation off), GPU frame time
+in ms:
+
+| Mode | Station 4 (volumetrics) | Station 6 (world) |
+| --- | --- | --- |
+| Off | 37–39 | 24.7 |
+| TAA native | 38–41 | 26.1 |
+| FSR 1 Quality | 21.0–21.7 | unstable: 52.8 and 58.9 |
+| TAAU Quality | 21.0 | unstable: 14.1 and 50.5 |
+| DLSS Quality | 23.1–23.9 | 16.4 |
+| DLSS Performance | 18.2–18.5 | 14.6 |
+
+Station 4: three runs, range shown. Station 6: the value of the last frame's overlay; FSR 1 and TAAU give either
+~14 ms or 50–59 ms with identical settings, cause unknown (see BACKLOG). Reproduce with `OxwaldPlayer --headless
+--width 3840 --height 2160 --scene project://Assets/Scenes/Stations/<station>.oxscene --frames 300 --cvar
+r.AntiAliasing=2 --cvar r.Upscaler=<0..3> --cvar r.Upscaler.Quality=<0..4> --screenshot out.png -- --photo`.
 
 ### Texture streaming — `GpuDrivenTest.TextureStreamingRespectsBudget`
 

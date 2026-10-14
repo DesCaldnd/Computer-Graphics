@@ -76,7 +76,6 @@ is in `modules/render.md` §11, the open ray tracing items are in their own sect
   `RayTracingTest.RestirShadowsManyLights` or `PathTracerPipelineMatchesRayQuery` under GPU-AV.
 - editor (Linux): the Vulkan viewport creates Win32 and xcb surfaces; a Wayland surface is not implemented (the
   editor falls back to the software viewport there). Nothing of the editor was run on Linux.
-- build: the `debug` preset was not built under MSVC with `/WX` (only `dev`, RelWithDebInfo, is verified clean).
 - samples: `oxshowcase_generate --check` on Windows finds 26 binary assets that differ from the committed ones in
   the last bit (libm, FMA); they are compared within a tight numeric tolerance instead and were not regenerated.
 - macOS re-verification after the bring-up, nothing of this was run on the Mac yet: the determinism fixes reproduce
@@ -85,6 +84,17 @@ is in `modules/render.md` §11, the open ray tracing items are in their own sect
   compute is on (off under `Auto` on MoltenVK) and its two new tests
   (`RenderGraphPlan.AsyncComputeBarriersNameNoGraphicsStages`, `IndependentGraphicsPassesDoNotWaitForAsyncCompute`)
   ran on Windows only.
+
+- **4K upscaler frame time is bimodal on the world station.** Showcase station 6 at 3840×2160 with FSR 1 or TAAU
+  Quality renders at either ~14 ms or 50–59 ms GPU with identical settings (DLSS at the same render resolution is
+  stable at 16 ms). Not investigated; numbers and the command line are in `perf.md` (RTX 3080, DLSS pass).
+- **Volumetrics do not scale with resolution.** Station 4 costs 37–39 ms GPU at native 4K against ~21 ms at 67 %
+  render scale; which pass dominates was not measured.
+- **glslang is an overlay port** (`vcpkg-overlays/ports/glslang`, bounds check in `decorateStructType`): types missing
+  from `glslangTypeToIdMap` share one member remapper, a nested conversion shrinks it, and MSVC debug iterators abort.
+  Report upstream and drop the overlay once fixed.
+- **Debug preset on MSVC**: DLSS runs with the development NGX runtime, which stamps a banner into every frame (the
+  DLSS tests leave that band out); allocation-count tests are skipped under debug iterators.
 
 ## Ray tracing: open after the first hardware run (RTX 3080, 0.1.1)
 
