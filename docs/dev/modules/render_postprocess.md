@@ -115,6 +115,173 @@ with the view and its NGX feature alive):
 | Quality | 640×360 | −1.585 |
 | Native (DLAA) | 960×540 | −1.000 |
 
+### DLSS Ray Reconstruction (`upscalers/dlss_rr_feature.cpp`, `dlss_ngx.cpp`, `raytracing/rt_rr_guides.cpp`)
+
+`r.Denoiser` (Persist, no scalability levels): `SVGF` (0, code default), `DLSSRR` (1, aliases `RR`,
+`RayReconstruction`), `Auto` (2: Ray Reconstruction where available, else SVGF), `Neural` (3, see
+[render_neural.md](render_neural.md)). The Auto quality recommendation, the runtime `UserSettings.graphics.denoiser`
+default and the editor / in-game settings menus use `Auto`. `rayReconstructionSelected(settings, caps)` is true when
+the cvar asks for it, ray tracing is active, the path tracer is off and NGX has not reported Ray Reconstruction
+unavailable; `rayReconstructionAvailability(device)` gives the reason otherwise (same texts as DLSS plus
+`SuperSamplingDenoising.Available / NeedsUpdatedDriver / FeatureInitResult`, probed together with DLSS).
+
+* **Feature `DLSSRR`**: exclusive group `Upscaler`, priority 400 (above DLSS 300, TAAU 200, FSR 1 100), so it replaces
+  DLSS super resolution / TAAU / TAA; `effectiveUpscaler` reports DLSS while it is selected. Render resolution:
+  `r.Upscaler.Quality` through `DLSSDOptimalSettingsCallback` (same sizes as DLSS SR, see the table above; tested by
+  `QualityModesResizeAndRecreate`), DLAA when `r.Upscaler` is Off. `prepareView` marks the view
+  (`rayReconstructionRunsThisFrame(view)`), and the ray traced shadows / AO / reflections then skip their SVGF
+  temporal + variance + à-trous passes for that frame (`rt::svgfActive(ctx)`); only the format resolve / half-res
+  upsample stays. The rays themselves are unchanged (1 spp).
+* **Inputs** (`NGX_VULKAN_CREATE_DLSSD_EXT1` / `NGX_VULKAN_EVALUATE_DLSSD_EXT`, flags `IsHDR | MVLowRes |
+  DepthInverted`, `AutoExposure` only without the exposure texture): the noisy `SceneColorHDR` at `BeforePostProcess`,
+  hardware depth (`NVSDK_NGX_DLSS_Depth_Type_HW`), velocity / jitter / exposure / pre-exposure with the DLSS SR
+  conventions, `Normals` (world normal + perceptual roughness in w, `NVSDK_NGX_DLSS_Roughness_Mode_Packed`),
+  `RR.DiffuseAlbedo` = baseColor × (1 − metallic) and `RR.SpecularAlbedo` = F0 × A + B (Karis' analytic split-sum
+  term for the G-buffer normal / roughness) from `RayReconstructionGuidesRT` (`rr_guides.comp`: the renderer is
+  forward+, so a short primary ray query in a window around the prepass depth finds the material again; ~0.07 ms at
+  720p, 0.27 ms at 1440p), `RR.SpecularHitDistance` written by `reflections.comp` (flag bit 2, world units, misses
+  1e4), world → view and unjittered view → clip matrices. Missing guides fall back to white / black defaults.
+* **Preset**: E (latest transformer model) for every quality mode, set through the
+  `RayReconstruction.Hint.Render.Preset.*` parameters before creation. Against the default (F) on the quality test
+  scene: +0.2 dB against the path tracer, +0.1–0.3 dB against the converged hybrid frame, DLAA flicker 0.045 vs 0.088.
+  The price: the RR pass is 4–15 % slower than with F (1080p Quality 4.28 vs 4.10 ms, DLAA 9.12 vs 8.16 ms; 4K
+  Quality 16.5 vs 14.6 ms, DLAA 36.2 vs 31.2 ms).
+* **Lifetime**: one NGX feature per view, recreated (after `waitIdle`) when size / quality / flags change, released
+  with the view and at shutdown. The companion feature `DLSSRRRelease` (enabled while a view still holds a feature
+  and RR is no longer selected) gives the feature back as soon as RR is switched off at run time.
+  `ngxLiveFeatureCount()` counts live NGX features (DLSS SR + RR) for diagnostics and tests. The DLSS SR feature of a
+  view stays allocated while RR runs (two features, `RuntimeToggleWithoutLeaks`). NGX keeps the RR network and its
+  device-wide working memory after `ReleaseFeature` until NGX shuts down with the device: driver-reported VRAM rises
+  by ~180–510 MB on the first RR frame (it varied between runs) and does not come back when RR is switched off;
+  destroying the whole `Renderer` returns only ~120 MB of it. Repeated toggling does not grow it (6 toggles: ±0 MB,
+  same texture / buffer counts).
+* **NGX failure** in a frame: an EASU spatial upscale of the noisy frame keeps the output complete (logged once).
+
+**Image quality** (`ImageQualityAndStabilityVersusSvgfPlusDlss`, 640×360 output, rough gold sphere, glossy metal slab,
+sun + two shadowed point lights; PSNR of 2×2-downsampled images; RTX 3080, driver 617.42):
+
+| Configuration | vs path tracer (4096 spp) | vs converged hybrid | Flicker (mean \|ΔL\|, 0..255) |
+| --- | --- | --- | --- |
+| SVGF + DLSS Quality | 25.81 dB | 34.54 dB | 0.037 |
+| RR Quality | 25.32 dB | 37.82 dB | 0.089 |
+| SVGF + DLAA | 25.67 dB | 37.12 dB | 0.031 |
+| RR DLAA | 25.32 dB | 38.19 dB | 0.045 |
+
+"Converged hybrid" is the same lighting model without a denoiser (32 rays per pixel for shadows / reflections / AO,
+TAA over 64 frames): against it RR is the better denoiser by 3.3 dB (Quality) and 1.1 dB (DLAA), and it removes the
+SVGF sparkle on the rough gold. Against the path tracer it is 0.35–0.5 dB lower: both denoisers see hybrid lighting
+that misses the second bounce inside reflections (the spheres' undersides in the slab are ~0.15 too dark in luminance
+for both), and SVGF's residual sparkle in those reflections adds some of the missing energy back by chance. Ruled out
+as RR input errors (each measured): the specular albedo guide, roughness as perceptual vs squared (Unpacked mode with
+α: −0.01 dB), the hit distance (no change without it), the camera matrices (without them RR flickers 3× more), the
+reflection firefly clamp (16× vs 64× display white: identical). The test asserts RR ≥ SVGF − 0.25 dB against the
+converged hybrid and ≥ SVGF − 0.6 dB against the path tracer. Flicker stays within max(1.25 × SVGF, 0.3).
+
+**GPU time**, RTX 3080, validation off, `PerfReportRayReconstruction` (the 240-object scene of
+`RayTracingTest.PerfReportRayTracing`, 8 frames after 48 warm-up frames, ms):
+
+| Output | Mode | SVGF + DLSS frame | RR frame | RT passes SVGF / RR | DLSS pass / RR pass |
+| --- | --- | --- | --- | --- | --- |
+| 1920×1080 | Quality (1280×720) | 5.95 | 7.18 | 4.53 / 2.20 | 0.74 / 4.28 |
+| 1920×1080 | Performance (960×540) | 5.06 | 4.70 | 3.24 / 1.77 | 1.30 / 2.43 |
+| 1920×1080 | DLAA | 9.97 | 13.74 | 8.11 / 3.49 | 0.74 / 9.12 |
+| 3840×2160 | Quality (2560×1440) | 17.53 | 24.47 | 13.47 / 6.01 | 2.17 / 16.51 |
+| 3840×2160 | Performance (1920×1080) | 14.34 | 13.52 | 8.32 / 3.24 | 4.78 / 9.05 |
+| 3840×2160 | DLAA | 35.17 | 49.02 | 29.32 / 9.21 | 2.25 / 36.16 |
+
+RR saves the SVGF stages (2.5 ms at 720p, 9.2 ms at 1440p render resolution) but its network costs more than they do
+on an RTX 3080 except in Performance mode; it is a quality option there, not a speed-up. Native SVGF without AA:
+9.28 ms at 1080p, 33.37 ms at 4K.
+
+## Frame generation (FSR 3, `features/framegen/frame_generation.cpp`)
+
+`r.FrameGeneration` (Persist): `Off`, `FSR3` (alias `On`). AMD FidelityFX FSR 3.1 frame interpolation through ffx-api
+(`amd_fidelityfx_vk.dll` of FidelityFX SDK v1.1.4, the last release with a Vulkan backend; vcpkg overlay port
+`amd-fidelityfx-vk`, loaded with `LoadLibrary` at run time, CMake option `OX_ENABLE_FSR3_FRAMEGEN`, a stub without the
+package or off Windows). Runtime player only (`RuntimeRenderer`): the editor viewport never presents through the
+proxy. Vendor independent (verified on the RTX 3080).
+
+* **Device**: `framegen::appendVulkanRequirements(desc)` before `rhi::Device::create` asks for three private queues
+  (`DeviceDesc::frameGenerationQueues`: present + image acquire in the graphics family, one compute) and
+  `VK_KHR_get_memory_requirements2` / `VK_KHR_dedicated_allocation` (the FidelityFX backend loads the KHR aliases).
+* **Swapchain proxy**: `rhi::Swapchain::setProxy(ISwapchainProxy*)`; the next `acquire()` tears the plain swapchain
+  down and lets the generator create FSR's replacement swapchain (`ffxCreateContext(FGSWAPCHAIN_VK)`) plus the frame
+  generation context; acquire / present / images go through the replacement functions. Toggling off leaves the
+  proxy entirely (contexts destroyed, plain swapchain recreated) instead of paying its copy per present. A failed
+  creation is not retried every frame (only after toggling off and on).
+* **Reflex and frame generation**: NVIDIA Reflex cannot drive the proxy. The `VkSwapchainKHR` FSR 1.1.4 returns is
+  its own object (`FrameInterpolationSwapChainVK`), not a driver swapchain, so `vkSetLatencySleepModeNV` /
+  `vkLatencySleepNV` / `vkSetLatencyMarkerNV` / `vkGetLatencyTimingsNV` on it are invalid; the real swapchain is
+  private to the DLL (no query for it, no latency hooks in ffx-api for Vulkan), and the proxy presents both frames from
+  its own present thread on its own queue without `VkPresentIdKHR`, so the driver could not tie presents to our frame
+  ids anyway. While the proxy owns the swapchain `Swapchain::lowLatencySupported()` is false (`lowLatencyCapable()`
+  stays true; the renderer reports `LatencyStats::reflexBehindFrameGeneration`, the player prints
+  `reflex=framegen-proxy`, the settings menu explains it), and `r.Reflex On` runs the engine limiter
+  (`r.Reflex.Fallback`, default JustInTime) — the latency reducer AMD recommends next to FSR 3. Leaving the proxy
+  brings Reflex back on the plain swapchain (tested). Numbers: `docs/dev/perf.md` "Latency".
+* **Per frame** (render thread): `beginFrame` (proxy on/off) → `acquire` → `prepareFrame` (configure: frame id,
+  HUD-less image, our present callback) → the main view records, at the Overlay injection point (order −50000, after
+  LdrPost, before editor overlays and UI), a copy of `SceneColorLDR` into the HUD-less image and the
+  `FrameGeneration.Prepare` dispatch (render-resolution depth, reversed Z, velocity scaled to current → previous in
+  pixels, jitter, camera) → `present` (FSR interpolates on the game queue inside present; `allowAsyncWorkloads =
+  false`, so the HUD-less image needs no double buffer) → `endFrame` (stats).
+* **Composition is always ours** (`presentCallback`, FSR's present thread): with an sRGB back buffer FSR writes the
+  interpolated image as *linear* values into its sRGB-typed bytes (measured: generated bytes = sRGB-decode of the
+  expected bytes on every pixel), so a raw copy shows every generated frame far too dark. Generated frames go copy →
+  UNORM scratch image → `vkCmdBlitImage` into the sRGB swapchain image (the blit encodes); rendered frames and UNORM
+  back buffers are copied unchanged. Typing the back buffer / HUD-less image UNORM for FSR instead does not work
+  (context creation fails on a HUD-less / back buffer format mismatch, and with both UNORM the output barely
+  interpolates: 52 dB vs the *current* frame).
+* **Stats** (`framegen::Stats`, `RenderStats::frameGeneration`, `OxwaldPlayer --stats`): active, rendered and
+  presented frames since activation (ratio 2.0), composed generated / rendered frames (`generatedPresented`,
+  `realPresented`: the proxy's pacer drops a whole scheduled pair when its present thread falls behind —
+  `composeAndPresent_presenterThread` overwrites a pending entry — so the total ratio dips below 2 on a loaded machine
+  while generated : rendered stays 1 : 1), `addedLatencyMs` — how long a rendered frame is held by the proxy
+  between the engine's present call and the proxy composing it for its own present (after the generated frame in
+  front of it; CPU timestamps, the pacing wait after composition is not included).
+* **Hangs fixed during bring-up**: `capturedFrame()` waited in `WAIT_FOR_PRESENTS` while the proxy still expected the
+  next frame (now: the capture copy sets a `VkEvent`, polled with a 2 s bound); `rhi::Device::waitIdle` used
+  `vkDeviceWaitIdle`, which also waits for the proxy's private queues (used by its threads concurrently, and possibly
+  holding work that waits for a later present) — leaving the proxy hung there; it now waits for the engine's own
+  queues under their submit mutexes. The GPU tests run under a watchdog that turns a hang into a failure naming the
+  phase (60 s without progress).
+
+Tests (`gpu/frame_generation_tests.cpp`, real 640×360 window, skipped without a display or the DLL):
+`PresentsOneGeneratedFramePerRenderedFrame` (150 frames: generated : rendered composed 1 ± 0.03, total ratio
+> 1.6 and ≤ 2.02; idle machine 1.96–1.99, 1.80–1.89 seen next to other jobs from dropped pairs — the earlier
+`2.0 ± 0.1` bound failed 3 of 12 runs that way), `GeneratedFrameMatchesTheRenderedIntermediateFrame`
+(panning camera, captured generated frame vs a reference rendered at the intermediate camera: 40.95 dB, vs the
+neighbouring rendered frames 35.2 / 35.0 dB; images `<temp>/oxwald_render_out/framegen_*.png`),
+`TogglingInAndOutOfTheProxyIsClean` (3 rounds, no validation errors or leaked objects at device destruction; Reflex
+hidden but capable through the proxy, `latencySleep` a no-op there, back on the plain swapchain).
+
+**Proxy stalls (FidelityFX SDK 1.1.4) and what we do about them.** Symptom in both cases: FSR's present thread inside
+the driver's `vkQueuePresentKHR` (`NtDxgkSubmitPresentToHwQueue`), its interpolation thread and our render thread (in
+the proxy's `vkQueuePresentKHR`) waiting on the proxy's semaphores forever, while our own GPU work is complete
+(graphics timeline = last submitted; the test watchdog prints both). No engine lock is involved.
+* *Dropped pairs, one process.* The proxy's interpolation thread overwrites a scheduled pair (generated + rendered)
+  that its present thread has not taken yet; after such drops the proxy stalled. GPU bound in the player (Showcase
+  station 4 at 1440p Ultra, also station 1 at 1440p High and station 4 at 720p) that was 11 of 12 mailbox runs within
+  seconds; in the 640×360 test about 1 in 50. Fix: `Fsr3FrameGenerator::present` hands frame N over only once the
+  present thread composed a frame of N − 1 (present callback frame id; condition variable, 250 ms bound, so a present
+  thread that composes nothing — minimised window — only costs the timeout; `Stats::pacingWaitMs`,
+  `Stats::pacingTimeouts`). After the fix: 0 of 12 player runs, 0 of 30+ test runs. FIFO and immediate present modes
+  without the fix: 1 of 1 and 1 of 2 runs survived — not a fix.
+* *Several proxies at once.* Two or three processes each presenting through an FSR 3 proxy on the same GPU stall within
+  a few frames or in `ffxDestroyContext` (9 of 9 runs with three concurrent test processes, which `ctest -j` produces
+  since every gtest case is its own process), with or without the fix above; next to other GPU suites or other windowed
+  (non-proxy) presenters 0 of 11. Not fixable on our side; the GPU tests serialise themselves with a named Win32 mutex
+  (`Local\OxwaldFrameGenerationGpuTest`). Two games with FSR 3 frame generation running at once on one GPU are
+  affected the same way.
+Known artefact: FSR leaves a few 1-px pixels of the left border column un-interpolated (raw back buffer values among
+linear ones, so they show darker after our encode). Timings (`docs/dev/perf.md` "Latency"; RTX 3080, Showcase
+station 4, 2560×1421 window, Ultra, vsync off, medians of 3 runs): without frame generation 104 fps; with it 81.5
+rendered / 163 presented fps (our GPU frame +0.7 ms for the HUD-less copy and the prepare dispatch; interpolation and
+composition run outside our timestamps),
+rendered frames held 24 ms by the proxy; with the engine limiter (`r.Reflex On` → JustInTime) 74 / 147 fps and engine
+latency 46 → 21 ms; Strict 80 / 159 fps, 12.5 ms, hold 13 ms. Station 1 with vsync at 100 Hz: 50 rendered / 99.9
+presented.
+
 ## Quality presets
 
 | CVar | Default (code) | Group: Low, Medium, High, Ultra |
@@ -167,6 +334,14 @@ motion blur on a moving object, grading LUT +
 saturation 0, inverting user LUT, lens effects, auto exposure converging from 300 lux and 100 klx to the same
 brightness (plus the slower adaptation back), and `PerfReport1080p`.
 
+Ray Reconstruction: CPU `postprocess_rr_cpu_tests.cpp` (`RayReconstructionCpu.*`, 5: cvar names / default, selection
+gating, upscaler slot and quality, Auto quality, availability reason without a device); GPU
+`gpu/postprocess_rr_tests.cpp` (`RayReconstructionTest.*`, need an RTX GPU with `nvngx_dlssd`, images
+`<temp>/oxwald_render_out/rr_*.png`): `CreatesAndEvaluatesWithoutSvgfPasses`, `QualityModesResizeAndRecreate`,
+`ImageQualityAndStabilityVersusSvgfPlusDlss`, `RuntimeToggleWithoutLeaks`, `FallsBackToSvgfWhereUnavailable` (on the
+RTX machine it recreates the device without the NGX extensions) and `PerfReportRayReconstruction` (`OX_RT_PERF=1`
+for 1080p + 4K, or `OX_RT_PERF=WxH`).
+
 GPU time on Apple M4 Pro at 1080p (ms): TAA 0.56 (+ CAS sharpen 0.18), TAAU 540p→1080p 0.55 (+0.18), FSR 1
 540p→1080p EASU 0.32 + RCAS 0.15, FXAA 0.11, auto exposure 0.04, bloom (7 mips) ≈0.3, DoF ≈0.2–0.35 (setup 0.09,
 gather 0.03, composite 0.19), motion blur ≈0.22 (tiles 0.06, gather 0.15), HDR composite (CA + bloom + vignette + LUT)
@@ -183,7 +358,8 @@ was on and other processes shared the GPU during the measurement.
 * If NGX initialisation fails inside a `Renderer` (`DlssFeature::initialize`) on a device that was not probed before,
   that first frame runs without an upscaler; TAAU takes over once the failed probe is known. Probing first with
   `upscalerAvailability(device)` avoids it.
-* DLSS frame generation / ray reconstruction are not integrated.
+* DLSS frame generation is not integrated (FSR 3 frame generation is, above). Ray Reconstruction (above) is not checked in the windowed player / editor
+  by eye, not on Linux, and not on other RTX generations (the RR network is expensive on the RTX 3080).
 * DoF base values come from the view's `CameraComponent` (`focusDistance`, `focalLength`, `aperture`); volumes with
   `overrideDepthOfField` blend over them (`resolvePostProcessSettings(..., camera)`).
 * TAA disocclusion uses velocity differences (no previous-depth reprojection); TAAU keeps sub-pixel wires only

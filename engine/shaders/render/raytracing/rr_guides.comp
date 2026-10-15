@@ -1,0 +1,61 @@
+#version 460
+// Guide buffers of DLSS Ray Reconstruction (RayReconstructionGuidesRT). The renderer is forward+ and keeps no albedo
+// G-buffer, so the material under every pixel is found again with a short primary ray along the jittered camera ray,
+// restricted to a window around the prepass depth (BLASes may use a coarser LOD than the raster mesh), and evaluated
+// at the hit (base colour × vertex colour × albedo texture, ORM metallic):
+//   outDiffuse  rgb = baseColor × (1 − metallic)
+//   outSpecular rgb = F0 × A + B with F0 = mix(0.04, baseColor, metallic) and (A, B) the analytic pre-integrated GGX
+//                     term (Karis) for the G-buffer normal / roughness: the reflectance the specular lighting carries.
+// Background (depth 0): diffuse white, specular black. A missed window (geometry outside the TLAS, e.g. terrain):
+// grey dielectric guide.
+#include "rt_query.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(RtSceneBuffer rt; uint depth; uint normals; uint outDiffuse; uint outSpecular; uint width; uint height;
+               float spreadAngle;);
+
+// Karis, "Physically Based Shading on Mobile" (2014): scale / bias of F0 in the split-sum specular integral.
+vec2 oxEnvBrdfApprox(float NdotV, float perceptualRoughness) {
+    const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+    const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+    vec4 r = perceptualRoughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * NdotV)) * r.x + r.y;
+    return vec2(-1.04, 1.04) * a004 + r.zw;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.width, pc.height)))) return;
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    if (d <= 0.0) {
+        OX_IMAGE_STORE_2D(rgba8, pc.outDiffuse, p, vec4(1.0));
+        OX_IMAGE_STORE_2D(rgba8, pc.outSpecular, p, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) * VIEW.renderSize.zw;
+    vec3 P = oxWorldPositionFromDepth(pc.view, uv, d);
+    bool ortho = (VIEW.flags & OX_VIEW_ORTHOGRAPHIC) != 0u;
+    vec3 V = ortho ? normalize(VIEW.invView[2].xyz) : normalize(VIEW.cameraPosition.xyz - P);
+    vec3 origin = ortho ? P + V * 100.0 : VIEW.cameraPosition.xyz;
+    float dist = length(P - origin);
+    vec3 dir = (P - origin) / max(dist, 1e-6);
+    float window = 0.05 + 0.03 * dist;
+    RtHit h = oxRtTraceClosest(pc.scene, pc.rt, origin, dir, max(dist - window, 0.0), dist + window, OX_RT_MASK_SOLID);
+
+    vec4 nr = OX_FETCH_2D(pc.normals, p, 0);
+    vec3 N = normalize(nr.xyz);
+    float roughness = clamp(nr.w, OX_MIN_PERCEPTUAL_ROUGHNESS, 1.0);
+    vec3 baseColor = vec3(0.5);
+    float metallic = 0.0;
+    if (h.hit) {
+        float lod = max(oxRtConeLod(h.t, pc.spreadAngle, 512.0) + VIEW.mipBias, 0.0);
+        RtSurface s = oxRtFetchSurface(pc.scene, pc.rt, h.instance, h.primitive, h.bary, dir, lod);
+        baseColor = clamp(s.baseColor.rgb, 0.0, 1.0);
+        metallic = clamp(s.metallic, 0.0, 1.0);
+    }
+    vec3 f0 = mix(vec3(0.04), baseColor, metallic);
+    vec2 ab = oxEnvBrdfApprox(clamp(dot(N, V), 1e-3, 1.0), roughness);
+    OX_IMAGE_STORE_2D(rgba8, pc.outDiffuse, p, vec4(baseColor * (1.0 - metallic), 1.0));
+    OX_IMAGE_STORE_2D(rgba8, pc.outSpecular, p, vec4(clamp(f0 * ab.x + ab.y, 0.0, 1.0), 1.0));
+}
