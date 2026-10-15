@@ -7,6 +7,7 @@
 #include <stb_image.h>
 #include <stb_image_write.h>
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace ox::render::test {
@@ -80,7 +81,33 @@ CVarScope::~CVarScope() {
     if (!m_previous.empty()) CVarRegistry::instance().set(m_name, m_previous, CVarSource::Code);
 }
 
+void CVarStateSnapshot::capture() {
+    m_scalability = scalability::savePreset();
+    m_values.clear();
+    for (const ICVar* c : CVarRegistry::instance().all()) m_values.emplace_back(c->name(), c->toString());
+}
+
+usize CVarStateSnapshot::restore() {
+    // Group levels first (applying a level rewrites every cvar of the group), then the individual values on top.
+    scalability::loadPreset(m_scalability);
+    usize restored = 0;
+    for (ICVar* c : CVarRegistry::instance().all()) {
+        const auto it = std::lower_bound(m_values.begin(), m_values.end(), c->name(),
+                                         [](const auto& entry, const std::string& name) { return entry.first < name; });
+        if (it != m_values.end() && it->first == c->name()) {
+            if (c->toString() == it->second) continue;
+            c->setFromString(it->second, CVarSource::Code);
+            ++restored;
+        } else if (!c->isDefault()) {
+            c->reset(CVarSource::Code); // registered during the test: back to its default
+            ++restored;
+        }
+    }
+    return restored;
+}
+
 void RenderTest::SetUp() {
+    cvarsAtSetUp.capture();
     registerSceneTypes();
     rhi::Device::resetValidationCounters();
     rhi::DeviceDesc desc;
@@ -96,12 +123,16 @@ void RenderTest::SetUp() {
 }
 
 void RenderTest::TearDown() {
-    if (!device) return;
+    if (!device) {
+        cvarsAtSetUp.restore();
+        return;
+    }
     device->waitIdle();
     renderer.reset();
     if (target) device->destroy(target);
     world.reset();
     device.reset();
+    cvarsAtSetUp.restore(); // after the renderer is gone: cvar change listeners must not touch a dying renderer
     EXPECT_EQ(rhi::Device::validationErrorCount(), 0u) << "Vulkan validation reported errors (see log)";
 }
 

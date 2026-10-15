@@ -425,3 +425,35 @@ TEST_F(RendererTest, ResourceRegistrationFromAnotherThreadIsDeferred) {
     cache.update();
     for (const Uuid& id : ids) EXPECT_EQ(cache.state(id), ResourceState::Ready);
 }
+
+// The fixture's cvar snapshot (RenderTest::SetUp/TearDown): group levels and loose cvar changes made by a test are put
+// back, so tests in one ox_render_gpu_tests process do not inherit each other's quality presets (CPU only, no device).
+TEST(RenderTestIsolation, CVarStateSnapshotRestoresGroupsAndCVars) {
+    CVarRegistry& reg = CVarRegistry::instance();
+    ICVar* loose = reg.find("r.GpuDriven");
+    ASSERT_NE(loose, nullptr);
+    const std::string looseBefore = loose->toString();
+    std::vector<std::pair<std::string, std::string>> before;
+    for (const ICVar* c : reg.all()) before.emplace_back(c->name(), c->toString());
+    const QualityLevel effects = scalability::currentLevel(Scalability::Effects);
+    const QualityLevel shading = scalability::currentLevel(Scalability::Shading);
+
+    CVarStateSnapshot snap;
+    snap.capture();
+    EXPECT_EQ(snap.restore(), 0u) << "nothing changed since capture";
+    const QualityLevel other = effects == QualityLevel::Low ? QualityLevel::Ultra : QualityLevel::Low;
+    scalability::setGroup(Scalability::Effects, other);
+    scalability::setGroup(Scalability::Shading, other);
+    reg.set("r.GpuDriven", looseBefore == "true" ? "false" : "true", CVarSource::Code);
+    EXPECT_NE(loose->toString(), looseBefore);
+    EXPECT_GT(snap.restore(), 0u);
+
+    EXPECT_EQ(scalability::currentLevel(Scalability::Effects), effects);
+    EXPECT_EQ(scalability::currentLevel(Scalability::Shading), shading);
+    EXPECT_EQ(loose->toString(), looseBefore);
+    for (const auto& [name, value] : before) {
+        const ICVar* c = reg.find(name);
+        ASSERT_NE(c, nullptr) << name;
+        EXPECT_EQ(c->toString(), value) << name << " was not restored";
+    }
+}

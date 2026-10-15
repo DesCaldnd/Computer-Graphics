@@ -8,6 +8,7 @@
 
 #include <oxwald/core/cvar.hpp>
 #include <oxwald/core/log.hpp>
+#include <oxwald/core/scalability.hpp>
 #include <oxwald/render/render.hpp>
 #include <oxwald/rhi/device.hpp>
 #include <oxwald/scene/scene.hpp>
@@ -60,6 +61,20 @@ private:
     std::string m_name, m_previous;
 };
 
+// Every cvar value (and the scalability group levels) at capture(); restore() puts back each value that changed since,
+// and resets cvars registered after the capture to their defaults. RenderTest uses it so that a test (or a fixture's
+// SetUp) changing quality groups or cvars without a CVarScope cannot leak them into later tests of the same process.
+class CVarStateSnapshot {
+public:
+    void capture();
+    // Returns the number of cvars whose value had to be put back.
+    usize restore();
+
+private:
+    nlohmann::json m_scalability;
+    std::vector<std::pair<std::string, std::string>> m_values; // name, value (sorted by name)
+};
+
 class RenderTest : public ::testing::Test {
 protected:
     void SetUp() override;
@@ -95,6 +110,7 @@ protected:
     std::unique_ptr<rhi::Device> device;
     std::unique_ptr<Renderer> renderer;
     std::unique_ptr<World> world;
+    CVarStateSnapshot cvarsAtSetUp; // restored by TearDown: tests that change quality groups or cvars must not leak them
     RenderSnapshot snapshot;
     DebugDraw debugDraw;
     rhi::TextureHandle target;

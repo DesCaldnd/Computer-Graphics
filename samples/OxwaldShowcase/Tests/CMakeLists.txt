@@ -2,7 +2,8 @@
 #   Showcase.GeneratorCheck     the committed content equals what Tools/generate_showcase.cpp produces (idempotent)
 #   Showcase.Scene.<name>       every scene runs 120 frames in the headless player without errors/validation messages
 #   Showcase.Tour               the guided tour visits every station and reaches its end
-#   ox_showcase_tests (gtest)   all Lua scripts compile; save/load round trip in the save station
+#   ox_showcase_tests (gtest)   all Lua scripts compile; save/load round trip in the save station; VRS measurements
+#                               (ShowcaseVrs.*, skipped unless OX_VRS_PERF is set)
 set(_showcase_user ${CMAKE_CURRENT_BINARY_DIR}/user)
 set(_showcase_fail "\\[error\\]|\\[fatal\\]|Validation Error|VUID-|assertion")
 
@@ -36,8 +37,12 @@ if(TARGET OxwaldPlayer)
         PASS_REGULAR_EXPRESSION "Tour finished" FAIL_REGULAR_EXPRESSION "${_showcase_fail}")
 endif()
 
-add_executable(ox_showcase_tests showcase_tests.cpp)
+add_executable(ox_showcase_tests showcase_tests.cpp showcase_vrs_tests.cpp)
 target_link_libraries(ox_showcase_tests PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,ox_showcase_game>" GTest::gtest_main)
+# showcase_vrs_tests.cpp (opt-in VRS measurements, OX_VRS_PERF): image metrics header + stb_image for the screenshots.
+find_package(Stb REQUIRED)
+target_include_directories(ox_showcase_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/render/tests)
+target_include_directories(ox_showcase_tests SYSTEM PRIVATE ${Stb_INCLUDE_DIR})
 target_compile_definitions(ox_showcase_tests PRIVATE OX_SHOWCASE_DIR="${OX_SHOWCASE_DIR}")
 ox_set_warnings(ox_showcase_tests)
 set_target_properties(ox_showcase_tests PROPERTIES FOLDER "samples/showcase")
@@ -45,4 +50,5 @@ if(COMMAND ox_add_gpu_test_env)
     ox_add_gpu_test_env(ox_showcase_tests)
 endif()
 gtest_discover_tests(ox_showcase_tests DISCOVERY_TIMEOUT 60
-    PROPERTIES LABELS "showcase" ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+    PROPERTIES ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+ox_gtest_labels(ox_showcase_tests showcase gpu) # the suites create a Vulkan device (scripts, saves, destruction, VRS)

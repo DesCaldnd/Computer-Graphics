@@ -13,6 +13,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/engine/net/CMakeLists.txt AND (NOT OX_MODULES OR "
         target_link_libraries(ox_async_net_tests PRIVATE ox_async_net GTest::gtest_main)
         target_include_directories(ox_async_net_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/net/tests)
         ox_set_warnings(ox_async_net_tests)
-        gtest_discover_tests(ox_async_net_tests DISCOVERY_TIMEOUT 60 PROPERTIES LABELS "async;net")
+        gtest_discover_tests(ox_async_net_tests DISCOVERY_TIMEOUT 60)
+        ox_gtest_labels(ox_async_net_tests async net)
     endif()
 endif()

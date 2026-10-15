@@ -28,12 +28,10 @@ function(ox_guide_example name)
     ox_set_warnings(ox_guide_${name})
     set_target_properties(ox_guide_${name} PROPERTIES FOLDER "samples/guide")
     add_dependencies(ox_guide_examples ox_guide_${name})
-    set(_labels guide ${G_LABELS})
-    string(REPLACE ";" "\\;" _labels "${_labels}")
     gtest_discover_tests(ox_guide_${name}
         DISCOVERY_TIMEOUT 60
-        PROPERTIES LABELS "${_labels}"
-                   ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+        PROPERTIES ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+    ox_gtest_labels(ox_guide_${name} guide ${G_LABELS})
 endfunction()
 
 file(GLOB _ox_guide_dirs LIST_DIRECTORIES true ${CMAKE_CURRENT_SOURCE_DIR}/*)

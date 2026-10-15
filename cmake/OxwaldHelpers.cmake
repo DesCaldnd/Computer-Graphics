@@ -93,14 +93,26 @@ function(ox_add_module name)
             target_compile_definitions(ox_${name}_tests PRIVATE
                 OX_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
             ox_set_warnings(ox_${name}_tests)
-            set(_labels ${name} ${M_TEST_LABELS})
-            string(REPLACE ";" "\\;" _labels "${_labels}")
             gtest_discover_tests(ox_${name}_tests
                 DISCOVERY_TIMEOUT 60
-                PROPERTIES LABELS "${_labels}"
-                           ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+                PROPERTIES ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+            ox_gtest_labels(ox_${name}_tests ${name} ${M_TEST_LABELS})
         endif()
     endif()
+endfunction()
+
+# ox_gtest_labels(<target> labels...) — labels for the tests gtest_discover_tests found in <target>.
+# Call it after gtest_discover_tests. Several labels cannot go through gtest_discover_tests(PROPERTIES LABELS):
+# GoogleTestAddTests flattens the list, so "render\;gpu" became `LABELS render gpu ...` and only `render` stuck
+# (ctest -L gpu / -LE gpu missed every discovered GPU test). Instead a ctest include file, read after the
+# discovered tests, labels every name in the <target>_TESTS list that the discovery script defines.
+function(ox_gtest_labels target)
+    set(_file "${CMAKE_CURRENT_BINARY_DIR}/${target}_labels.cmake")
+    file(WRITE "${_file}"
+        "if(DEFINED ${target}_TESTS)\n"
+        "  set_tests_properties(\${${target}_TESTS} PROPERTIES LABELS \"${ARGN}\")\n"
+        "endif()\n")
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${_file}")
 endfunction()
 
 # ox_add_gpu_test_env(<target>) — runtime env (MoltenVK ICD, validation layers) for executables

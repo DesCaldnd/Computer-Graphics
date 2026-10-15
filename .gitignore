@@ -10,3 +10,5 @@ imgui.ini
 /samples/**/Saved/
 /samples/**/.oxcache/
 .claude/
+__pycache__/
+*.pyc
