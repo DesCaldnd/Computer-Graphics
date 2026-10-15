@@ -1,0 +1,91 @@
+#version 460
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+// Variable rate shading 1/2: per-tile statistics of the shaded image (SceneColorHDR before TAA / upscaling), read by
+// the next frame's rate generation. One 8×8 workgroup per tile (tile = shading rate texel, 8..32 px).
+//   r = mean perceptual luma, g/b = RMS of the horizontal / vertical per-pixel luma differences, a = 1 (valid).
+// Pixels shaded at a coarse rate this frame are constant inside their fragment, so differences are taken between
+// neighbouring coarse fragments (stride s = fragment size) and divided by sqrt(s): a step edge then reads exactly as
+// at full rate, a linear ramp reads sqrt(s) too high (conservative; inside the hysteresis band, so no oscillation).
+// Dividing by s (a pure gradient) read edges and texture detail s times too low and kept such tiles coarse; textures
+// sampled with doubled derivatives (one mip coarser) make it worse, see r.VRS.RefreshPeriod in vrs_generate.comp.
+#include <render/vrs/vrs_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    uint color;     // sampled RGBA16F (pre-exposed HDR)
+    uint rate;      // sampled R8_UINT rate image used this frame (ignored unless flags & 1)
+    uint outStats;  // storage rgba16f, one texel per tile
+    uint tileSize;
+    uvec2 renderSize;
+    uvec2 tiles;
+    uint flags;       // bit 0: rate image valid, bit 1: combine with opaqueStats
+    uint opaqueStats; // sampled RGBA16F statistics of this frame's opaque image (same layout as outStats)
+});
+
+// Per-subgroup partial sums (subgroups of 8..64 lanes: at most 8 per 64-thread group).
+shared vec3 sSum[8];   // luma, dx², dy²
+shared vec3 sCount[8]; // pixels, dx count, dy count
+
+float lumaAt(ivec2 p) { return oxVrsLuma(OX_FETCH_2D(pc.color, p, 0).rgb); }
+
+void main() {
+    uvec2 tile = gl_WorkGroupID.xy;
+    if (any(greaterThanEqual(tile, pc.tiles))) return;
+    uint r = (pc.flags & 1u) != 0u ? texelFetch(oxUTextures2D[nonuniformEXT(pc.rate)], ivec2(tile), 0).r : 0u;
+    int sx = 1 << int((r >> 2u) & 3u);
+    int sy = 1 << int(r & 3u);
+    float wx = inversesqrt(float(sx)), wy = inversesqrt(float(sy));
+    ivec2 size = ivec2(pc.renderSize);
+    uint per = max(pc.tileSize / 8u, 1u);
+    uint li = gl_LocalInvocationIndex;
+
+    // The texture cache serves the neighbour fetches; one pixel's luma is computed at most three times.
+    vec3 sum = vec3(0.0), count = vec3(0.0);
+    for (uint j = 0u; j < per; ++j) {
+        for (uint i = 0u; i < per; ++i) {
+            ivec2 p = ivec2(tile * pc.tileSize + gl_LocalInvocationID.xy + uvec2(i, j) * 8u);
+            if (any(greaterThanEqual(p, size))) continue;
+            float l = lumaAt(p);
+            sum.x += l;
+            count.x += 1.0;
+            if ((p.x & (sx - 1)) == 0 && p.x + sx < size.x) {
+                float d = (lumaAt(p + ivec2(sx, 0)) - l) * wx;
+                sum.y += d * d;
+                count.y += 1.0;
+            }
+            if ((p.y & (sy - 1)) == 0 && p.y + sy < size.y) {
+                float d = (lumaAt(p + ivec2(0, sy)) - l) * wy;
+                sum.z += d * d;
+                count.z += 1.0;
+            }
+        }
+    }
+    sum = subgroupAdd(sum);
+    count = subgroupAdd(count);
+    if (subgroupElect()) {
+        sSum[gl_SubgroupID] = sum;
+        sCount[gl_SubgroupID] = count;
+    }
+    barrier();
+    if (li == 0u) {
+        for (uint k = 1u; k < gl_NumSubgroups; ++k) {
+            sSum[0] += sSum[k];
+            sCount[0] += sCount[k];
+        }
+    }
+    if (li == 0u) {
+        vec3 c = max(sCount[0], vec3(1.0));
+        vec4 stats = vec4(sSum[0].x / c.x, sqrt(sSum[0].y / c.y), sqrt(sSum[0].z / c.z), 1.0);
+        if ((pc.flags & 2u) != 0u) {
+            // Keep per axis the larger error relative to the just-noticeable difference (oxVrsContentAxis).
+            vec4 o = OX_FETCH_2D(pc.opaqueStats, ivec2(tile), 0);
+            if (o.a > 0.5) {
+                float scale = (stats.r + OX_VRS_LUMA_BIAS) / (o.r + OX_VRS_LUMA_BIAS);
+                stats.gb = max(stats.gb, o.gb * scale);
+            }
+        }
+        OX_IMAGE_STORE_2D(rgba16f, pc.outStats, ivec2(tile), stats);
+    }
+}

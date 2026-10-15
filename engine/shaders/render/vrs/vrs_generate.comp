@@ -1,0 +1,116 @@
+#version 460
+// Variable rate shading 2/2: the shading rate image of this frame (R8_UINT, one texel per tile), from last frame's
+// tile statistics reprojected with this frame's velocity, the motion of the tile, the depth-of-field blur and the
+// distance to the screen centre. One thread per tile. See vrs_common.glsl (oxVrsDecide).
+#include <render/vrs/vrs_common.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_PUSH_CONSTANTS({
+    ViewBuffer view;
+    uint depth;      // sampled D32 (reversed-Z)
+    uint velocity;   // sampled RG16F uvCurrent - uvPrevious
+    uint prevStats;  // sampled RGBA16F tile statistics of the previous frame (vrs_analyze.comp)
+    uint prevRate;   // sampled R8_UINT rate image of the previous frame
+    uint outRate;    // storage r8ui
+    uint flags;      // bit 0 history valid, bits 1-2 mode, bit 3 depth of field
+    float threshold;
+    float hysteresis;
+    float motionScale;
+    float motionPixels;
+    float periphery;
+    float cocScale;   // CoC radius in render pixels per unit of (1 - focus / depth)
+    float focus;      // focus distance (m)
+    uint tileSize;
+    uint maxLog2;
+    uint supportedMask;
+    uvec2 tiles;
+    uvec2 renderSize;
+    uint refreshPeriod; // r.VRS.RefreshPeriod (0 = off)
+    uint frame;
+});
+
+void main() {
+    uvec2 tile = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(tile, pc.tiles))) return;
+    ivec2 size = ivec2(pc.renderSize);
+    vec2 invSize = 1.0 / vec2(size);
+    float t = float(pc.tileSize);
+    vec2 origin = vec2(tile) * t;
+
+    // Motion: largest per-axis speed over a 3×3 grid of the tile, centre velocity for the reprojection.
+    vec2 maxMotion = vec2(0.0);
+    for (int y = 0; y < 3; ++y) {
+        for (int x = 0; x < 3; ++x) {
+            ivec2 p = min(ivec2(origin + (vec2(x, y) + 0.5) * t / 3.0), size - 1);
+            vec2 v = OX_FETCH_2D(pc.velocity, p, 0).xy * vec2(size);
+            maxMotion = max(maxMotion, abs(v));
+        }
+    }
+    ivec2 centre = min(ivec2(origin + 0.5 * t), size - 1);
+    vec2 vCentre = OX_FETCH_2D(pc.velocity, centre, 0).xy;
+    vec2 uv = (vec2(centre) + 0.5) * invSize;
+    vec2 prevUv = uv - vCentre;
+    ivec2 prevTile = ivec2(floor(prevUv * vec2(size) / t));
+    bool inside = all(greaterThanEqual(prevUv, vec2(0.0))) && all(lessThan(prevUv, vec2(1.0))) &&
+                  all(lessThan(prevTile, ivec2(pc.tiles)));
+    bool history = (pc.flags & 1u) != 0u && inside;
+    // Periodic full-rate refresh: a coarse tile measures its content at the coarse resolution with textures one mip
+    // blurrier (derivatives scale with the fragment size), so detail that appeared later (texture streaming, lights,
+    // animation) could stay invisible to the statistics forever. Every refreshPeriod frames each tile (staggered) is
+    // shaded at full rate once and measured properly; the hysteresis keeps it coarse only if it really is smooth.
+    bool refresh = pc.refreshPeriod > 0u && ((tile.x + tile.y * 3u + pc.frame) % pc.refreshPeriod) == 0u;
+    if (refresh) history = false;
+
+    OxVrsTile tileIn;
+    tileIn.statsValid = false;
+    tileIn.meanLuma = 0.0;
+    tileIn.errorX = 0.0;
+    tileIn.errorY = 0.0;
+    tileIn.prevValid = false;
+    tileIn.prevRate = 0u;
+    if (history) {
+        vec4 s = OX_FETCH_2D(pc.prevStats, prevTile, 0);
+        tileIn.statsValid = s.a > 0.5;
+        tileIn.meanLuma = s.r;
+        tileIn.errorX = s.g;
+        tileIn.errorY = s.b;
+        tileIn.prevValid = true;
+        tileIn.prevRate = texelFetch(oxUTextures2D[nonuniformEXT(pc.prevRate)], prevTile, 0).r;
+    }
+    tileIn.motionX = maxMotion.x;
+    tileIn.motionY = maxMotion.y;
+
+    // Depth of field: the sharpest of 4×4 samples decides (an in-focus pixel keeps the tile fine).
+    bool dof = (pc.flags & 8u) != 0u;
+    float minCoc = 0.0;
+    if (dof) {
+        minCoc = 1e9;
+        for (int y = 0; y < 4; ++y) {
+            for (int x = 0; x < 4; ++x) {
+                ivec2 p = min(ivec2(origin + (vec2(x, y) + 0.5) * t / 4.0), size - 1);
+                float d = OX_FETCH_2D(pc.depth, p, 0).r;
+                float z = d <= 0.0 ? 1e9 : oxLinearDepth(pc.view, d);
+                minCoc = min(minCoc, abs(pc.cocScale * (1.0 - pc.focus / max(z, 1e-4))));
+            }
+        }
+    }
+    tileIn.minCoc = minCoc;
+    // Periphery: 0 at the centre, 1 at the corners (aspect corrected).
+    vec2 aspect = vec2(float(size.x) / float(size.y), 1.0);
+    vec2 tc = (origin + 0.5 * t) * invSize - 0.5;
+    tileIn.periphery = length(tc * aspect) / length(0.5 * aspect);
+
+    OxVrsParams p;
+    p.mode = (pc.flags >> 1u) & 3u;
+    p.threshold = pc.threshold;
+    p.hysteresis = pc.hysteresis;
+    p.motionScale = pc.motionScale;
+    p.motionPixels = pc.motionPixels;
+    p.periphery = pc.periphery;
+    p.depthOfField = dof;
+    p.maxLog2 = pc.maxLog2;
+    p.supportedMask = pc.supportedMask;
+    uint rate = oxVrsDecide(tileIn, p);
+    imageStore(oxImages2D_r8ui[nonuniformEXT(pc.outRate)], ivec2(tile), uvec4(rate));
+}
