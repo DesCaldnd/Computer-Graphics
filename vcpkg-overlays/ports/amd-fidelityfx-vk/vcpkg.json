@@ -1,0 +1,8 @@
+{
+  "name": "amd-fidelityfx-vk",
+  "version": "1.1.4",
+  "description": "AMD FidelityFX SDK API (ffx-api) for Vulkan: headers + AMD's prebuilt signed amd_fidelityfx_vk.dll (FSR 3.1 upscaling and frame generation). v1.1.4 is the last SDK release with a Vulkan backend.",
+  "homepage": "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK",
+  "license": "MIT",
+  "supports": "windows & x64"
+}

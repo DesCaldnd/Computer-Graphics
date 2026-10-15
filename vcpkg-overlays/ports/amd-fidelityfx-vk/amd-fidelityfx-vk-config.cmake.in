@@ -1,0 +1,12 @@
+# AMD::FidelityFX_VK — ffx-api headers (<ffx_api/ffx_api.h>, <ffx_api/vk/ffx_api_vk.h>) + amd_fidelityfx_vk.dll.
+# AMD_FIDELITYFX_VK_RUNTIME_FILE: the DLL to deploy next to executables.
+get_filename_component(_ffx_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+if(NOT TARGET AMD::FidelityFX_VK)
+    add_library(AMD::FidelityFX_VK SHARED IMPORTED)
+    set_target_properties(AMD::FidelityFX_VK PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${_ffx_root}/include"
+        IMPORTED_IMPLIB "${_ffx_root}/lib/amd_fidelityfx_vk.lib"
+        IMPORTED_LOCATION "${_ffx_root}/bin/amd_fidelityfx_vk.dll")
+endif()
+set(AMD_FIDELITYFX_VK_RUNTIME_FILE "${_ffx_root}/bin/amd_fidelityfx_vk.dll")
+set(amd-fidelityfx-vk_FOUND TRUE)
