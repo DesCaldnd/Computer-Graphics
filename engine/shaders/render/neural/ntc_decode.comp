@@ -1,0 +1,117 @@
+#version 460
+// Decodes one neural mip of a NeuralTextureSet into RGBA8 storage images (DecodeOnLoad on the GPU, benchmarks):
+// albedo (sRGB encoded values, alpha), normal (xy encoded, z reconstructed), ORM, emissive. Path by define like
+// mlp_eval.comp: scalar FP32 (default), OX_NN_FP16, OX_NN_COOPVEC (one texel per invocation) or OX_NN_COOPMAT
+// (16 texels per subgroup-sized workgroup on tensor cores).
+#define OX_NTC_DECODE_ONLY
+#include <render/neural/ntc.glsl>
+
+OX_PUSH_CONSTANTS({
+    OxNnWeights weights;
+    uint w0; uint b0; uint w1; uint b1; uint w2; uint b2;
+    uint hidden;
+    uint width; uint height;   // mip 0 of the set
+    uint mip;
+    uint channels;
+    uint features;
+    uint grid0; uint grid1;    // latent 2D arrays of the mip's pair
+    uint g0Size;
+    uint outAlbedo; uint outNormal; uint outOrm; uint outEmissive; // storage indices (OX_INVALID_INDEX = skip)
+});
+
+NtcMaterial ntcFromPush() {
+    NtcMaterial m;
+    m.weights = pc.weights;
+    m.w0 = pc.w0; m.b0 = pc.b0; m.w1 = pc.w1; m.b1 = pc.b1; m.w2 = pc.w2; m.b2 = pc.b2;
+    m.hidden = pc.hidden;
+    m.width = pc.width;
+    m.height = pc.height;
+    m.neuralMips = 16u;
+    m.minMip = 0u;
+    m.pairs = 4u;
+    m.channels = pc.channels;
+    m.features = pc.features;
+    uint pair = pc.mip >> 1u;
+    for (uint i = 0u; i < 8u; ++i) m.grids[i] = OX_INVALID_INDEX;
+    m.grids[pair * 2u] = pc.grid0;
+    m.grids[pair * 2u + 1u] = pc.grid1;
+    for (uint i = 0u; i < 4u; ++i) m.g0Size[i] = pc.g0Size;
+    m.latentSampler = OX_SAMPLER_LINEAR_REPEAT;
+    m.flags = 0u;
+    m.mipBias = 0.0;
+    m.pad = 0u;
+    return m;
+}
+
+void ntcStore(ivec2 t, float y[16]) {
+    for (uint i = 0u; i < 16u; ++i) y[i] = clamp(y[i], 0.0, 1.0);
+    uint ch = pc.channels;
+    uint a = ch & 15u, al = (ch >> 4u) & 15u, n = (ch >> 8u) & 15u, r = (ch >> 12u) & 15u, e = (ch >> 16u) & 15u;
+    if (pc.outAlbedo != OX_INVALID_INDEX && a != 15u)
+        OX_IMAGE_STORE_2D(rgba8, pc.outAlbedo, t, vec4(y[a], y[a + 1u], y[a + 2u], al != 15u ? y[al] : 1.0));
+    if (pc.outNormal != OX_INVALID_INDEX && n != 15u) {
+        vec2 xy = vec2(y[n], y[n + 1u]) * 2.0 - 1.0;
+        OX_IMAGE_STORE_2D(rgba8, pc.outNormal, t, vec4(y[n], y[n + 1u], sqrt(max(1.0 - dot(xy, xy), 0.0)) * 0.5 + 0.5, 1.0));
+    }
+    if (pc.outOrm != OX_INVALID_INDEX && r != 15u) OX_IMAGE_STORE_2D(rgba8, pc.outOrm, t, vec4(y[r], y[r + 1u], y[r + 2u], 1.0));
+    if (pc.outEmissive != OX_INVALID_INDEX && e != 15u)
+        OX_IMAGE_STORE_2D(rgba8, pc.outEmissive, t, vec4(y[e], y[e + 1u], y[e + 2u], 1.0));
+}
+
+#if defined(OX_NN_COOPMAT)
+#ifndef OX_NN_SUBGROUP
+#define OX_NN_SUBGROUP 32
+#endif
+#define OX_NN_CM_SUBGROUPS 4
+#define OX_NN_CM_TILES 16
+#include <render/neural/mlp_coopmat.glsl>
+layout(local_size_x = OX_NN_SUBGROUP * OX_NN_CM_SUBGROUPS) in;
+#define OX_NTC_STORE_SH(I, V) oxNnAct[in0 + lane * oxNnActStride(32u) + (I)] = float16_t(V);
+
+void main() {
+    uint h = pc.hidden;
+    oxNnCoopStageLayer(pc.weights, oxNnCoopW0(), pc.w0, 32u, h);
+    oxNnCoopStageLayer(pc.weights, oxNnCoopW1(32u, h), pc.w1, h, h);
+    oxNnCoopStageLayer(pc.weights, oxNnCoopW2(32u, h), pc.w2, h, 16u);
+    oxNnCoopStageBias(pc.weights, 0u, pc.b0, h);
+    oxNnCoopStageBias(pc.weights, 1u, pc.b1, h);
+    oxNnCoopStageBias(pc.weights, 2u, pc.b2, 16u);
+    barrier();
+    uint mw = max(pc.width >> pc.mip, 1u), mh = max(pc.height >> pc.mip, 1u);
+    uint sg = gl_SubgroupID, lane = gl_SubgroupInvocationID;
+    NtcMaterial nm = ntcFromPush();
+    for (uint t = 0u; t < OX_NN_CM_TILES; ++t) {
+        uint base = ((gl_WorkGroupID.x * OX_NN_CM_TILES + t) * OX_NN_CM_SUBGROUPS + sg) * 16u;
+        if (base >= mw * mh) break;
+        uint in0 = oxNnActBase(sg, 0u), out1 = oxNnActBase(sg, 1u);
+        if (lane < 16u) {
+            uint idx = min(base + lane, mw * mh - 1u);
+            ivec2 tx = ivec2(idx % mw, idx / mw);
+            OX_NTC_FILL_INPUTS(nm, pc.mip, tx, OX_NTC_STORE_SH)
+        }
+        subgroupMemoryBarrierShared();
+        subgroupBarrier();
+        oxNnCoopLayer(sg, 0u, pc.weights, pc.w0, oxNnCoopW0(), 0u, 32u, h, true);
+        oxNnCoopLayer(sg, 1u, pc.weights, pc.w1, oxNnCoopW1(32u, h), 1u, h, h, true);
+        oxNnCoopLayer(sg, 0u, pc.weights, pc.w2, oxNnCoopW2(32u, h), 2u, h, 16u, false);
+        if (lane < 16u && base + lane < mw * mh) {
+            float y[16];
+            for (uint c = 0u; c < 16u; ++c) y[c] = float(oxNnAct[out1 + lane * oxNnActStride(16u) + c]);
+            uint idx = base + lane;
+            ntcStore(ivec2(idx % mw, idx / mw), y);
+        }
+        subgroupMemoryBarrierShared();
+        subgroupBarrier();
+    }
+}
+#else
+layout(local_size_x = 8, local_size_y = 8) in;
+void main() {
+    uint mw = max(pc.width >> pc.mip, 1u), mh = max(pc.height >> pc.mip, 1u);
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    if (t.x >= int(mw) || t.y >= int(mh)) return;
+    float y[16];
+    oxNtcDecode(ntcFromPush(), pc.mip, t, y);
+    ntcStore(t, y);
+}
+#endif

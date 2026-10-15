@@ -1,0 +1,128 @@
+#version 460
+// Batch MLP evaluation (render::NeuralInference): FP32 inputs [count x OX_NN_IN] -> FP32 outputs [count x OX_NN_OUT]
+// through IN -> HIDDEN (ReLU) -> HIDDEN (ReLU) -> OUT. Path by define: (none) scalar FP32, OX_NN_FP16 packed half2,
+// OX_NN_COOPVEC cooperative vectors (one sample per invocation), OX_NN_COOPMAT cooperative matrices (16 samples
+// per subgroup, 1024 per workgroup).
+#include <render/neural/mlp.glsl>
+
+#ifndef OX_NN_IN
+#define OX_NN_IN 32
+#endif
+#ifndef OX_NN_HIDDEN
+#define OX_NN_HIDDEN 64
+#endif
+#ifndef OX_NN_OUT
+#define OX_NN_OUT 16
+#endif
+
+OX_READONLY_BUFFER(OxNnFloats, { float v[]; });
+OX_BUFFER(OxNnFloatsOut, { float v[]; });
+
+OX_PUSH_CONSTANTS({
+    OxNnWeights weights;
+    OxNnFloats inputs;
+    OxNnFloatsOut outputs;
+    uint count;
+    uint w0; uint b0; uint w1; uint b1; uint w2; uint b2;
+});
+
+#if defined(OX_NN_COOPMAT)
+#ifndef OX_NN_SUBGROUP
+#define OX_NN_SUBGROUP 32
+#endif
+#define OX_NN_CM_SUBGROUPS 4
+#define OX_NN_CM_TILES 16 // tiles of 16 samples per subgroup: 1024 samples per workgroup (amortises the staging)
+#include <render/neural/mlp_coopmat.glsl>
+layout(local_size_x = OX_NN_SUBGROUP * OX_NN_CM_SUBGROUPS) in;
+
+void main() {
+    oxNnCoopStageLayer(pc.weights, oxNnCoopW0(), pc.w0, OX_NN_IN, OX_NN_HIDDEN);
+    oxNnCoopStageLayer(pc.weights, oxNnCoopW1(OX_NN_IN, OX_NN_HIDDEN), pc.w1, OX_NN_HIDDEN, OX_NN_HIDDEN);
+    oxNnCoopStageLayer(pc.weights, oxNnCoopW2(OX_NN_IN, OX_NN_HIDDEN), pc.w2, OX_NN_HIDDEN, OX_NN_OUT);
+    oxNnCoopStageBias(pc.weights, 0u, pc.b0, OX_NN_HIDDEN);
+    oxNnCoopStageBias(pc.weights, 1u, pc.b1, OX_NN_HIDDEN);
+    oxNnCoopStageBias(pc.weights, 2u, pc.b2, OX_NN_OUT);
+    barrier();
+    uint sg = gl_SubgroupID, lane = gl_SubgroupInvocationID;
+    uint sIn = oxNnActStride(OX_NN_IN), sOut = oxNnActStride(OX_NN_OUT);
+    for (uint t = 0u; t < OX_NN_CM_TILES; ++t) {
+        uint base = ((gl_WorkGroupID.x * OX_NN_CM_TILES + t) * OX_NN_CM_SUBGROUPS + sg) * 16u;
+        if (base >= pc.count) break;
+        uint in0 = oxNnActBase(sg, 0u), out1 = oxNnActBase(sg, 1u);
+        for (uint i = lane; i < 16u * OX_NN_IN; i += OX_NN_SUBGROUP) {
+            uint s = base + i / OX_NN_IN;
+            oxNnAct[in0 + (i / OX_NN_IN) * sIn + i % OX_NN_IN] =
+                float16_t(s < pc.count ? pc.inputs.v[s * OX_NN_IN + i % OX_NN_IN] : 0.0);
+        }
+        subgroupMemoryBarrierShared();
+        subgroupBarrier();
+        oxNnCoopLayer(sg, 0u, pc.weights, pc.w0, oxNnCoopW0(), 0u, OX_NN_IN, OX_NN_HIDDEN, true);
+        oxNnCoopLayer(sg, 1u, pc.weights, pc.w1, oxNnCoopW1(OX_NN_IN, OX_NN_HIDDEN), 1u, OX_NN_HIDDEN, OX_NN_HIDDEN, true);
+        oxNnCoopLayer(sg, 0u, pc.weights, pc.w2, oxNnCoopW2(OX_NN_IN, OX_NN_HIDDEN), 2u, OX_NN_HIDDEN, OX_NN_OUT, false);
+        for (uint i = lane; i < 16u * OX_NN_OUT; i += OX_NN_SUBGROUP) {
+            uint s = base + i / OX_NN_OUT;
+            if (s < pc.count) pc.outputs.v[s * OX_NN_OUT + i % OX_NN_OUT] = float(oxNnAct[out1 + (i / OX_NN_OUT) * sOut + i % OX_NN_OUT]);
+        }
+        subgroupMemoryBarrierShared();
+        subgroupBarrier();
+    }
+}
+
+#elif defined(OX_NN_COOPVEC)
+layout(local_size_x = 64) in;
+OX_NN_LAYER_CV(layer0, OX_NN_IN, OX_NN_HIDDEN)
+OX_NN_LAYER_CV(layer1, OX_NN_HIDDEN, OX_NN_HIDDEN)
+OX_NN_LAYER_CV(layer2, OX_NN_HIDDEN, OX_NN_OUT)
+
+void main() {
+    uint s = gl_GlobalInvocationID.x;
+    if (s >= pc.count) return;
+    coopvecNV<float16_t, OX_NN_IN> x;
+    for (uint i = 0u; i < OX_NN_IN; ++i) x[i] = float16_t(pc.inputs.v[s * OX_NN_IN + i]);
+    OxNnWeightsF16 wh = OxNnWeightsF16(pc.weights);
+    coopvecNV<float16_t, OX_NN_HIDDEN> h0 = layer0(wh, pc.w0, pc.b0, true, x);
+    coopvecNV<float16_t, OX_NN_HIDDEN> h1 = layer1(wh, pc.w1, pc.b1, true, h0);
+    coopvecNV<float16_t, OX_NN_OUT> y = layer2(wh, pc.w2, pc.b2, false, h1);
+    for (uint o = 0u; o < OX_NN_OUT; ++o) pc.outputs.v[s * OX_NN_OUT + o] = float(y[o]);
+}
+
+#elif defined(OX_NN_FP16)
+layout(local_size_x = 64) in;
+OX_NN_LAYER_F16(layer0, OX_NN_IN, OX_NN_HIDDEN)
+OX_NN_LAYER_F16(layer1, OX_NN_HIDDEN, OX_NN_HIDDEN)
+OX_NN_LAYER_F16(layer2, OX_NN_HIDDEN, OX_NN_OUT)
+
+void main() {
+    uint s = gl_GlobalInvocationID.x;
+    if (s >= pc.count) return;
+    f16vec2 x[OX_NN_IN / 2];
+    for (uint i = 0u; i < OX_NN_IN / 2u; ++i)
+        x[i] = f16vec2(pc.inputs.v[s * OX_NN_IN + 2u * i], pc.inputs.v[s * OX_NN_IN + 2u * i + 1u]);
+    f16vec2 h0[OX_NN_HIDDEN / 2], h1[OX_NN_HIDDEN / 2], y[OX_NN_OUT / 2];
+    layer0(pc.weights, pc.w0, pc.b0, true, x, h0);
+    layer1(pc.weights, pc.w1, pc.b1, true, h0, h1);
+    layer2(pc.weights, pc.w2, pc.b2, false, h1, y);
+    for (uint o = 0u; o < OX_NN_OUT / 2u; ++o) {
+        pc.outputs.v[s * OX_NN_OUT + 2u * o] = float(y[o].x);
+        pc.outputs.v[s * OX_NN_OUT + 2u * o + 1u] = float(y[o].y);
+    }
+}
+
+#else
+layout(local_size_x = 64) in;
+OX_NN_LAYER_F32(layer0, OX_NN_IN, OX_NN_HIDDEN)
+OX_NN_LAYER_F32(layer1, OX_NN_HIDDEN, OX_NN_HIDDEN)
+OX_NN_LAYER_F32(layer2, OX_NN_HIDDEN, OX_NN_OUT)
+
+void main() {
+    uint s = gl_GlobalInvocationID.x;
+    if (s >= pc.count) return;
+    float x[OX_NN_IN];
+    for (uint i = 0u; i < OX_NN_IN; ++i) x[i] = pc.inputs.v[s * OX_NN_IN + i];
+    float h0[OX_NN_HIDDEN], h1[OX_NN_HIDDEN], y[OX_NN_OUT];
+    layer0(pc.weights, pc.w0, pc.b0, true, x, h0);
+    layer1(pc.weights, pc.w1, pc.b1, true, h0, h1);
+    layer2(pc.weights, pc.w2, pc.b2, false, h1, y);
+    for (uint o = 0u; o < OX_NN_OUT; ++o) pc.outputs.v[s * OX_NN_OUT + o] = y[o];
+}
+#endif

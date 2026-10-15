@@ -1,0 +1,18 @@
+#version 460
+// Neural denoiser training (NeuralDenoiserTest.TrainWeights): copies the HDR scene colour (divided by the
+// pre-exposure when `exposed`) and the guide buffers (world normal, linear depth) into persistent RGBA32F images for readback.
+#include <render/common/scene.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+OX_RENDER_PUSH(uint color; uint depth; uint normals; uint outColor; uint outGeo; uint width; uint height; uint exposed;);
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.width) || p.y >= int(pc.height)) return;
+    vec4 c = OX_FETCH_2D(pc.color, p, 0) / (pc.exposed != 0u ? max(VIEW.preExposure, 1e-12) : 1.0);
+    float d = OX_FETCH_2D(pc.depth, p, 0).r;
+    vec3 n = OX_FETCH_2D(pc.normals, p, 0).xyz;
+    float z = d > 0.0 ? oxLinearDepth(pc.view, d) : 0.0;
+    OX_IMAGE_STORE_2D(rgba32f, pc.outColor, p, vec4(c.rgb, 1.0));
+    OX_IMAGE_STORE_2D(rgba32f, pc.outGeo, p, vec4(normalize(n + vec3(1e-6)), z));
+}

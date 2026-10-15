@@ -1,0 +1,114 @@
+#version 460
+#extension GL_EXT_control_flow_attributes : require
+// Neural denoiser (r.Denoiser Neural): the À-trous stage of the SVGF-style denoiser (render/raytracing/denoise_*.comp)
+// with a learned kernel. A tiny MLP per iteration (render/neural/denoiser_weights.glsl, trained offline on path
+// traced references by NeuralDenoiserTest.TrainWeights) predicts the weight of every tap of the 5x5 dilated kernel
+// from guide features (depth / normal / luminance differences relative to the local depth gradient and noise level,
+// tap distance, relative noise): a kernel-predicting network in the spirit of Bako et al. 2017 / Vogels et al. 2018,
+// small enough to run per tap. Same push layout and outputs as denoise_atrous.comp; variance is filtered with w^2.
+#include <render/raytracing/denoise_common.glsl>
+#include <render/neural/denoiser_weights.glsl>
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+OX_RENDER_PUSH(uint color; uint variance; uint geo; uint outColor; uint outVariance; uint width; uint height; uint step;
+               float phiColor; float phiNormal; float phiDepth; vec4 lumaWeights;);
+
+const float kB3[3] = float[](3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0);
+
+float blurredVariance(ivec2 p, ivec2 size) {
+    float sum = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 q = clamp(p + ivec2(x, y), ivec2(0), size - 1);
+            float w = (x == 0 ? 0.5 : 0.25) * (y == 0 ? 0.5 : 0.25);
+            sum += OX_FETCH_2D(pc.variance, q, 0).r * w;
+        }
+    }
+    return sum;
+}
+
+// Tap logit: OX_ND_IN features -> OX_ND_HIDDEN (ReLU) -> OX_ND_HIDDEN (ReLU) -> 1, one function per iteration.
+// The weight base is a compile-time constant in each, so after unrolling every kNdWeights index is constant and the
+// weights become immediates (a runtime iteration index put the 1604-float array in local memory: ~9 ms per
+// iteration at 1080p on an RTX 3080).
+#define OX_ND_LOGIT(NAME, IT)                                                                                       float NAME(float f[OX_ND_IN]) {                                                                                     const uint b0 = uint(IT) * uint(OX_ND_PARAMS);                                                                  const uint b1 = b0 + uint(OX_ND_HIDDEN * OX_ND_IN + OX_ND_HIDDEN);                                              const uint b2 = b1 + uint(OX_ND_HIDDEN * OX_ND_HIDDEN + OX_ND_HIDDEN);                                          float h0[OX_ND_HIDDEN], h1[OX_ND_HIDDEN];                                                                       [[unroll]] for (uint o = 0u; o < uint(OX_ND_HIDDEN); ++o) {                                                         float a = kNdWeights[b0 + uint(OX_ND_HIDDEN * OX_ND_IN) + o];                                                   [[unroll]] for (uint i = 0u; i < uint(OX_ND_IN); ++i) a += kNdWeights[b0 + o * uint(OX_ND_IN) + i] * f[i];             h0[o] = max(a, 0.0);                                                                                        }                                                                                                               [[unroll]] for (uint o = 0u; o < uint(OX_ND_HIDDEN); ++o) {                                                         float a = kNdWeights[b1 + uint(OX_ND_HIDDEN * OX_ND_HIDDEN) + o];                                               [[unroll]] for (uint i = 0u; i < uint(OX_ND_HIDDEN); ++i) a += kNdWeights[b1 + o * uint(OX_ND_HIDDEN) + i] * h0[i];             h1[o] = max(a, 0.0);                                                                                        }                                                                                                               float y = kNdWeights[b2 + uint(OX_ND_HIDDEN)];                                                                  [[unroll]] for (uint i = 0u; i < uint(OX_ND_HIDDEN); ++i) y += kNdWeights[b2 + i] * h1[i];                      return y;                                                                                                   }
+OX_ND_LOGIT(tapLogit0, 0)
+OX_ND_LOGIT(tapLogit1, 1)
+OX_ND_LOGIT(tapLogit2, 2)
+OX_ND_LOGIT(tapLogit3, 3)
+
+float tapLogit(uint it, float f[OX_ND_IN]) { // `it` is uniform (push constant): no divergence
+    if (it == 0u) return tapLogit0(f);
+    if (it == 1u) return tapLogit1(f);
+    if (it == 2u) return tapLogit2(f);
+    return tapLogit3(f);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.width, pc.height);
+    if (any(greaterThanEqual(p, size))) return;
+
+    vec4 c0 = OX_FETCH_2D(pc.color, p, 0);
+    float var0 = OX_FETCH_2D(pc.variance, p, 0).r;
+    float z0;
+    vec3 n0;
+    oxDnGeo(pc.geo, p, z0, n0);
+    uint it = min(uint(findLSB(max(pc.step, 1u))), uint(OX_ND_ITERATIONS - 1));
+
+    vec4 outC = c0;
+    float outV = var0;
+    if (z0 > 0.0) {
+        float zx = OX_FETCH_2D(pc.geo, clamp(p + ivec2(1, 0), ivec2(0), size - 1), 0).w;
+        float zy = OX_FETCH_2D(pc.geo, clamp(p + ivec2(0, 1), ivec2(0), size - 1), 0).w;
+        float grad = max(abs(zx - z0), abs(zy - z0));
+        grad = (zx > 0.0 && zy > 0.0) ? grad : z0 * 0.01;
+        float l0 = oxDnLuma(c0, pc.lumaWeights);
+        float sigma = sqrt(max(blurredVariance(p, size), 0.0));
+        float relNoise = log(1.0 + sigma / (abs(l0) + 1e-3));
+        vec4 sumC = vec4(0.0);
+        float sumV = 0.0, sumW = 0.0;
+        int step = int(pc.step);
+        for (int y = -2; y <= 2; ++y) {
+            for (int x = -2; x <= 2; ++x) {
+                ivec2 q = p + ivec2(x, y) * step;
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+                float k = kB3[abs(x)] * kB3[abs(y)];
+                vec4 c = OX_FETCH_2D(pc.color, q, 0);
+                float v = OX_FETCH_2D(pc.variance, q, 0).r;
+                float w = k;
+                if (x != 0 || y != 0) {
+                    float z;
+                    vec3 n;
+                    oxDnGeo(pc.geo, q, z, n);
+                    if (z <= 0.0) continue;
+                    float dist = length(vec2(x, y));
+                    float f[OX_ND_IN];
+                    f[0] = log(1.0 + abs(z - z0) / (grad * dist * float(step) + z0 * 1e-3));
+                    f[1] = 1.0 - max(dot(n0, n), 0.0);
+                    f[2] = log(1.0 + abs(oxDnLuma(c, pc.lumaWeights) - l0) / (sigma + 1e-4));
+                    f[3] = dist * 0.5;
+                    f[4] = relNoise;
+                    f[5] = log(1.0 + abs(oxDnLuma(c, pc.lumaWeights) - l0) / (abs(l0) + 1e-3));
+                    w *= exp(clamp(tapLogit(it, f), -30.0, 4.0));
+                }
+                sumC += c * w;
+                sumV += v * w * w;
+                sumW += w;
+            }
+        }
+        if (sumW > 1e-8) {
+            outC = sumC / sumW;
+            outV = sumV / (sumW * sumW);
+        }
+    }
+#if defined(OX_OUT_RGBA8)
+    OX_IMAGE_STORE_2D(rgba8, pc.outColor, p, clamp(outC, 0.0, 1.0));
+#elif defined(OX_OUT_R8)
+    OX_IMAGE_STORE_2D(r8, pc.outColor, p, vec4(clamp(outC.r, 0.0, 1.0)));
+#else
+    OX_IMAGE_STORE_2D(rgba16f, pc.outColor, p, outC);
+    OX_IMAGE_STORE_2D(r16f, pc.outVariance, p, vec4(outV));
+#endif
+}
