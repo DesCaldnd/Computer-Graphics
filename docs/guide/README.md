@@ -26,6 +26,7 @@ ctest --test-dir build/guide2 -L guide          # -LE gpu — только CPU-�
 | Глава | О чём |
 | --- | --- |
 | [00. Быстрый старт](00-getting-started.md) | Требования, установка зависимостей через vcpkg, сборка через пресеты CMake, запуск OxwaldPlayer, устройство репозитория и модулей |
+| [37. Android](37-android.md) | Тулчейн и эмулятор (AVD), сборка APK (arm64-v8a, x86_64) скриптами и Gradle, запуск, сенсорный ввод и геймпады, жизненный цикл, logcat и падения, отладка в Android Studio и LLDB, удалённая консоль и Tracy, валидация Vulkan, ADPF, смоук-тест, OnePlus 12, что проверено на AVD |
 
 ## Основа движка
 
@@ -53,6 +54,7 @@ ctest --test-dir build/guide2 -L guide          # -LE gpu — только CPU-�
 | [15. Скрипты на Lua](15-scripting-lua.md) | Lua VM, скрипты сущностей, события, привязки движка, hot reload |
 | [16. Открытый мир](16-world.md) | Ландшафт и эрозия, LOD, растительность, небо и смена дня и ночи, погода, вода и плавучесть, стриминг чанков (CPU-часть) |
 | [32. Компоненты ECS](32-gameplay-components.md) | Справочник компонентов геймплея, мира и рендера: поля, значения по умолчанию, системы и фазы, edit/play mode, Lua API сущностей |
+| [34. Разрушаемость](34-destruction.md) | Фрактура Вороного (детерминированная, замкнутые куски, выпуклые оболочки), компонент `Destructible`, урон и импульсы, граф опор и обрушение, бюджет и растворение обломков, события, Lua, сеть |
 
 ## Рендеринг
 
@@ -64,11 +66,13 @@ ctest --test-dir build/guide2 -L guide          # -LE gpu — только CPU-�
 | [21. Отражения и GI](21-reflections-gi.md) | Пробы отражений и бейк, box projection, SSR, планарные зеркала, GTAO, объёмы освещённости (irradiance volumes) |
 | [22. Волюметрика](22-volumetrics.md) | Фроксельный высотный туман, локальные объёмы тумана, лучи света (god rays), облака, стоимость по уровням качества |
 | [23. Прозрачность, вода и частицы](23-transparency-water-particles.md) | OIT или сортировка, преломление стекла, вода Герстнера с каустиками и подводным режимом, GPU-частицы (все поля эмиттера) |
-| [24. Трассировка лучей (RTX)](24-ray-tracing.md) | Требования и причины недоступности, RT-тени, отражения, AO, DDGI и преломление, ReSTIR DI, path tracer, денойзер SVGF, чек-лист проверки на NVIDIA |
-| [25. Апскейлеры и постобработка](25-upscalers-postprocess.md) | TAA/FXAA, FSR 1, TAAU, DLSS и DLAA (требования, режимы, рантайм NGX), экспозиция, bloom, DoF, motion blur, LUT, эффекты линз, `PostProcessVolume` |
+| [24. Трассировка лучей (RTX)](24-ray-tracing.md) | Требования и причины недоступности, RT-тени, отражения, AO, DDGI и преломление, ReSTIR DI, path tracer, денойзер SVGF и DLSS Ray Reconstruction (`r.Denoiser`), чек-лист проверки на NVIDIA |
+| [25. Апскейлеры и постобработка](25-upscalers-postprocess.md) | TAA/FXAA, FSR 1, TAAU, DLSS и DLAA (требования, режимы, рантайм NGX), экспозиция, bloom, DoF, motion blur, LUT, эффекты линз, `PostProcessVolume`, генерация кадров FSR 3 и низкая задержка (Reflex, ограничитель движка) |
 | [26. Настройки качества графики](26-quality-settings.md) | Группы и уровни Low–Ultra, полная таблица cvar'ов рендерера с ценой в мс, автоопределение по бенчмарку и выбор апскейлера, настройки игрока, своя cvar в группе |
-| [27. GPU-driven рендеринг и производительность](27-gpu-driven-performance.md) | GPU-отсечение, Hi-Z, LOD и меш-леты, async compute, стриминг мипов, параллельная запись команд, `RenderStats`, Tracy, замеры |
+| [27. GPU-driven рендеринг и производительность](27-gpu-driven-performance.md) | GPU-отсечение, Hi-Z, LOD и меш-леты, async compute, стриминг мипов, параллельная запись команд, переменная частота шейдинга (VRS), `RenderStats`, Tracy, замеры |
 | [28. Рендеринг открытого мира](28-world-rendering.md) | Ландшафт на GPU (слои, CDLOD), растительность с импосторами и ветром, небо и смена дня и ночи, compute-скиннинг, путь от компонентов до кадра |
+| [35. Split rendering: второй GPU](35-split-rendering.md) | Лёгкие пассы на встроенной графике: когда это окупается (и почему не на RTX 3080 + UHD 630), переносимые пассы, пути передачи между GPU, планировщик `Auto`, статистика, проверка на одном GPU, включение iGPU в BIOS |
+| [36. Нейронный рендеринг](36-neural-rendering.md) | MLP в шейдерах (FP32/FP16, cooperative matrix/vector), нейросжатие текстур материалов (импорт, `r.NeuralTextures` Off/DecodeOnLoad/InferenceOnSample, стохастическая фильтрация, стриминг), нейроденойзер `r.Denoiser Neural`, замеры |
 
 ## Для разработчиков движка
 
@@ -81,6 +85,6 @@ ctest --test-dir build/guide2 -L guide          # -LE gpu — только CPU-�
 | Глава | О чём |
 | --- | --- |
 | [29. Пользовательский интерфейс](29-ui.md) | Отладочный оверлей ImGui (F1): статистика, консоль, cvar'ы, инспектор, render graph, свои окна; игровой UI на RmlUi: документы, стили, модели данных, hot reload; меню настроек графики; Lua `ui`/`debug` |
-| [30. Редактор](30-editor.md) | OxwaldEditor: проекты `.oxproj`, вьюпорт и гизмо с привязкой, Outliner и Inspector, undo/redo, префабы и overrides, Content Browser и импорт, Play/Simulate, Project Settings, Preferences, горячие клавиши, панели отладки |
+| [30. Редактор](30-editor.md) | OxwaldEditor: проекты `.oxproj`, вьюпорт и гизмо (мировые и локальные оси, привязка), Outliner и Inspector, undo/redo, префабы и overrides, Content Browser и импорт, Play/Simulate, Project Settings, Preferences, горячие клавиши, панели отладки |
 | [31. Ассеты](31-assets.md) | База ассетов и `.meta`, импорт текстур (BC7/BC5, мипы) и моделей (LOD, меш-леты), асинхронная загрузка и hot reload, `oximport`, сборка игры в `.oxpak` (`oxpack`) и запуск плеера с `--pak` |
-| [33. Тестовый проект OxwaldShowcase](33-showcase.md) | Демо-проект: хаб и 14 станций (что показывают, компоненты, cvar'ы, код), запуск в плеере и редакторе, экскурсия и скриншоты, генератор со стабильными UUID, игровой модуль `OX_GAME_MODULE`, Lua-флоу и меню RmlUi, своя станция по шагам, тесты `ctest -L showcase` |
+| [33. Тестовый проект OxwaldShowcase](33-showcase.md) | Демо-проект: хаб и 15 станций (что показывают, компоненты, cvar'ы, код), запуск в плеере и редакторе, экскурсия и скриншоты, генератор со стабильными UUID, игровой модуль `OX_GAME_MODULE`, Lua-флоу и меню RmlUi, своя станция по шагам, тесты `ctest -L showcase` |

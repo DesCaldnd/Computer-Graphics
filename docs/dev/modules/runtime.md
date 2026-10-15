@@ -193,7 +193,11 @@ to `.bak` → rename → directory fsync; failures roll back. Reads fall back to
 `apps/player`: `OxwaldPlayer [--project dir] [--scene uri] [--headless] [--server] [--frames N] [--width W --height H]
 [--fullscreen|--borderless|--windowed] [--monitor I] [--quality low|medium|high|ultra] [--cvar name=value]... [--fps N]
 [--fixed-rate HZ] [--single-thread] [--user-dir DIR]` (`parseLaunchOptions`, `LaunchOptions::toEngineConfig`).
-Opens a GLFW window unless headless; NullRenderer until the render module provides one. CTest:
+Opens a GLFW window unless headless; NullRenderer until the render module provides one. Player-only flags: `--screenshot
+file.png`, `--stats` (or `OX_FRAME_STATS=1`: per-second frame timing averages — game/render thread, frame-slot wait,
+acquire, CPU, present, GPU — from `EngineStats` + `IRenderer::stats()`). With `fileWatching`/editor configs the
+engine's `FileWatcher` and the asset registry's hot-reload watcher scan on background threads (250 ms); `poll()`
+only delivers changes on the game thread. CTest:
 `OxwaldPlayer.HeadlessSmoke` (`--headless --frames 10`), `ServerSmoke`, `BadArgument` (add `apps` to `OX_MODULES`).
 
 ## Game modules, game arguments, screenshots
@@ -210,7 +214,82 @@ Opens a GLFW window unless headless; NullRenderer until the render module provid
   `--screenshot file.png` with `--frames N` writes the last frame (headless or windowed: the render module renders
   the screenshot frame once more into a capture texture of the swapchain size).
 
+## Latency (r.Reflex, NVIDIA Reflex + engine limiter)
+
+`r.Reflex` (Persist, `GraphicsSettings::reflex`): `Off`, `On` (default, alias `Auto`), `OnBoost`. `r.Reflex.Fallback`
+(Persist): `Off`, `JustInTime` (default), `Strict`. Per frame, on the game thread, `Engine::latencyBeginFrame()` runs
+before input is polled:
+
+1. `IRenderer::latencySleep(frameIndex, mode)` — the Vulkan renderer applies the mode to the swapchain
+   (`vkSetLatencySleepModeNV`, low latency + boost) and, when on, calls `vkLatencySleepNV` and waits on its timeline
+   semaphore (the driver decides when the CPU should start). Returns the ms slept, or < 0 when the renderer did not
+   pace the frame (no `VK_NV_low_latency2`: AMD, Intel, Apple, Android, old drivers; the FSR 3 frame generation
+   proxy owns the swapchain; `NullRenderer`).
+2. Without a driver sleep and `mode > 0`: the **fallback limiter** (`LatencyLimiter`, `oxwald/runtime/latency.hpp`).
+   *JustInTime* first waits until the render thread took the previous frame (`RenderPipeline::waitUntilTaken`,
+   bounded to 250 ms) — the **phase anchor**: at most one frame is in the pipeline and the game thread never blocks
+   on a snapshot slot. It then measures the queueing of the last frames — game thread waiting for a snapshot slot
+   (`EngineStats::waitForRenderMs`) + the extracted snapshot waiting for the render thread
+   (`RenderPipeline::Stats::lastQueuedMs`, `EngineStats::snapshotQueuedMs`) + swapchain acquire + GPU queueing
+   behind the previous frame (`LatencyStats::renderQueueWaitMs`; the runtime renderer measures previous frame's
+   timeline completion − this frame's submit with a watcher thread, *signed*: negative when the GPU sat idle, so
+   starvation backs the limiter off at once) — and sleeps until
+   *anchor + delay*, the delay settling at the queueing minus 1 ms of headroom. Relative to the anchor the queueing
+   is a static function of the delay (queue = queue₀ − delay), so the proportional controller converges; a delay
+   counted from "now" (the first version) only turned slot waits into sleep: with two snapshot slots a GPU-bound game
+   keeps a whole frame queued without ever blocking, and a per-frame sleep controls the frame *period*, an integrator
+   that drifted (8 ms GPU frame: 31 → 20 ms instead of → 1.5 ms). The window minimum (4 frames) ignores single
+   hitches; the delay halves every frame when nothing is queued (CPU bound), and the controller is proportional in
+   both directions around the headroom (a one-sided version had a ~1 ms limit cycle). The render thread's frame-slot
+   wait is deliberately *not* an input: it has a CPU floor (~0.8 ms of `beginFrame` work at 1440p) that no sleep
+   removes, and with it the limiter overslept until the GPU starved (Showcase station 4 at 1440p: 162 → 94 fps); a
+   real slot wait also shows up as positive GPU queueing.
+   *Strict* flushes the render pipeline and waits until the GPU retired frame N-1 (`IRenderer::waitForFrameGpu`)
+   before frame N samples input: nothing is ever queued, CPU and GPU no longer overlap.
+3. Markers (`IRenderer::latencyMarker`, present id = frame index + 1): `SimulationStart` (after the sleep),
+   `InputSample` (after `InputSystem::update`), `SimulationEnd` (before `RenderPipeline::submit`); the renderer adds
+   `RenderSubmitStart/End` around recording + submission and `rhi::Swapchain::present()` adds `PresentStart/End`.
+   Markers are sent with the mode off too, so the driver's timing reports exist for comparisons.
+
+**With FSR 3 frame generation** (`r.FrameGeneration FSR3`, runtime player): the proxy owns the swapchain and Reflex
+cannot drive it (reasons: `docs/dev/modules/render_postprocess.md` "Frame generation"), so `latencySleep` returns
+< 0, `LatencyStats::reflexBehindFrameGeneration` is set and `r.Reflex On` runs the fallback limiter. The proxy's
+back-pressure (its `vkQueuePresentKHR` blocks the render thread until a replacement buffer is free) reaches the
+limiter as the game thread's wait for the render thread, so the limiter needs no special case; `engineLatencyMs`
+still measures simulation start → GPU done of the rendered frame, and the frame generator adds its hold
+(`RenderStats::frameGeneration.addedLatencyMs`) on top. Measured (RTX 3080, Showcase station 4, 1440p Ultra, vsync
+off): engine latency 45.8 → 21.4 ms with JustInTime (−9 % rendered fps), 12.5 ms with Strict (−2 %), the hold
+24 → 23 / 13 ms.
+
+**Known weakness of JustInTime when GPU bound** (same scene, no frame generation, `OX_DISABLE_REFLEX=1`): 46.9 →
+22.6 ms but 104 → 83 fps, while Strict reaches 10.9 ms at 92 fps and Reflex 14.0 ms at 101 fps — the controller
+oversleeps (the GPU idles ~3 ms per frame; Windows timer wake-ups and the per-frame CPU floor exceed the 1 ms
+headroom). CPU bound (station 7, 540p Low) JustInTime is the better fallback: 2.05 → 1.44 ms at unchanged 1520 fps,
+Strict 1.21 ms at 832 fps. Open: a tighter controller (larger headroom when the GPU starves, high-resolution waitable
+timer) before making Strict the GPU-bound default. With vsync (FIFO) and no frame cap neither Reflex nor the limiter
+helps much (48.6 → 46.5 ms; the queue sits in the presentation engine); a frame cap just under the refresh rate
+(`t.MaxFPS 97` at 100 Hz) removes it (6.4 ms). Tables: `docs/dev/perf.md` "Latency". `OX_DISABLE_REFLEX=1` (read by the runtime renderer at device
+creation) creates the device without `VK_NV_low_latency2`, to measure the limiter on NVIDIA hardware.
+
+`EngineStats::latency` / `RenderStats::latency` (`LatencyStats`): mode, `reflexSupported/Active`,
+`reflexBehindFrameGeneration`, `limiterActive`,
+`sleepMs`, `renderQueueWaitMs`, `engineLatencyMs` (simulation start → GPU done measured by the engine: the
+`SimulationStart` marker time and the watcher thread's wake-up on the frame's timeline value, 16-frame average, any
+vendor, also through the frame generation proxy) and the averages of the last driver reports (`vkGetLatencyTimingsNV`, refreshed every
+8 frames): `pcLatencyMs` (simulation start → GPU render end), `gameToRenderMs`, `renderQueueMs`, `gpuRenderMs`. The
+debug overlay (stats HUD + "Latency" section) and `OxwaldPlayer --stats` print them. Settings UI: player settings
+menu "Low latency" (`reflexModes`, hint when Reflex is unsupported), editor Preferences → Display and Project
+Settings → Rendering → Display ("Low Latency", "Latency Limiter"). The editor viewport (Qt UI thread) is not
+paced by either. Numbers: `docs/dev/perf.md` "Latency: NVIDIA Reflex and the engine limiter".
+
 ## Tests
+
+`latency_tests.cpp`: marker order and one sleep per frame (recording renderer), `Off` never limits, the limiter
+controller (convergence without a limit cycle, hitch), the JustInTime limiter on a simulated GPU-bound pipeline
+(a virtual GPU timeline with absolute deadlines on the high-resolution timer, so a loaded machine does not
+accumulate oversleep; medians: 8 ms render → ~16.8 ms latency without, ~1.5 ms with the limiter, required < 0.4× and
+< ½ render time; frame interval ≤ 1.25× render time or 1.1× the run without limiter), Strict waits for the previous
+frame, `r.Reflex` as a managed setting. `pipeline_tests.cpp` covers `waitUntilTaken` / `lastQueuedMs`.
 
 `ctest --test-dir build/<you> -L runtime` — 44 tests core+scene only, 47 with physics/audio/script/async (+Lua
 input, coroutine pause/time-scale/cancel-on-unload, module toggles), plus `assets_integration_tests.cpp`: asset

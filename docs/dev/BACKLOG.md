@@ -85,11 +85,12 @@ is in `modules/render.md` §11, the open ray tracing items are in their own sect
   (`RenderGraphPlan.AsyncComputeBarriersNameNoGraphicsStages`, `IndependentGraphicsPassesDoNotWaitForAsyncCompute`)
   ran on Windows only.
 
-- **4K upscaler frame time is bimodal on the world station.** Showcase station 6 at 3840×2160 with FSR 1 or TAAU
-  Quality renders at either ~14 ms or 50–59 ms GPU with identical settings (DLSS at the same render resolution is
-  stable at 16 ms). Not investigated; numbers and the command line are in `perf.md` (RTX 3080, DLSS pass).
-- **Volumetrics do not scale with resolution.** Station 4 costs 37–39 ms GPU at native 4K against ~21 ms at 67 %
-  render scale; which pass dominates was not measured.
+- ~~4K upscaler frame time is bimodal on the world station~~ (2026-10-15): single-frame readings that absorbed time
+  slices of other processes on the shared GPU; stable median 5.2 ms (FSR 1) / 6.7 ms (TAAU) on an idle GPU.
+  Measure with `OxwaldPlayer --pass-stats` (median), see `perf.md` (DLSS pass).
+- ~~Volumetrics do not scale with resolution~~ (2026-10-15): the volumetrics take 0.8–1.2 ms at 4K; the 4K cost of
+  station 4 was full-resolution GTAO + SSR, now traced at half resolution from a render height of 1800 px
+  (`r.AO.HalfResAboveHeight`, `r.SSR.HalfResAboveHeight`): 12.9 → 8.4 ms.
 - **glslang is an overlay port** (`vcpkg-overlays/ports/glslang`, bounds check in `decorateStructType`): types missing
   from `glslangTypeToIdMap` share one member remapper, a nested conversion shrinks it, and MSVC debug iterators abort.
   Report upstream and drop the overlay once fixed.
@@ -107,8 +108,10 @@ Details and the verified state: `modules/render.md` §11.
 - rt/denoiser: the AO and reflection signals lag under moving occluders. Only the visibility signals (sun, local
   lights, ReSTIR) clamp their history (`DenoiserSettings::clampHistory`); a heavy-tailed signal would lose energy
   with the same clamp.
-- rt/path tracer: the hybrid RT passes (shadows, DDGI, AO, reflections and their denoisers, about 9 ms at 1080p on
-  the RTX 3080) keep running under `r.PathTracing`, although the path traced image replaces the frame.
+- ~~rt/path tracer: the hybrid RT passes keep running under `r.PathTracing`~~ (fixed 2026-10-15: they skip
+  themselves, 10.3 → 1.7 ms at 1080p). Still running under the path tracer: the raster part of the frame (depth
+  prepass, forward lighting, volumetric fog, translucency) whose SceneColorHDR the path tracer overwrites; the path
+  tracer needs depth / normals / velocity, the rest could be skipped too.
 - rt/DDGI: colour bleed is about 2/3 of the path traced reference (`RtGlobalIlluminationBleedsColour`: 0.052 vs
   0.078), and features smaller than about the probe spacing (2 m by default) are not resolved.
 - rt/path tracer: mode 1 (RT pipeline) casts no shadows from translucent objects (opaque shadows only).
@@ -121,3 +124,38 @@ Details and the verified state: `modules/render.md` §11.
   in-game settings menu; the manual checklist items marked "not done" in `modules/render.md` §11 (contact
   hardening at 0.5° vs 3°, 100+ ReSTIR lights, roughness sweep, DDGI scrolling and light leaks, off-screen god
   rays); Linux. The RT fixes were not re-run on the Mac.
+
+## Open after the 2026-10-15 session (latency, VRS, neural, Android)
+
+- runtime/latency: the `JustInTime` limiter (`r.Reflex.Fallback`, default) oversleeps when GPU bound: the GPU idles
+  ~3 ms per frame (station 4, 1440p Ultra: 83 fps / 22.6 ms engine latency, against `Strict` 92 fps / 10.9 ms and
+  Reflex 101 fps / 14 ms). Ideas: adapt the headroom when the GPU starves, a high-resolution waitable timer for
+  `Clock::sleepUntil`. Consider `Strict` as the default under frame generation (12.5 ms, hold 13 ms, −2 % rendered fps
+  vs `JustInTime` 21.4 ms, −9 %). Numbers: `perf.md` "Latency".
+- runtime/latency: vsync (FIFO) without a frame cap keeps ~48 ms of latency in the presentation engine, which Reflex
+  does not remove; a cap just under the refresh rate (`t.MaxFPS 97` at 100 Hz) gives 6.4 ms. Idea: cap automatically
+  just under the refresh rate when `r.Reflex` is on with FIFO (`LowLatencyMode::minimumIntervalUs` / `t.MaxFPS`).
+- render/framegen: the FSR 3 pacing guard in `Fsr3FrameGenerator::present` (frame N goes to the proxy only after it
+  composed N − 1, ≤ 250 ms) is empirical, the mechanism is inferred from the SDK sources and stacks; re-check with a
+  newer FidelityFX SDK with Vulkan support. Two FSR 3 proxies on one GPU (two processes) can deadlock inside
+  FidelityFX 1.1.4 / the driver; the frame generation GPU tests serialise through a named mutex for that reason.
+  Reflex through the proxy is not possible with 1.1.4 (the real swapchain is private to the SDK).
+- runtime (possible bug, not reproduced): with a reused `--user-dir`, the saved quality seemed to override
+  `--quality` on the first run of a new configuration (station 4 Ultra ran at 2.97 ms GPU instead of 9.5 ms). The
+  measurements used a fresh user dir per run (`perf.md` "Latency").
+- editor: the Reflex / latency limiter / frame generation rows in Preferences → Display and Project Settings →
+  Rendering → Display exist in the code but were not exercised in the editor.
+- render/VRS: not measured on a Low / Medium class GPU (only the RTX 3080, where the gain is small); heavier
+  materials and weaker GPUs should gain more (`modules/render_vrs.md`).
+- render/neural: the neural denoiser (`r.Denoiser Neural`, experimental) is blurrier than SVGF once the history has
+  converged and ~3x the À-trous cost; next step: train on frames captured after the temporal pass
+  (`modules/render_neural.md`).
+- android: the arm64-v8a APK is built (133 MB) but has not run on a device yet (target: OnePlus 12); only the AVD
+  (API 35 x86_64) run is verified (`modules/android.md`).
+- tools/oxpack: no gameplay importers (`.oxbt`, `.oxanimctrl`), so cooked paks (Showcase, Android
+  `OxwaldShowcase.oxpak`) have no `AI/guard.oxbt` and the guards of station 09 have no behaviour tree in a packaged
+  game. Fix: link oxpack with `ox_gameplay` + `registerGameplayImporters`, or move the two JSON-blob importers into a
+  small library. `tools/android/build.ps1` prefers the oxpack of `build/android-hostcheck` (built 2026-10-14, before
+  the meta-orphan fix): rebuild it before the next pack.
+- editor: `ViewportPacingTests` failed once at 20 ticks/s in the first, heaviest batch of a full parallel ctest run
+  (engine timer also down to 11/s: the event loop starved); not reproduced in 9 reruns.

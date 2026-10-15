@@ -37,6 +37,7 @@ Umbrella header: `<oxwald/physics/physics.hpp>`.
 | `debug_draw.hpp` | `PhysicsDebugSink` (`line`, `triangle`, `text`), `DebugDrawOptions` |
 | `job_executor.hpp` | `IPhysicsJobExecutor` — run Jolt jobs on the engine job system |
 | `interpolation.hpp` | `FixedStepper` (accumulator), `TransformInterpolator` (prev/current + lerp/slerp) |
+| `fracture.hpp` | Voronoi pre-fracture for destruction: `FractureMesh`, `FractureSettings`, `voronoiFracture` → `FractureResult` (chunks + links), mesh helpers, `serializeFracture` (pure CPU, no Jolt) |
 
 ### Threading
 All `PhysicsWorld` methods are called from one thread (the fixed-update thread), never concurrently with `step()`.
@@ -195,6 +196,31 @@ the same binary, same API call order and same inputs, independent of thread coun
 equality (use server authority / state correction, or rebuild Jolt with the define — engine and lib must match).
 Snapshots embed `JPH_VERSION_ID` and are rejected by a differently-configured build. Bodies should be created in the
 same order on all peers (body IDs are part of the state).
+
+### Voronoi fracture (`fracture.hpp`, destruction)
+```cpp
+FractureSettings s{.chunkCount = 24, .seed = 7};
+FractureResult r = voronoiFracture(makeBoxFractureMesh({1.f, 0.5f, 0.75f}), s);
+// r.chunks[i]: positions/normals/uvs/indices relative to centroid, interiorIndexStart (cut faces after it),
+// hullPoints (convex hull input), volume, bounds; r.links: chunk pairs sharing a cut face (+ area)
+```
+- Seeds: private splitmix64 (std distributions are implementation-defined), rejection-sampled inside the mesh with the
+  generalised winding number, `minSeedSpacing`, optional `focus` cluster. Thin sources (smallest extent <
+  `planarRatio` × middle extent, default 0.6) get all seeds on the mid plane → prism chunks through the thickness
+  (pieces knocked out of a wall are not keyed into their neighbours).
+- Cell i = source clipped by the bisector planes to the other seeds, nearest first; planes farther than the cell's
+  reach are skipped (sorted → early out). Each clip caps the cut: open boundary edges (directed edges without a
+  reverse, keyed by exact position bits) are chained into loops and ear-clipped (degenerate ears are emitted rather
+  than dropped so the edge pairing stays intact). Edge/plane intersections are computed in a canonical vertex order
+  (lexicographic) and snap to an end point within eps, so both triangles of an edge get the bit-identical point and
+  chunks stay closed after being made centroid-relative.
+- Deterministic: same mesh + settings → byte-identical `serializeFracture` output (tested). `fractureKey` hashes mesh
+  + settings (cache key, runtime mesh ids). 32 chunks of a box: ~35-60 ms (RelWithDebInfo, Windows dev PC).
+- Limits: input must be closed and welded (exact shared positions); hole loops (sources with tunnels through a cut
+  plane) are not capped; chunk collision is the convex hull of the chunk (exact for convex sources).
+- Tests (`physics_fracture_tests.cpp`): closed chunks whose volumes sum to the source (0.1 %), inside bounds,
+  deterministic, Jolt hulls with matching volume and centred COM that settle on a floor, connected link graph, hull
+  + focus source, non-convex L prism, serialization round trip + corruption, time budget.
 
 ## Known limits / TODO
 - No soft bodies, vehicles, ragdolls (Jolt supports them; add when gameplay needs them).

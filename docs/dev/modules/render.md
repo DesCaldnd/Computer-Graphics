@@ -365,6 +365,7 @@ High / Ultra.
 | `r.DebugView` | None (Albedo, Normals, Roughness, Metallic, AO, Emissive, LightComplexity, Overdraw, ShadowCascades, Wireframe, Velocity, Depth, ShadowMask) | — |
 | `r.Wireframe`, `r.GpuTimings`, `r.FrustumCulling` | false, true, true | — |
 | `r.Feature.<Name>` | true | per feature, auto-registered |
+| `r.SplitRendering` (`.Adapter`, `.AllowSameAdapter`, `.Transfer`, `.Latency`, `.MinGainMs`, `.Calibrate`) | Off (-1, false, Auto, 2, 0.1, true) | — (hardware pair, not a quality level; see §14) |
 
 Not declared here (runtime owns them): `r.VSync r.WindowMode r.ResolutionX/Y r.Monitor t.MaxFPS g.FOV
 a.MasterVolume`.
@@ -414,6 +415,22 @@ per frame), IBL: **GPU 3.4 ms**. Per pass: DepthPrepass 0.14, LightCulling 0.02,
 Shadow.Points 0.14, ShadowMask 0.19, ForwardOpaque 2.63, Sky 0.06, Tonemap 0.06, Final 0.02. CPU (renderer) about
 1.2 ms.
 
+## 9b. Neural rendering
+
+MLP inference paths (scalar FP32/FP16, `VK_KHR_cooperative_matrix`, `VK_NV_cooperative_vector`), neural texture
+compression (`r.NeuralTextures` Off / DecodeOnLoad / InferenceOnSample; `GpuResourceCache::IMaterialResolveHook`,
+`GpuViewConstants::neuralMaterials`, `kMaterialNeural`, `oxSampleMaterialView` in forward / prepass) and the neural
+denoiser (`r.Denoiser Neural`, learned À-trous kernel inside `rt::SvgfDenoiser`): see
+[render_neural.md](render_neural.md).
+
+## 9c. Variable rate shading
+
+`VariableRateShading` feature (`r.VRS*`, Shading group: on at Low / Medium only, off by default): a content and
+motion adaptive shading rate image (`VK_KHR_fragment_shading_rate` attachment, 16×16 px tiles on NVIDIA) generated
+at AfterDepth from last frame's tile statistics and attached to the colour passes of `r.VRS.Passes`; depth prepass,
+shadows, post-processing and UI never get it. Rate decision, feedback-loop pitfalls (coarse tiles under-reading their
+detail, texture LOD lock-in, refraction), presets, station measurements and tests: [render_vrs.md](render_vrs.md).
+
 ## 10. Known limits / TODO
 
 * GPU-driven culling, LODs, meshlets, streaming, parallel recording: see §13 and `docs/dev/perf.md`. Mesh hot reload
@@ -454,6 +471,13 @@ reasons (`DeviceCaps::whyRayTracingUnavailable()`, plus the RT pipeline for path
 | `VolumetricsRT` | — / Lighting `kFogOrder-50` | `VolumetricFogVisibility` | the volumetrics team's documented hook (r sun, g local ratio, b sky) |
 | `TranslucencyRT` | — / Translucency 1000 | `SceneColorHDR` (in place) | replaces pixels whose nearest translucent surface is refractive |
 | `PathTracer` | — / BeforePostProcess -10000 | `SceneColorHDR` | r.PathTracing; progressive, ray query or RT pipeline |
+
+While the path tracer replaces the frame (`rt::pathTracerActive()`: r.RayTracing, r.PathTracing and the `PathTracer`
+feature toggle), the hybrid effects above (and the Ray Reconstruction guides) declare no pass and allocate no target:
+`RtFeatureBase::gather()` returns false for them, so their SVGF stages and persistent textures (denoiser histories,
+local shadow mask, ReSTIR reservoirs) are never created. They stay enabled, so they keep their exclusive groups and
+the raster fallbacks (shadow maps, GTAO, SSR) do not run either. Before: 8.1 ms wasted per 1080p frame (28.5 ms at 4K)
+on the test scene of `PerfReportRayTracing`. Test: `RayTracingTest.HybridEffectsSkipUnderPathTracer`.
 
 ### Acceleration structures (`rt_scene.hpp`, `rt_scene_gpu.cpp`)
 
@@ -1033,3 +1057,52 @@ no depth. Tessellated patches may show pinhole cracks inside a patch (barycentri
 forward are tessellated, shadows use the base mesh. The bridge copies heightfields on every version change
 (brush strokes on 2k terrains cost a few ms per edited frame). Grass is the dominant forward cost (thin blades,
 quad overdraw).
+
+## 14. Split rendering (`split_rendering.hpp`, guide chapter 35)
+
+Portable passes on a secondary GPU (rhi `SecondaryDevice`, see `rhi.md` "Multi-device"). Off by default.
+
+* **Feasibility on the reference machine** (RTX 3080 + i9-9900K's UHD 630): the iGPU is ~40–70× slower and every
+  1080p RGBA8 round trip is 16.6 MB over PCIe 3.0 (~1.5 ms of primary copies), while FXAA costs 0.04 ms on the
+  3080. Screen-space per-frame passes never pay off on such a pair; candidates are compute-heavy, small-output,
+  latency-tolerant jobs, or pairs with a strong iGPU. `Auto` measures and keeps everything on the primary otherwise.
+  The UHD 630 is currently disabled in firmware (only the RTX 3080 is enumerated); all tests run the secondary on
+  the RTX 3080 itself (`r.SplitRendering.AllowSameAdapter`).
+* **API**: features declare a `PortableSegmentDesc` (one or more `PortablePassDesc`: primary compute pipeline, push
+  constant bytes, `PortableTextureBinding{texture, pushOffset, write}`, `threads`) with `addPortableSegment(ctx,
+  desc)`. Inputs = textures read before written, results = textures whose last access is a write. Not offloaded →
+  exactly the compute passes the feature would have declared (indices patched from `PassContext`). Converted so far:
+  `LdrPost` (FXAA / LUT / grain; pinned to the primary while a user LUT texture is used).
+* **Placement / frame flow** (`SplitRenderingFeature`, registered by `registerBuiltinFeatures`, PreDepth order
+  -1000000, always enabled so it can release the device): one tick per device frame decides the placement for the
+  whole frame (mode, adapter/transfer config, device loss, queued jobs of earlier frames, primary timings from
+  `Device::gpuTimings()`, evaluation every 30 frames in `Auto`). Offloaded segment in frame N: `Split.Export.<name>`
+  (sideEffect transfer pass) copies inputs to slot `N % (latency+1)`; the next tick queues the job with the
+  primary's last graphics timeline point; `Split.Import.<name>` copies the results of frame `N - latency` into the
+  outputs, waiting on the CPU if needed (`stats.split.waitMs`). Warm-up frames run the passes on the primary.
+  Import failure (device lost, 2 s timeout) copies the input through (same format/size) or clears; the next tick
+  releases the device and blocks re-creation until the mode or config changes.
+* **Scheduler** (`Auto`): `rhi::chooseSplit` with measured primary pass times (else `costHintMs`), measured
+  secondary compute times (else primary × calibrated/measured speed ratio, 10 when unknown), path bandwidth defaults
+  replaced by measured `Split.*` times, `SplitController` hysteresis (3 evaluations). `On` offloads every portable
+  segment (experiments, tests).
+* **Stats**: `RenderStats::split` (`SplitRenderingStats`: active, adapter, transfer, latency, segments/offloaded/
+  imported/fallbacks, secondary GPU / compute ms, transfer ms, CPU copy ms, wait ms, predicted saving, speed ratio,
+  status), in `toString()` and the ImGui Stats window ("Split rendering"); cvars in the ImGui Quality panel.
+* **Extensions**: `appendSplitRenderingVulkanExtensions(desc)` (runtime renderer calls it; the editor does not, so
+  it uses Staging).
+* **Tests** (`split_rendering_tests.cpp`, golden `split_rendering_fxaa.png` shared by all paths):
+  `Paths/SplitTransferTest.SameAdapterMatchesSingleGpu/{Auto,HostPointer,Staging}`, `FallsBackWhenNoSecondaryAdapter`,
+  `ToggleAtRuntimeWithoutLeaks` (On/Off ×3, latency change, `SecondaryDevice::liveCount()`), `DeviceLostFallsBackToPrimary`
+  (latency 1: the import of the failed job falls back, then primary, then re-enable), `AutoKeepsLightPassesOnThePrimary`,
+  `PerfReportSameAdapter1080p`. Two renders of the same static scene differ by a few LSB between runs (temporal
+  filters), so comparisons use mean ≤ 0.3 / ≤ 0.3 % pixels off by > 8.
+* **Same-adapter overhead** (RTX 3080 runs both devices, 1080p FXAA, RelWithDebInfo + validation, machine shared
+  with other builds): single GPU 0.47 ms GPU / 0.70 ms per frame; ExternalMemory 1.78 / 2.09 ms (Split.* passes
+  0.57 ms, secondary job 1.0 ms); HostPointer 3.48 / 3.90 ms (2.98, 2.8); Staging 2.67 / 5.28 ms (1.40, 1.75,
+  CPU-bound by the memcpys).
+* **Limits / TODO**: compute passes only (no raster on the secondary); textures 2D / one mip / colour; no buffers in
+  segments; CPU-side synchronisation only (no shared semaphores — D3D12 fence interop would be the cross-vendor
+  GPU-side option); segments are per feature declaration (no automatic chaining across features); the result lags
+  `latency` frames (TAA-like history reprojection is not applied to it); the editor viewport device has no external
+  memory extensions (Staging only); never measured on a real iGPU yet.

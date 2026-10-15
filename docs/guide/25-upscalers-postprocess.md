@@ -175,7 +175,9 @@ if (upscalerAvailability(UpscalerType::DLSS, device.get()).available) {
 | «NVIDIA DLSS needs a newer driver (at least X.Y)» | Обновить драйвер |
 | «NVIDIA DLSS is not supported on this GPU/driver: …» | GTX без тензорных ядер и т. п. |
 
-Что передаётся в DLSS: цвет в HDR (`IsHDR`), глубина с reversed-Z (`DepthInverted`), векторы движения в render-разрешении (`MVLowRes`, масштаб `−render size`), джиттер в пикселях рендера, текстура экспозиции и `InPreExposure`. Без текстуры экспозиции включается флаг `AutoExposure`. Режимы `UltraPerformance` и `Performance` входы экспозиции игнорируют и считают её сами. При смене камеры история сбрасывается, при смене размера или качества фича пересоздаётся. Frame generation и ray reconstruction не интегрированы.
+Что передаётся в DLSS: цвет в HDR (`IsHDR`), глубина с reversed-Z (`DepthInverted`), векторы движения в render-разрешении (`MVLowRes`, масштаб `−render size`), джиттер в пикселях рендера, текстура экспозиции и `InPreExposure`. Без текстуры экспозиции включается флаг `AutoExposure`. Режимы `UltraPerformance` и `Performance` входы экспозиции игнорируют и считают её сами. При смене камеры история сбрасывается, при смене размера или качества фича пересоздаётся. Frame generation не интегрирован.
+
+**DLSS Ray Reconstruction.** При включённой трассировке лучей и `r.Denoiser DLSSRR` или `Auto` слот апскейлера занимает не DLSS, а Ray Reconstruction (фича `DLSSRR`, приоритет выше DLSS, TAAU и FSR 1): сеть сама убирает шум RT-эффектов и масштабирует кадр. `r.Upscaler.Quality` задаёт разрешение рендера так же, как для DLSS (таблица ниже совпадает), `r.Upscaler Off` даёт DLAA. Если RR недоступна, остаются SVGF и выбранный `r.Upscaler`. Подробности, качество и цена — в [главе 24](24-ray-tracing.md), шаг 5.
 
 **Режимы и разрешение рендера.** DLSS сам сообщает оптимальное разрешение для режима, поэтому оно может на пиксель-другой отличаться от процента из таблицы шага 3. Измерено на RTX 3080 при выходе 960×540:
 
@@ -314,8 +316,62 @@ PostProcessSettings s2 = resolvePostProcessSettings(snapshot, settings, cameraPo
 
 > Объём задаёт **силу** эффекта, а cvar — **включён ли** он. Bloom с `bloomIntensity = 0.5` не появится, если `r.Bloom` выключен (уровень PostProcess или голый `Renderer` в тестах). DoF дополнительно требует `focusDistance > 0`.
 
+## Шаг 8. Генерация кадров FSR 3 и низкая задержка
+
+Генерация кадров (`r.FrameGeneration`) вставляет между каждыми двумя отрисованными кадрами один **сгенерированный**:
+AMD FSR 3.1 интерполирует его по глубине, векторам движения и двум соседним кадрам. Игрок видит почти вдвое больше
+кадров, но реакция на ввод не ускоряется — наоборот, отрисованный кадр показывается чуть позже (его «придерживают», пока
+выводится промежуточный). Поэтому генерацию включают вместе с ограничителем задержки (`r.Reflex`, ниже) и тогда, когда
+базовая частота уже приличная (от ~60 отрисованных кадров в секунду).
+
+| cvar | Значения | Что делает |
+| --- | --- | --- |
+| `r.FrameGeneration` | `Off` (по умолч.), `FSR3` (синоним `On`) | FSR 3 через своп-чейн-прокси AMD; только в плеере (вьюпорт редактора не меняется) |
+| `r.Reflex` | `Off`, `On` (по умолч., синоним `Auto`), `OnBoost` | NVIDIA Reflex, если GPU и драйвер его умеют, иначе ограничитель движка |
+| `r.Reflex.Fallback` | `Off`, `JustInTime` (по умолч.), `Strict` | ограничитель движка без Reflex (и всегда при включённой генерации кадров) |
+
+```cpp
+// Плеер: включить генерацию кадров и низкую задержку (то же делает меню настроек и settings.json).
+ox::GraphicsSettings g = engine.settings().user().graphics;
+g.frameGeneration = "FSR3";
+g.reflex = "On";
+engine.settings().setGraphics(g);
+```
+
+Из командной строки: `OxwaldPlayer --cvar r.FrameGeneration=FSR3 --cvar r.Reflex=On --stats`. С `--stats` плеер раз в
+секунду печатает строку генерации:
+
+```
+OxwaldPlayer: frame stats: frame generation (FSR 3) presented=1994 rendered=999 ratio=2.00 output fps=148.4 addedLatency=22.79ms
+OxwaldPlayer: frame stats: latency mode=1 reflex=framegen-proxy limiter=1 sleep=... engineLatency=...
+```
+
+`ratio` — показанные кадры на отрисованный (2,00 — каждый отрисованный кадр получил свой промежуточный), `output fps` —
+частота на экране, `addedLatency` — сколько прокси держит отрисованный кадр до показа (добавка к задержке).
+`reflex=framegen-proxy` — Reflex на этой видеокарте есть, но пока кадры идут через прокси FSR 3 он недоступен, и
+`r.Reflex On` работает через ограничитель движка (`limiter=1`).
+
+**Как это устроено.** При включении рендерер пересоздаёт своп-чейн через прокси FSR 3 (`rhi::Swapchain::setProxy`):
+отрисованный кадр сначала уходит прокси, а тот сам выводит промежуточный и затем отрисованный кадр из своих потоков.
+Основной вид кадра на точке `Overlay` (после тонмаппинга, до UI) копирует картинку без интерфейса и запускает подготовку
+FSR (глубина и векторы движения в разрешении рендера), поэтому генерация работает с любым апскейлером (Off, FSR1, TAAU,
+DLSS), а UI остаётся чётким. Требования: Windows x64 и `amd_fidelityfx_vk.dll` рядом с исполняемым файлом (vcpkg-порт
+`amd-fidelityfx-vk`, CMake-опция `OX_ENABLE_FSR3_FRAMEGEN`); без него пункт меню неактивен и показывает причину
+(`framegen::availability(device).reason`). Видеокарта любая — проверено на RTX 3080.
+
+**Почему не Reflex.** Своп-чейн прокси — собственный объект FSR, а настоящий своп-чейн спрятан внутри DLL; функции
+`VK_NV_low_latency2` к нему не применить. Поэтому при генерации кадров задержку держит ограничитель движка `JustInTime`:
+он задерживает начало кадра ровно настолько, насколько кадр иначе простоял бы в очереди. Выключили генерацию —
+своп-чейн снова обычный, и Reflex возвращается сам. Цифры (fps и задержка с Reflex/без, с генерацией/без на RTX 3080) —
+в [`docs/dev/perf.md`](../dev/perf.md), раздел «Latency».
+
 ## Типичные ошибки и подводные камни
 
+- **Генерация кадров «не ускоряет» управление.** Так и должно быть: ввод опрашивается только в отрисованных кадрах, а
+  отрисованный кадр показывается позже на `addedLatency`. Держите `r.Reflex On` и базовые 60+ кадров в секунду.
+- **`r.FrameGeneration FSR3` в редакторе ничего не меняет.** Генерация работает только в плеере (`RuntimeRenderer`).
+- **Две игры с генерацией кадров одновременно.** Два прокси FSR 3 SDK 1.1.4 на одной видеокарте зависают; GPU-тесты
+  генерации поэтому выполняются строго по одному (именованный мьютекс).
 - **Мыло после включения апскейлера.** Режим `Performance` или `UltraPerformance` на 1080p даёт 540p/360p. Для 1080p берите `Quality`; `Performance` рассчитан на 4K-выход.
 - **Двойное сглаживание.** TAAU и DLSS заменяют TAA. FSR 1 его не заменяет — для FSR держите `r.AntiAliasing = 2` (TAA) или хотя бы FXAA.
 - **Ghosting за частицами и прозрачными объектами.** Они не пишут векторы движения (реактивной маски пока нет). Уменьшите размер быстрых частиц или используйте `StretchedBillboard` ([глава 23](23-transparency-water-particles.md)).
@@ -340,6 +396,8 @@ PostProcessSettings s2 = resolvePostProcessSettings(snapshot, settings, cameraPo
 | [`components/postprocess.hpp`](../../engine/render/include/oxwald/render/components/postprocess.hpp) | `PostProcessSettings`, `PostProcessVolumeComponent`, `registerPostProcessTypes` |
 | [`render_settings.hpp`](../../engine/render/include/oxwald/render/render_settings.hpp) | `RenderSettings::antiAliasing`, `upscaler`, `upscalerQuality`, `screenPercentage`; `registerRenderCVars` |
 | [`render_view.hpp`](../../engine/render/include/oxwald/render/render_view.hpp) | `RenderView::renderExtent`, `outputExtent`, `jitterPixels` |
+| [`features/framegen/frame_generation.hpp`](../../engine/render/include/oxwald/render/features/framegen/frame_generation.hpp) | `framegen::requestedMode`, `appendVulkanRequirements`, `availability`, `Stats`, `FrameGenerator` |
+| [`runtime/renderer.hpp`](../../engine/runtime/include/oxwald/runtime/renderer.hpp) | `LatencyStats` (Reflex / ограничитель, `reflexBehindFrameGeneration`), `RenderStats::frameGeneration` |
 
 Сборка DLSS: [`engine/render/CMakeLists.txt`](../../engine/render/CMakeLists.txt), порт [`vcpkg-overlays/ports/nvidia-dlss`](../../vcpkg-overlays/ports/nvidia-dlss/portfile.cmake). Шейдеры: `engine/shaders/render/postprocess/`. Для разработчиков модуля: [`docs/dev/modules/render_postprocess.md`](../dev/modules/render_postprocess.md).
 

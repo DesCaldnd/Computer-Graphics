@@ -92,7 +92,7 @@ function onDestroy(self)
 end
 ```
 
-Модуль `scripts/util/aim.lua` подключается через `require("util.aim")` (ищется `<корень>/util/aim.lua` или `<корень>/util/aim/init.lua`; результат кэшируется):
+Модуль `scripts/util/aim.lua` подключается через `require("util.aim")` (ищется `<корень>/util/aim.lua` или `<корень>/util/aim/init.lua`; результат кэшируется). В собранной игре (`--pak`) скриптов на диске нет: если файла нет ни в одном корне, VM спрашивает `ScriptVM::setModuleFileReader`, а модуль `script` движка читает такие пути через VFS — корни вида `project://Assets/Scripts` как есть, пути внутри каталога проекта как `project://<относительный путь>`. Без каталога проекта (только пак, например на Android) корень по умолчанию — `project://scripts`. Модули из пака не перезагружаются на лету:
 
 ```lua
 local M = {}

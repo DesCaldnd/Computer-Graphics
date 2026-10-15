@@ -26,6 +26,7 @@ Tools: `tools/oximport` (import one file, print stats), `tools/oxpack` (cook a p
 | `material.hpp` | `MaterialAsset` (reflected), JSON/binary I/O |
 | `asset_data.hpp` | `SceneAsset`, `PrefabAsset`, `ScriptAsset`, blob assets (audio, font, navmesh, heightmap), `SkeletonAsset`, `AnimationClipAsset` |
 | `pak.hpp`, `cook.hpp` | `.oxpak` writer/reader, `PakMountSource` (VFS), `PakAssetSource` (cooked runtime), `cookProject` |
+| `neural/mlp.hpp`, `neural/ntc.hpp` | `ox::nn` CPU MLPs (inference, Adam training, FP16 packing); neural texture compression (`NeuralTextureSet`, `.oxntc`, `AssetType::NeuralTextureSet`), see [render_neural.md](render_neural.md) |
 
 ## Asset database (`AssetRegistry`)
 
@@ -72,7 +73,7 @@ registry.startWatching();  /* each frame: */ registry.poll();         // hot rei
 | `texture` | png jpg jpeg tga bmp psd gif hdr exr ktx2 | Texture | – |
 | `cubemap` | `.oxcube` (`{"faces": [+X,-X,+Y,-Y,+Z,-Z image paths]}`) | Texture (cube) | – |
 | `model` | gltf glb (fastgltf) · obj fbx dae 3ds ply stl blend x lwo ms3d (assimp) | Prefab | `Mesh/<i>` (or `Mesh/merged`), `Material/<i>`, `Texture/<i>[_normal|_linear]` (embedded images), `Skeleton`, `Clip/<i>` |
-| `material` | `.oxmat` (JSON, also the runtime format) | Material | – |
+| `material` | `.oxmat` (JSON, also the runtime format) | Material | `NeuralTextures` (when the meta enables `neuralCompression`: trained from the textures' source images, render_neural.md) |
 | `scene`, `prefab` | `.oxscene(.json)`, `.oxprefab(.json)` | Scene / Prefab (OXB1 binary) | – |
 | `script` | `.lua` | Script (text) | – |
 | `audio` | wav ogg mp3 flac | Audio (OXBL passthrough + sampleRate/channels/frames/duration) | – |
@@ -86,7 +87,7 @@ Custom importers: derive `IAssetImporter` (`name`, `version`, `extensions`, `mai
 `import(ImportContext&)`), then `registry.importers().add(std::make_unique<MyImporter>())` (later registrations
 win). In `import`: `ctx.settings<T>()`, `ctx.readSource()`, `ctx.setMain(type, bytes)`, `ctx.addSubAsset(name, type,
 bytes)`, `artifact.dependencies`, `ctx.resolveAsset(path, settingsHint)` (UUID of another source, meta created on
-demand), `ctx.addSourceDependency(path)`. Register a loader for custom types on the `AssetManager`.
+demand), `ctx.addSourceDependency(path)`, `ctx.readArtifact(uuid)` / `ctx.sourceOf(uuid)` (other assets of the project; only inside an `AssetRegistry`). Register a loader for custom types on the `AssetManager`.
 
 ## Loading (`AssetManager`)
 

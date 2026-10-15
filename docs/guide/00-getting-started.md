@@ -51,9 +51,9 @@ tools/bootstrap.sh --no-editor       # без Qt — заметно быстре
 2. Поставьте vcpkg и задайте `VCPKG_ROOT`:
 
    ```bat
-   git clone https://github.com/microsoft/vcpkg C:\devcpkg
-   C:\devcpkgootstrap-vcpkg.bat
-   setx VCPKG_ROOT C:\devcpkg
+   git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg
+   C:\dev\vcpkg\bootstrap-vcpkg.bat
+   setx VCPKG_ROOT C:\dev\vcpkg
    ```
 
 3. Клонируйте репозиторий в короткий путь без пробелов. Переводы строк фиксирует `.gitattributes` (LF для текста),
@@ -62,7 +62,7 @@ tools/bootstrap.sh --no-editor       # без Qt — заметно быстре
    репозитория поставьте зависимости, затем соберите и запустите тесты:
 
    ```bat
-   %VCPKG_ROOT%cpkg install --x-install-root=vcpkg_installed --triplet x64-windows
+   %VCPKG_ROOT%\vcpkg install --x-install-root=vcpkg_installed --triplet x64-windows
 
    cmake --preset dev -DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_TARGET_TRIPLET=x64-windows
    cmake --build --preset dev
@@ -74,7 +74,7 @@ tools/bootstrap.sh --no-editor       # без Qt — заметно быстре
 `--x-no-default-features` (то же, что делает `tools/bootstrap.sh --no-editor`).
 
 Собирается всё, включая редактор; пресет `dev` идёт с предупреждениями как ошибками (`/W4 /WX`). Исполняемые файлы
-лежат в `build\devin\` (`OxwaldPlayer.exe`, `OxwaldEditor.exe`). Рядом сборка кладёт DLL Qt и рантайм NGX
+лежат в `build\dev\bin\` (`OxwaldPlayer.exe`, `OxwaldEditor.exe`). Рядом сборка кладёт DLL Qt и рантайм NGX
 (`nvngx_dlss.dll`), а в подкаталог `vulkan\` — `vulkan-1.dll` и слой валидации.
 
 ### Linux
@@ -168,7 +168,7 @@ build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor --project MyGame.oxpr
 ```
 
 Вне macOS (без app bundle) исполняемый файл лежит прямо в `build/dev/bin/` — на Windows это
-`build\devin\OxwaldEditor.exe`. Тур по редактору — в главе [30. Редактор](30-editor.md).
+`build\dev\bin\OxwaldEditor.exe`. Тур по редактору — в главе [30. Редактор](30-editor.md).
 
 Тот же разбор аргументов доступен вашей программе: `ox::parseLaunchOptions` возвращает `LaunchOptions`, а
 `toEngineConfig()` превращает их в конфигурацию движка.
@@ -314,6 +314,24 @@ cmake --build build/dev --target ox_guide_examples
 ctest --test-dir build/dev -L guide
 ctest --test-dir build/dev -L guide -R GuideGettingStarted     # только эта глава
 ```
+
+## Документация одним PDF
+
+Всю документацию (README, это руководство, документацию разработчика, отчёты, CHANGELOG) можно собрать в один
+PDF с обложкой, оглавлением, закладками, нумерацией страниц и встроенными картинками. Нужны Python 3.10+ и
+установленный Chrome, Edge или Chromium (версии 131+; на меньших версиях пропадут номера страниц):
+
+```sh
+python -m venv build/docs_venv
+build/docs_venv/bin/pip install -r tools/docs_pdf/requirements.txt      # Windows: build\docs_venv\Scripts\pip
+build/docs_venv/bin/python tools/docs_pdf/build_docs_pdf.py             # -> build/docs/OxwaldEngine-docs.pdf
+```
+
+Опции: `--output ФАЙЛ`, `--include МАСКА` / `--exclude МАСКА` (пути от корня репозитория, можно повторять,
+например `--include "docs/guide/*.md"`), `--html-only` (только промежуточный HTML для отладки), `--keep-html`,
+`--browser ПУТЬ` (или переменная `OX_DOCS_BROWSER`). Тесты: `python -m pytest tools/docs_pdf/tests`; при наличии
+pytest и pypdf они же запускаются в ctest как `docs_pdf.pytest` (интерпретатор можно указать
+`-DOX_DOCS_PYTHON=...`), а цель `docs_pdf` собирает PDF в `<build>/docs/`.
 
 ## Типичные ошибки и подводные камни
 

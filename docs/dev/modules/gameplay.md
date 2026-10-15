@@ -20,7 +20,7 @@ scheduler.tick(world, services, dt);
 `addGameplaySystems(scheduler, services, GameplayConfig)` creates (when missing) `physics::PhysicsWorld`
 (`config.physicsWorld`), `script::ScriptVM` (`config.scriptVM`), `EventBus`, and the runtimes, all registered as
 services: `PhysicsRuntime`, `AnimationRuntime`, `SplineRuntime`, `AudioRuntime`, `AIRuntime`, `NetworkRuntime`,
-`ScriptRuntime`, `CoroutineRuntime` (async). Areas can be switched off in `GameplayConfig`. `TransformSystem` is
+`ScriptRuntime`, `CoroutineRuntime` (async), `DestructionRuntime` (`config.destruction`, needs physics). Areas can be switched off in `GameplayConfig`. `TransformSystem` is
 added if the scheduler has none. The audio runtime uses an `audio::AudioEngine` service if one is registered;
 coroutines need a `CoroutineScheduler` service and the Lua `await` API needs a `script::AsyncBridge` service (both are
 created by the engine runtime / test fixtures, not by gameplay).
@@ -50,6 +50,7 @@ components, so cloned/serialized components never carry stale handles.
 | FixedUpdate | -60 | `Gameplay.AI.BehaviorTrees` | play | tick trees (`tickInterval`) |
 | FixedUpdate | -50 | `Gameplay.AI.Navigation` | play | bake/load navmesh on demand, crowd update, move entities / drive character controllers |
 | FixedUpdate | 0 | `Gameplay.Physics.Step` | play | pending bodies, sync kinematic/teleports/scale in, character moves, `step`, dynamic poses out, events |
+| FixedUpdate | 5 | `Gameplay.Destruction` | play | contacts of the step → damage/breaks, replicated `broken`/zero health, Static-anchor re-check, debris lifetime/fade, budget |
 | FixedUpdate | 10 | `Gameplay.Coroutines.Fixed` | always | `CoroutineScheduler::fixedTick` (after the physics step) |
 | Update | 0 | `Gameplay.Script.Update` | play | `onStart`/`onUpdate`; resolves `physics.raycastAsync` |
 | Update | 50 | `Gameplay.Spline.Followers` | play | followers advance, events |
@@ -91,6 +92,33 @@ Events: `PhysicsRuntime::onCollision` (`CollisionEvent{phase Begin/Persist/End, 
 `onTrigger` (`TriggerEvent{phase Enter/Stay/Exit, trigger, other}`), `onJointBroken`; also published on the `EventBus`.
 API: `bodyOf/entityOf/characterOf`, `raycast` (-> entity), `overlapSphere`, `countHits`, `addForce/addImpulse/...`,
 `linearVelocity/setLinearVelocity`, `teleport`, `debugDraw` flag + `debugOptions`.
+
+### Destruction (category "Physics", `destruction.hpp`, guide chapter 34)
+| Component | Fields |
+| --- | --- |
+| `Destructible` | fracture `chunkCount`, `seed`, `sourceMesh` (asset; empty = Collider: Box/ConvexHull/Mesh, Sphere/Capsule/Cylinder as hulls), `interiorMaterial`, `interiorUvScale`, `planarRatio`; damage `health` (SaveGame, Replicated), `damageThreshold`, `impulseThreshold`, `impulseDamageScale`; debris `density`, `impactImpulseScale`, `spread`, `debrisLifetime`, `fadeDuration`, `maxActiveDebris`, `debrisLayer`; structure `structural`, `anchor` (None/Bottom/Static), `anchorTolerance`, `breakRadius`, `chunkImpulseThreshold`; `breakSound`; `broken` (SaveGame, Replicated, ReadOnly); runtime (not reflected) `prepared` |
+| `DestructionChunk` | runtime marker on spawned chunks (not serializable, not removable): `owner`, `index`, `frozen`, `anchored`; runtime `fracture` |
+
+`DestructionRuntime` (service): play start prepares every destructible (`physics::voronoiFracture` of the source in
+entity space with the world scale baked in, cached by `fractureKey`; identical objects share one fracture and one set
+of chunk meshes, ids `Uuid::fromName("ox.destruction/<key hex>/<i>")`) and records Static-anchor supports. Break: one
+entity per chunk (`RigidBody` + hull `Collider` + `MeshRenderer` {outer, interior} + `DestructionChunk`, unit scale,
+velocity `v + ω × r` + impact share within `breakRadius`), the intact entity loses RigidBody/Collider/MeshRenderer but
+stays alive (scripts, events, replication). Structural objects keep chunks frozen (Static bodies): hit chunks +
+chunks without a path to an anchor through frozen chunks (BFS over `FractureResult::links`) are released; Static
+anchors are re-checked two fixed steps after any break (an intact Static-anchored object whose recorded support is
+gone breaks at that support). Debris: lifetime × `destruction.DebrisLifetimeScale`, fade (body removed, scale → 0,
+destroy) once asleep or after 2× lifetime; per-object `maxActiveDebris` and the global `destruction.MaxActiveDebris`
+fade the oldest moving chunks. API: `applyDamage` (also on chunk entities), `fracture`, `applyRadialDamage` (distance
+to the bounds of intact objects; releases the whole blast radius), `isBroken`, `chunksOf`, `activeDebrisCount`,
+`frozenChunkCount`, `prepare`, `sourceMeshOf`, `setMaxActiveDebris`, `onDestruction` (`DestructionEvent{type
+Fractured/ChunksReleased/Collapsed, cause Damage/Impact/Script/Collapse/Replicated, point, impulse, chunks,
+totalChunks}`, also on the EventBus and as `onEvent(self, "broken"|"chunksReleased"|"collapsed", n)` to the
+object's script), `debugDraw` (support graph). Contacts: Begin impulse ≥ `impulseThreshold` breaks, below it
+`impulse × impulseDamageScale` damage; frozen chunks are released by `chunkImpulseThreshold` (siblings never release
+each other). Render: `engine/render/src/features/destruction/` (extract hook over `prepared`/`fracture` pointers +
+`DestructionMeshes` feature registering `MeshData` in the `GpuResourceCache`; works without services, i.e. in the
+editor viewport too). Net: a replicated `broken = true` fractures the client copy (debris is local).
 
 ### Animation (category "Animation")
 | Component | Fields |
@@ -241,6 +269,7 @@ Global API tables:
 | `scene` | `find(nameOrUuid)`, `findAll(componentName)`, `create([name[, parent]])`, `spawn(prefabNameOrPath[, pos[, rot]])` (IPrefabProvider or document file), `destroy(entity)`; async: `nextFrame()`, `delay(seconds)` |
 | `physics` | `raycast(origin, dir[, maxDist[, ignoreEntity]])` -> `{entity, point, normal, distance}` or nil, `overlapSphere(c, r)` -> entities, `gravity()`, `setGravity(v)`; async: `raycastAsync(origin, dir[, maxDist])` |
 | `audio` | `play(clipPath[, position[, volume]])` -> id or nil, `stop(id[, fade])`, `isPlaying(id)`, `playSource(entity)`, `stopSource(entity[, fade])` |
+| `destruction` | `applyDamage(e, amount[, point[, impulse]])` -> broke, `fracture(e[, point[, impulse]])`, `explode(center, radius, damage[, impulse])` -> affected, `isBroken(e)`, `health(e)`, `chunks(e)`, `activeDebris()`, `setDebugDraw(on)` |
 | `ai` | `findPath(a, b)` -> vec3 list, `moveTo(entity, pos)`, `reportNoise(pos[, loudness[, radius[, instigator[, tag]]]])`, `blackboardSet(entity, key, value)`; async: `moveToAsync(entity, pos)` (Future<bool>: arrived) |
 
 Async functions return `Future` userdata (`script::AsyncBridge`); inside `spawn()`ed coroutines:
@@ -361,8 +390,19 @@ behaviour tree and prefab into a running world (instance/self/blackboard/overrid
 convergence, 20 % loss + server teleport replay, offline input. World: 14 tests (serialization, terrain physics,
 heightmap reload, time of day, buoyancy, streaming files/prefabs, render data, Lua, play-in-editor clone).
 
+Destruction (`destruction_tests.cpp`, 16 tests): component scene round trip (binary + JSON), shared deterministic
+preparation, break on contact impulse over the threshold only (also a 34 m/s CCD cannonball vs a scaled column and a
+dynamic crate), damage threshold/accumulation, inherited velocity, global + per-object debris budget, lifetime fade
+and cleanup, structural collapse when anchors are knocked out, frozen chunk knocked out by a projectile, knocked-out
+wall pieces leave along the shot, blast at the foot collapses a tower, beam on two columns (Static anchors) crumbles
+over a broken column and falls with the second, replicated `broken`, Lua `destruction.*` + `onEvent("broken")`.
+
 ## Known limits / TODO
 
+- Destruction: connectivity, not stress (a span held by one chunk does not break under its own weight); chunks are
+  not re-fractured; outer UVs come from the fracture source (box/hull UVs for collider sources, not the render mesh's
+  UVs); only the `broken` flag is replicated (later chunk releases and debris are local); scale changes after
+  preparation are not picked up.
 - Colliders on child entities are not merged into the parent's rigid body (use a Compound collider); dynamic bodies
   are expected to be roots or under non-moving parents (a moving parent reads as a teleport).
 - Edit-mode raycasts/overlaps return nothing (bodies exist only in play mode).

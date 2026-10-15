@@ -3,12 +3,12 @@
 OxwaldEngine — игровой движок на C++20 с рендерером на Vulkan, ECS на EnTT, редактором на Qt 6 и скриптами на Lua.
 Движок разбит на независимые модули (статические библиотеки `Oxwald::<module>`): `core`, `scene`, `rhi`, `assets`,
 `render`, `physics`, `animation`, `spline`, `audio`, `ai`, `net`, `script`, `async`, `ui`, `world`, `gameplay`,
-`runtime`. Поверх них собираются автономный рантайм **OxwaldPlayer** и редактор **OxwaldEditor**. Все сторонние
-зависимости ставятся через vcpkg.
+`runtime` (под Android к ним добавляется `android`). Поверх них собираются автономный рантайм **OxwaldPlayer** и
+редактор **OxwaldEditor**. Все сторонние зависимости ставятся через vcpkg.
 
 ![Редактор OxwaldEditor](docs/guide/images/editor/main_window_dark.png)
 
-Демо-проект [OxwaldShowcase](samples/OxwaldShowcase/README.md) — хаб и 14 станций, по одной на подсистему движка:
+Демо-проект [OxwaldShowcase](samples/OxwaldShowcase/README.md) — хаб и 15 станций, по одной на подсистему движка:
 
 | Хаб | Волюметрика | Вода и частицы |
 | --- | --- | --- |
@@ -41,14 +41,22 @@ OxwaldEngine — игровой движок на C++20 с рендерером 
 - Отражения: пробы с box projection, SSR, плоские зеркала; GTAO; irradiance volumes.
 - Froxel-туман, объёмный свет и объёмные облака.
 - Прозрачность: OIT, преломление, вода, GPU-частицы.
-- Ray tracing: RT-тени, отражения, AO, DDGI, преломление; ReSTIR DI, path tracer, денойзер в стиле SVGF.
+- Ray tracing: RT-тени, отражения, AO, DDGI, преломление; ReSTIR DI, path tracer, денойзер в стиле SVGF или
+  NVIDIA DLSS Ray Reconstruction (`r.Denoiser`).
 - Сглаживание и апскейлеры: TAA, TAAU, FXAA, FSR 1, DLSS (NGX).
 - Постобработка: автоэкспозиция, bloom, DoF, motion blur, цветокоррекция и LUT, тонмаппинг ACES/AgX/Neutral.
 - GPU-driven: отсечение на GPU (frustum + HiZ occlusion), LOD, меш-шейдеры и meshlets, async compute, стриминг мипов.
+- Переменная частота шейдинга (VRS, `VK_KHR_fragment_shading_rate`): адаптивная карта частоты по содержимому и
+  движению, фовеация; включена на уровнях Shading Low и Medium.
+- Нейронный рендеринг: MLP в шейдерах (FP32/FP16, cooperative matrix/vector), нейросжатие текстур материалов
+  (NTC, в 7 раз меньше BC7/BC5 на диске; распаковка при загрузке или инференс при сэмплинге) и
+  экспериментальный нейроденойзер.
+- Split rendering: перенос лёгких compute-пассов на второй GPU (встроенную графику), `r.SplitRendering`.
 - Мир: ландшафт, растительность, небо; скиннинг в compute-шейдере.
 
 **Игровые подсистемы**
-- `physics`: Jolt — тела, формы, слои коллизий, запросы, соединения, контроллер персонажа.
+- `physics`: Jolt — тела, формы, слои коллизий, запросы, соединения, контроллер персонажа; детерминированная
+  фрактура Вороного для разрушаемости.
 - `animation`: скелеты, клипы, blend spaces, state machine, root motion, IK, скиннинг (CPU и GPU).
 - `spline`: Безье, Catmull-Rom, B-сплайны/NURBS, параметризация по длине дуги, движение по пути, экструзия мешей.
 - `audio`: miniaudio — 3D-звук, шины и микшер, эффекты, окклюзия.
@@ -61,14 +69,21 @@ OxwaldEngine — игровой движок на C++20 с рендерером 
   UI на RmlUi (модели данных, hot reload, Lua).
 - `world`: ландшафт с эрозией и CDLOD, растительность, солнце и луна, смена дня и ночи, ветер и погода, вода
   Герстнера с плавучестью, стриминг чанков.
-- `gameplay`: ECS-компоненты и системы, связывающие все модули с миром.
+- `gameplay`: ECS-компоненты и системы, связывающие все модули с миром, в том числе разрушаемость: урон и импульсы,
+  граф опор с обрушением, бюджет и растворение обломков, события и Lua (глава 34).
 
 **Приложения**
 - `runtime` + OxwaldPlayer: `Engine`, игровой цикл с отдельным потоком рендера, ввод в стиле Enhanced Input, проекты
   `.oxproj`, пользовательские настройки, консоль, headless-режим и выделенный сервер.
 - OxwaldEditor (Qt 6): вьюпорт на Vulkan, outliner, инспектор на основе рефлексии, браузер контента с миниатюрами,
-  undo/redo, play-in-editor, инструменты сплайнов и ландшафта, настройки проекта и масштабируемости, интерфейс RU/EN.
-- Инструменты: `oximport` (импорт ассетов), `oxpack` (упаковка проекта в `.oxpak`), `oxdump` (бинарные файлы ↔ JSON).
+  undo/redo, play-in-editor, гизмо в мировых и локальных осях, инструменты сплайнов и ландшафта, настройки проекта и
+  масштабируемости, интерфейс RU/EN. Слежение за ассетами работает в фоне, вьюпорт не теряет кадры на больших
+  проектах.
+- Android-порт (GameActivity, Vulkan): сенсорное управление и геймпады, жизненный цикл приложения, ассеты из APK,
+  logcat и обработчик падений, отладка через LLDB и Android Studio, Gradle-проект `apps/android` и скрипты
+  `tools/android/`.
+- Инструменты: `oximport` (импорт ассетов), `oxpack` (упаковка проекта в `.oxpak`), `oxdump` (бинарные файлы ↔ JSON),
+  `tools/docs_pdf` (вся документация одним PDF).
 
 ## Требования
 
@@ -84,6 +99,10 @@ OxwaldEngine — игровой движок на C++20 с рендерером 
 - Git LFS на Windows и Linux: overlay-порт `nvidia-dlss` забирает бинарные файлы DLSS SDK через LFS.
 - Для редактора — Qt 6 из vcpkg. Первая сборка Qt занимает много времени; без редактора можно обойтись
   (`--no-editor`).
+- Для Android: JDK 17, Android SDK (platform 35, build-tools 35, CMake 3.31.6), NDK r28c, эмулятор с AVD x86_64
+  или телефон с Vulkan 1.2 (Android 10+). Всё ставится скриптом `tools/android/setup-toolchain.ps1` в
+  `E:\Development\Android`, зависимости — `tools/android/vcpkg-install.ps1`; подробности в
+  [главе 37](docs/guide/37-android.md).
 
 ## Быстрый старт
 
@@ -108,7 +127,8 @@ build/dev/bin/OxwaldPlayer --help                            # все опции
 ```
 
 Другие опции: `--pak`, `--patch-pak` (патч-паки поверх `--pak`, см. `oxpack --patch`), `--scene`, `--width`/`--height`, `--fullscreen`/`--borderless`/`--windowed`, `--monitor`,
-`--user-dir`, `--fixed-rate`, `--single-thread`; аргументы после `--` передаются коду игры.
+`--user-dir`, `--fixed-rate`, `--single-thread`, `--stats` (время кадра раз в секунду), `--pass-stats` /
+`--pass-csv` (GPU-время каждого прохода); аргументы после `--` передаются коду игры.
 
 Запуск редактора (на macOS это бандл):
 
@@ -117,7 +137,7 @@ build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor                      
 build/dev/bin/OxwaldEditor.app/Contents/MacOS/OxwaldEditor --project MyGame.oxproj
 ```
 
-На Windows исполняемые файлы лежат прямо в `build\devin\` (`OxwaldPlayer.exe`, `OxwaldEditor.exe`).
+На Windows исполняемые файлы лежат прямо в `build\dev\bin\` (`OxwaldPlayer.exe`, `OxwaldEditor.exe`).
 
 ### Сборка на Windows
 
@@ -130,7 +150,7 @@ Ninja 1.12.1. Собирается всё: движок, плеер, инстр�
 - Git и Git LFS (`git lfs install`) — без LFS не установится порт `nvidia-dlss` (он скачивает около 700 МБ);
 - Python 3;
 - свежий драйвер GPU;
-- vcpkg: `git clone https://github.com/microsoft/vcpkg C:\devcpkg`, затем `bootstrap-vcpkg.bat` и переменная
+- vcpkg: `git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg`, затем `bootstrap-vcpkg.bat` и переменная
   окружения `VCPKG_ROOT`.
 
 Репозиторий клонируйте в короткий путь без пробелов. Переводы строк фиксирует `.gitattributes` (LF), настраивать
@@ -138,7 +158,7 @@ Ninja 1.12.1. Собирается всё: движок, плеер, инстр�
 репозитория: Ninja должен видеть `cl.exe`.
 
 ```bat
-%VCPKG_ROOT%cpkg install --x-install-root=vcpkg_installed --triplet x64-windows
+%VCPKG_ROOT%\vcpkg install --x-install-root=vcpkg_installed --triplet x64-windows
 
 cmake --preset dev -DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_TARGET_TRIPLET=x64-windows
 cmake --build --preset dev
@@ -181,7 +201,8 @@ engine/<module>/        модули движка: include/oxwald/<module>/ (п�
 engine/shaders/         GLSL-шейдеры (корень для #include)
 editor/                 редактор OxwaldEditor (Qt 6)
 apps/player/            OxwaldPlayer — автономный рантайм игры
-tools/                  bootstrap.sh, oxdump, oximport, oxpack, rhi_window_smoke
+apps/android/           Gradle-проект APK (плеер под Android)
+tools/                  bootstrap.sh, oxdump, oximport, oxpack, rhi_window_smoke, docs_pdf, android (сборка и отладка)
 samples/                OxwaldShowcase (демо-проект), guide_examples (компилируемые примеры из руководства)
 docs/guide/             руководство пользователя (на русском)
 docs/dev/               документация для разработчиков движка
@@ -194,6 +215,9 @@ vcpkg-overlays/         overlay-порты (MoltenVK, NVIDIA DLSS, Vulkan) и т
 - [Архитектура и соглашения для контрибьюторов](docs/dev/ARCHITECTURE.md).
 - [Заметки по модулям](docs/dev/modules/) — API, ограничения, детали реализации.
 - [История изменений](CHANGELOG.md).
+- Вся документация одним PDF (оглавление, закладки, внутренние ссылки):
+  `python tools/docs_pdf/build_docs_pdf.py --output docs/OxwaldEngine-docs.pdf` (нужен Chrome или Edge); цель CMake
+  `docs_pdf` пишет его в `<каталог сборки>/docs/`.
 
 ## Платформы
 
@@ -202,6 +226,7 @@ vcpkg-overlays/         overlay-порты (MoltenVK, NVIDIA DLSS, Vulkan) и т
 | macOS arm64 (Apple GPU, MoltenVK) | Основная платформа разработки: полная сборка, все тесты |
 | Windows 11 x64 (MSVC, NVIDIA RTX 3080) | Проверена: полная сборка с редактором, `ctest` (см. ниже) |
 | Linux x64 | Код и CMake есть, на железе не проверялась |
+| Android 10+ arm64-v8a / x86_64 (GameActivity, Vulkan) | Плеер без редактора: APK собирается Gradle-проектом `apps/android`, проверен на эмуляторе (AVD x86_64, Vulkan хоста через gfxstream); APK arm64-v8a собран, на телефоне (OnePlus 12, Adreno 750) ещё не запускался. См. [главу 37](docs/guide/37-android.md) |
 
 На **macOS** нет аппаратного ray tracing, DLSS и меш-шейдеров: соответствующие эффекты отключены, переключатели в UI
 неактивны и показывают причину, а GPU-тесты таких функций пропускаются (`GTEST_SKIP`), а не падают.
@@ -209,9 +234,12 @@ vcpkg-overlays/         overlay-порты (MoltenVK, NVIDIA DLSS, Vulkan) и т
 На **Windows с NVIDIA RTX** эти пути исполняются. На RTX 3080 проверены DLSS (все режимы качества и DLAA),
 меш-шейдеры, `drawIndirectCount`, async compute и ray tracing: GPU-тесты всех RT-эффектов и path tracer'а в обоих
 режимах проходят, станции демо-проекта отрисованы с `r.RayTracing` без ошибок валидации (что осталось непроверенным —
-в [главе 24](docs/guide/24-ray-tracing.md)). Полный `ctest`: 1249 тестов, ни один не падает, 3 пропускаются по
-делу: нет `VK_EXT_headless_surface`; тест неактивного переключателя RT на машине с RT; оконный скриншот в
-headless-запуске. Редактор открывает демо-проект с Vulkan-вьюпортом и корректно завершается. Изменения после 0.1.0,
+в [главе 24](docs/guide/24-ray-tracing.md)). Полный `ctest` (2026-10-15, RelWithDebInfo): 1422 теста, ни один не
+падает, 9 пропускаются по делу — 5 замеров и обучение запускаются только по переменной окружения; нет
+`VK_EXT_headless_surface`; тест неактивного переключателя RT на машине с RT; оконный скриншот в headless-запуске;
+Android-смоук без подключённого устройства. GPU-тесты (`ctest -L gpu`, 286) идут последовательно, остальные
+параллельно (`ctest -LE "gpu|android"`). Debug-сборка с отладочными итераторами MSVC тоже проходит. Редактор
+открывает демо-проект с Vulkan-вьюпортом (в Release 100 кадров/с на мониторе 100 Гц) и корректно завершается. Изменения после 0.1.0,
 включая найденные портом ошибки, описаны в [истории изменений](CHANGELOG.md).
 
 DLSS (NGX) доступен только на Windows и Linux с NVIDIA RTX.

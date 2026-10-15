@@ -135,6 +135,7 @@ for (ox::usize g = 0; g < ox::kScalabilityGroupCount; ++g) {
 | `r.AO.Method` | 0 | 1 | 2 | 2 | 2 | 0 — выкл., 1 — SSAO, 2 — GTAO |
 | `r.AO.Quality` | 2 | 0 | 1 | 2 | 3 | срезы × шаги GTAO: 1×4, 2×6, 2×8, 3×12 |
 | `r.AO.HalfRes` | false | true | true | false | false | AO в половинном разрешении |
+| `r.AO.HalfResAboveHeight` | 1800 | — | — | — | — | AO в половинном разрешении автоматически от этой высоты кадра (нативный 4K) |
 | `r.GI.IrradianceVolumes` | true | false | true | true | true | объёмы облучённости (запечённый непрямой свет) |
 
 ### Reflections — отражения
@@ -145,6 +146,7 @@ for (ox::usize g = 0; g < ox::kScalabilityGroupCount; ++g) {
 | `r.SSR.Quality` | 2 | 0 | 1 | 2 | 3 | переиспользование лучей 1/4/4/8, временное смешивание |
 | `r.SSR.MaxSteps` | 64 | 24 | 40 | 64 | 96 | шаги трассировки по Hi-Z |
 | `r.SSR.HalfRes` | false | true | true | false | false | SSR в половинном разрешении |
+| `r.SSR.HalfResAboveHeight` | 1800 | — | — | — | — | SSR в половинном разрешении автоматически от этой высоты кадра (нативный 4K) |
 | `r.SSR.MaxRoughness` | 0.7 | 0.35 | 0.5 | 0.7 | 0.85 | выше этой шероховатости — только пробы |
 | `r.ReflectionProbes.Resolution` | 128 | 64 | 128 | 128 | 256 | грань куба пробы |
 | `r.ReflectionProbes.Realtime` | true | false | true | true | true | обновлять realtime-пробы |
@@ -212,6 +214,9 @@ for (ox::usize g = 0; g < ox::kScalabilityGroupCount; ++g) {
 | `r.Terrain.MaxLayers` | 8 | 2 | 3 | 4 | 8 | слоёв splat на пиксель ландшафта |
 | `r.Terrain.Triplanar` | true | false | true | true | true | трипланар на крутых склонах |
 | `r.Terrain.Tessellation` | false | false | false | false | true | тесселяция ландшафта вблизи |
+| `r.VRS` | false | true | true | false | false | переменная частота шейдинга (VRS): ровные участки шейдятся фрагментами 2×2 / 4×4, [глава 27](27-gpu-driven-performance.md) |
+| `r.VRS.Threshold` | 0.02 | 0.05 | 0.03 | 0.02 | 0.02 | порог незаметной разницы VRS: выше — больше грубых плиток |
+| `r.VRS.MaxRate` | 2 | 4 | 2 | 2 | 2 | самый крупный фрагмент VRS (2 = до 2×2, 4 = до 4×4) |
 
 ### Volumetrics — объёмный туман, облака, атмосфера
 
@@ -257,9 +262,11 @@ for (ox::usize g = 0; g < ox::kScalabilityGroupCount; ++g) {
 **Вне групп** (не меняются уровнем, только вручную/меню): `r.ScreenPercentage` (25–200), `r.Upscaler`
 (`Off, FSR1, DLSS, TAAU`), `r.Upscaler.Quality` (`UltraPerformance` 33 %, `Performance` 50 %, `Balanced` 58 %,
 `Quality` 67 %, `Native` 100 % / DLAA), `r.RayTracing`, `r.Tonemapper`, `r.Shadows.Caching`, `r.GpuDriven*` (кроме
-LOD), `r.AsyncCompute`, `r.ParallelRecording`, художественные параметры (`r.Bloom.Intensity`, `r.AO.Radius`, …).
+LOD), `r.AsyncCompute`, `r.ParallelRecording`, `r.SplitRendering*` (перенос лёгких пассов на встроенную графику:
+зависит от пары видеокарт, а не от уровня качества — [глава 35](35-split-rendering.md)), художественные параметры
+(`r.Bloom.Intensity`, `r.AO.Radius`, …).
 
-> **Важно: «По умолч.» ≠ High.** SSR, GTAO, bloom, DoF и motion blur в коде выключены, чтобы голый `Renderer`
+> **Важно: «По умолч.» ≠ High.** SSR, GTAO, bloom, DoF, motion blur и VRS в коде выключены, чтобы голый `Renderer`
 > (тесты, утилиты) рисовал «чистое» изображение. Игра всегда выбирает уровень: `Settings` применяет
 > `GraphicsSettings::quality` (по умолчанию `High`) при старте движка.
 
@@ -365,6 +372,18 @@ engine.setRenderer(ox::render::createRenderer(opts));
 | `upscaler` | `r.Upscaler` | `Off` (по умолч.), `FSR1`, `DLSS`, `TAAU` |
 | `upscalerQuality` | `r.Upscaler.Quality` | `UltraPerformance`, `Performance`, `Balanced`, `Quality` (по умолч.), `Native` |
 | `rayTracing` | `r.RayTracing` | `false`; без ray query рендерер принудительно выключает |
+| `reflex` | `r.Reflex` | `Off`, `On` (по умолч.), `OnBoost` — NVIDIA Reflex, без него (и при генерации кадров) ограничитель движка `r.Reflex.Fallback` |
+| `frameGeneration` | `r.FrameGeneration` | `Off` (по умолч.), `FSR3` — генерация кадров AMD FSR 3, только плеер, Windows x64 ([глава 25](25-upscalers-postprocess.md), шаг 8) |
+
+Низкая задержка и генерация кадров не входят в уровни качества (`sg.*`): это выбор игрока, а не нагрузка на GPU.
+В меню плеера это строки «Низкая задержка» и «Генерация кадров»; неподдерживаемый вариант показывает причину
+(нет Reflex у GPU/драйвера, Reflex недоступен при генерации кадров, нет `amd_fidelityfx_vk.dll`). В редакторе —
+Preferences → Display и Project Settings → Rendering → Display («Low Latency», «Latency Limiter», «Frame Generation»).
+Что они дают на RTX 3080 (в окне 2560×1440, Showcase): Reflex `On` в GPU-bound сцене снижает задержку движка с
+~47 до ~14 мс при −3 % fps; генерация кадров удваивает кадры на экране (104 → 163 в той же сцене, отрисованных —
+82) ценой ~24 мс удержания кадра; с вертикальной синхронизацией без ограничения fps задержку (~48 мс) Reflex почти
+не уменьшает (→ 46 мс) — поставьте `t.MaxFPS` чуть ниже частоты монитора (97 при 100 Гц: 6,4 мс). Таблицы — в
+[`docs/dev/perf.md`](../dev/perf.md), раздел «Latency».
 
 ```cpp
 ox::GraphicsSettings g = engine.settings().user().graphics;

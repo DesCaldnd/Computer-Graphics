@@ -10,7 +10,7 @@
 
 | Задача | Что даёт OxwaldShowcase |
 | --- | --- |
-| Увидеть возможности движка вживую | Хаб с порталами и 14 станций, по одной на подсистему: от теней до сети и сохранений |
+| Увидеть возможности движка вживую | Хаб с порталами и 15 станций, по одной на подсистему: от теней до сети, сохранений и разрушаемости |
 | Найти рабочий пример API | Каждая станция — короткий Lua-скрипт и функция генератора на C++, в которых используются нужные компоненты |
 | Проверить сборку на своей машине | Скриншоты всех станций одной командой (`--tour --shots`), смоук-тест каждой сцены в ctest |
 | Начать свою игру | Образец всего игрового «каркаса»: персонаж от третьего лица, меню RmlUi, настройки графики, переназначение клавиш, сохранения, нативный модуль игры |
@@ -161,7 +161,7 @@ end)
 
 ![Хаб](images/showcase/hub.png)
 
-**Что показывает.** Площадь радиусом 32 м. По кругу стоят 14 порталов (у каждого светящаяся полоса и плита цвета своей станции), между ними фонари с тенями через один. В центре монумент: хромовая сфера в золотом кольце под пробой отражений. Здесь же персонаж от третьего лица (модель солдата из `Legacy/`) с камерой, которая не проходит сквозь стены, фоновые ветер и музыка.
+**Что показывает.** Площадь радиусом 32 м. По кругу стоят 15 порталов (у каждого светящаяся полоса и плита цвета своей станции), между ними фонари с тенями через один. В центре монумент: хромовая сфера в золотом кольце под пробой отражений. Здесь же персонаж от третьего лица (модель солдата из `Legacy/`) с камерой, которая не проходит сквозь стены, фоновые ветер и музыка.
 
 **Движок.** `CharacterControllerComponent` + `player.lua` (движение относительно камеры, шаги), `camera.lua` (`physics.raycast` от точки опоры, чтобы камера не уходила за стены), портал — сенсорный `ColliderComponent` + `TriggerComponent` с `requiredTag = "Player"`, асинхронная смена уровня с автосохранением покидаемого уровня.
 
@@ -742,6 +742,40 @@ end
 
 Подробнее: [07. Сохранения](07-savegames.md).
 
+### 15. Разрушаемость
+
+![Разрушаемость](images/showcase/destruction.png)
+
+**Что показывает.** Колоннада: две колонны и лежащая на них балка. Ядро ломает левую колонну, и балка крошится над ней, а часть над правой колонной остаётся. Стена 7 × 3.5 м из 64 кусков: ядро выбивает в ней дыру, а куски, потерявшие связь с основанием, падают. Башня из 36 кусков: взрыв у основания выбивает низ, и ствол обрушивается в кучу. Пирамида ящиков разлетается на щепки от удара, у каждого ящика не больше четырёх движущихся кусков. Обломки засыпают и растворяются. В экскурсии и в режиме `--photo` всё это проигрывает демо-сценарий.
+
+**Клавиши.** `[ЛКМ]`/`[E]` — ядро из камеры, `[Q]` — взрыв в точке прицела, `[G]` — граф опор (жёлтые связи, зелёные опорные куски), `[T]` — демо-сценарий, `[R]` — собрать станцию заново.
+
+**Движок.** `physics::voronoiFracture` (фрактура при входе в play mode), `DestructibleComponent` (`structural`, `anchor = Bottom` у стены и башни, `anchor = Static` у балки), `DestructionRuntime` (`applyDamage`, `applyRadialDamage`, бюджет обломков), `DestructionEvent`, Lua-таблица `destruction`, cvar'ы `destruction.MaxActiveDebris` и `destruction.DebrisLifetimeScale`, мост рендера, который регистрирует меши кусков в `GpuResourceCache`.
+
+**Файлы.** `Tools/gen_station_destruction.cpp` (`buildDestruction`), `Scripts/destruction_station.lua`, `Prefabs/Cannonball.oxprefab`, `Audio/crumble.wav`.
+
+Разрушаемость настраивается полями компонента прямо в генераторе:
+
+```cpp
+Entity beam = sb.block("Beam", "Sandstone", {-7.5f, 3.5f, -4.0f}, {6.6f, 0.6f, 1.1f});
+auto& d = beam.add<gameplay::DestructibleComponent>();
+d.chunkCount = 28;
+d.structural = true;
+d.anchor = gameplay::DestructionAnchor::Static; // держится за колонны под собой
+d.breakRadius = 1.6f;                           // крошится на 1.6 м вокруг пропавшей опоры
+d.interiorMaterial = gen.mat("Stone");
+```
+
+```lua
+-- destruction_station.lua: выстрел ядром — обычный префаб со стартовой скоростью
+local ball = scene.spawn("Cannonball", origin)
+ball:get("RigidBody").initialLinearVelocity = dir * self.speed
+-- взрыв: урон и импульс со спадом по радиусу
+destruction.explode(hit.point, self.blastRadius, self.blastDamage, self.blastImpulse)
+```
+
+Подробнее: [34. Разрушаемость](34-destruction.md).
+
 ## Шаг 6. Как устроен проект
 
 ### Генератор
@@ -751,7 +785,7 @@ end
 1. Процедурные текстуры, синтезированные звуки (WAV) и скиннинговый манекен в glTF (`gen_textures_audio.cpp`, `gen_mannequin.cpp`).
 2. `.meta` для всех импортируемых файлов без метаданных (`scanAndMetaEverything`).
 3. Материалы `Assets/Materials/*.oxmat`, файл проекта `OxwaldShowcase.oxproj`, префабы, `Data/stations.json` и дерево поведения `AI/guard.oxbt`.
-4. Сцены: главное меню, хаб и 14 станций.
+4. Сцены: главное меню, хаб и 15 станций.
 
 **Стабильные UUID.** Все идентификаторы выводятся из имён через `Uuid::fromName`, поэтому повторный запуск даёт побайтно те же файлы:
 
@@ -890,14 +924,14 @@ end)
 
 ## Шаг 7. Добавляем свою станцию
 
-Добавим станцию 15 «Поворотный стол»: на диске стоят несколько фигур, `[K]` запускает и останавливает вращение. Новая станция сама получит портал в хабе, место в экскурсии, номер в HUD, материалы `Glow.*` / `Accent.*` своего цвета и смоук-тест.
+Добавим станцию 16 «Поворотный стол»: на диске стоят несколько фигур, `[K]` запускает и останавливает вращение. Новая станция сама получит портал в хабе, место в экскурсии, номер в HUD, материалы `Glow.*` / `Accent.*` своего цвета и смоук-тест.
 
 ### 1. Описание станции
 
 Добавьте запись в конец списка `stations()` в [`Tools/gen_common.cpp`](../../samples/OxwaldShowcase/Tools/gen_common.cpp). Поля по порядку: `id`, имя файла сцены, название, описание для инфо-стенда и подписи экскурсии, клавиши, глава «Подробнее», цвет портала и стенда.
 
 ```cpp
-{"turntable", "15_Turntable", "Поворотный стол",
+{"turntable", "16_Turntable", "Поворотный стол",
  "Пример своей станции из главы 33: сцена собрана генератором, а стол вращает Lua-скрипт со свойством speed.",
  "[K] — вращение вкл/выкл", "docs/guide/33-showcase.md", {0.9f, 0.6f, 0.9f}},
 ```
@@ -950,7 +984,7 @@ void buildTurntable(Gen& gen) {
 
 ```cpp
                             {"rtx", buildRtx},             {"saves", buildSaves},
-                            {"turntable", buildTurntable}};
+                            {"destruction", buildDestruction}, {"turntable", buildTurntable}};
 ```
 
 Материалы `BrushedSteel`, `Gold`, `Chrome`, `Glass.Blue`, `Grid.x16` уже есть в `generateMaterials`. Для своих материалов добавьте вызов `gen.material(...)` туда же. Не забудьте `tourCameras`: без `TourCam.A` экскурсия напишет `tour: no TourCam.A` и не сможет показать станцию.
@@ -997,7 +1031,7 @@ end
 cmake --build build/showcase --target oxshowcase_regenerate
 build/showcase/bin/oxshowcase_generate --check            # 0 differences
 build/showcase/bin/OxwaldPlayer --project samples/OxwaldShowcase \
-    --scene project://Assets/Scenes/Stations/15_Turntable.oxscene
+    --scene project://Assets/Scenes/Stations/16_Turntable.oxscene
 build/showcase/bin/OxwaldPlayer --project samples/OxwaldShowcase -- --tour --station turntable
 ```
 
@@ -1009,10 +1043,10 @@ build/showcase/bin/OxwaldPlayer --project samples/OxwaldShowcase -- --tour --sta
 
 ```sh
 cmake --preset dev -B build/showcase -DVCPKG_MANIFEST_INSTALL=OFF
-ctest --test-dir build/showcase -R "Showcase.Scene.15_Turntable|ShowcaseScripts|Showcase.GeneratorCheck" --output-on-failure
+ctest --test-dir build/showcase -R "Showcase.Scene.16_Turntable|ShowcaseScripts|Showcase.GeneratorCheck" --output-on-failure
 ```
 
-`Showcase.Scene.15_Turntable` прогонит сцену 120 кадров в headless-плеере в фоторежиме. `ShowcaseScripts.AllCompile` проверит, что `turntable.lua` компилируется. Если у станции есть состояние, которое нужно проверить (как у сохранений), допишите gtest в `Tests/showcase_tests.cpp` по образцу `ShowcaseSaves.RoundTripInSaveStation`: структура `ShowcaseEngine` поднимает headless-движок с UI и модулем `Showcase` на нужной сцене.
+`Showcase.Scene.16_Turntable` прогонит сцену 120 кадров в headless-плеере в фоторежиме. `ShowcaseScripts.AllCompile` проверит, что `turntable.lua` компилируется. Если у станции есть состояние, которое нужно проверить (как у сохранений), допишите gtest в `Tests/showcase_tests.cpp` по образцу `ShowcaseSaves.RoundTripInSaveStation`: структура `ShowcaseEngine` поднимает headless-движок с UI и модулем `Showcase` на нужной сцене.
 
 ## Тесты
 
@@ -1028,6 +1062,7 @@ ctest --test-dir build/showcase -L showcase
 | `Showcase.Tour` | Полная экскурсия в headless (`--quality medium`, `-- --tour --quit`) доходит до `Tour finished` |
 | `ShowcaseScripts.AllCompile` | Все `Assets/Scripts/**/*.lua` компилируются (их больше 20) |
 | `ShowcaseSaves.RoundTripInSaveStation` | Станция сохранений: сохранить → сдвинуть ящик и переключить лампу → загрузить → позиция и яркость вернулись, слот есть в `listSlots`, ошибок Lua нет |
+| `ShowcaseDestruction.StationDemoBreaksAndCollapses` | Станция разрушаемости: 300 кадров демо в фоторежиме → колонна, балка, башня и стена разрушены, есть обрушение, у балки и стены остались замороженные куски, у кусков есть меши, движущихся обломков не больше `destruction.MaxActiveDebris`, ошибок Lua нет |
 
 Тесты сцен и экскурсии помечены и меткой `gpu`: им нужен Vulkan-рендер, пусть и без окна. Каждый тест получает свой `--user-dir`, поэтому сохранения и настройки разработчика они не трогают.
 

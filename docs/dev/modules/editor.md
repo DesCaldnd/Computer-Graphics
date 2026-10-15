@@ -19,7 +19,8 @@ plain World, file-system content browser, standalone play session) and without `
 Env: `OX_EDITOR_PREFS_DIR` (preferences dir), `OX_EDITOR_NO_VULKAN` (force the software viewport),
 `OX_EDITOR_USER_DIR` (root of the engine's `user://` per project — tests/screenshots), `OX_EDITOR_HEADLESS` (engine
 headless: offline audio), `OX_EDITOR_OFFSCREEN_GPU=1` (offscreen QPA: render the viewport with the GPU renderer on a
-surface-less device; `--screenshots` sets it).
+surface-less device; `--screenshots` sets it), `OX_EDITOR_VIEWPORT_STATS=1` (viewport redraws every tick and logs
+per-second fps / frame interval / frame-slot wait / acquire / CPU / present / GPU and the most expensive passes).
 
 macOS build notes: vcpkg's applocal step rewrites dylib paths and breaks the linker's ad-hoc signature, so the app
 and the test binary are re-signed POST_BUILD. Static Qt Gui links `libMoltenVK.dylib`; the bundle's Vulkan ICD
@@ -146,6 +147,35 @@ supplies grid, gizmo, light/camera shapes and gameplay debug lines as `frame.lin
 device's `DeviceCaps` (`RhiCapsProvider`). Editor primitives use the renderer's ids (`ox.render.primitive.<Name>`) and
 `assets::builtin::defaultMaterial()`; older scenes' ids are still recognised by the software renderer.
 
+Frame pacing: the viewport renders from a single-shot `Qt::PreciseTimer` rescheduled every tick by `FramePacer`
+(`viewport/frame_pacer.hpp`: an accumulating deadline, so a millisecond timer averages the exact target — a plain
+`1000 / fps` interval gave 125 fps for 120 and 166 for 144). The target is `ViewportPanel::pacingFps`: 10 fps while
+unfocused (`throttleWhenUnfocused` / `unfocusedFps`), else the refresh rate of the screen the viewport is on
+(`matchDisplayRefresh`, default on; `QScreen::refreshRate` of `QWidget::screen()`, 60 when unknown — 144/165/240 Hz
+monitors are not capped, the schedule restarts when the window moves to another screen), else `frameLimit`
+(default 120, 0 = unlimited). The pacing runs on the UI
+thread; the edit-mode engine tick (`PlaySession`, 16 ms) shares that thread, so nothing in `Engine::tick` may scale
+with the project size (the asset watcher scans on a background thread — see `docs/dev/perf.md`, "Frame pacing").
+Status bar / stats overlay: `FPS · frame interval · CPU · GPU` (`ViewportPanel::frameStatsText`).
+
+## Transform gizmo (`viewport/gizmo*`)
+`gizmo_math.hpp` is Qt-free (unit-tested directly): `GizmoMode/GizmoSpace/GizmoAxis`, `frameRotation(worldMatrix)`
+(orthonormal frame: X = column 0, Y = column 1 Gram-Schmidt'ed, Z = X × Y; equals `Transform::fromMatrix().rotation`
+without shear, mirroring folded into X), `effectiveOrientation(mode, space, local)` (World → identity, Local → the
+frame, **Scale always local**), `Projection` (pixel project/ray, reversed Z), `Frame` + `pickTranslate/Scale/Rotate`
+(screen-space picking of the rotated arrows, plane quads `planeHandle`, rings, view ring), drag helpers
+(`closestOnLine`, `rayPlane`, `axisTranslation`, `planeTranslation` = per-axis snap in the gizmo frame, `signedAngle`)
+and `applyTranslation/Rotation/Scale(EditTarget{local, parentWorld}, …)`, which return the new *local* transform and
+keep untouched components bit-exact (translation: `local.position += P⁻¹·Δ`; rotation: `L = P⁻¹·dR·P`,
+`rotation = frameRotation(L·R)` → the visible X axis turns exactly by `dR` even under non-uniform parent scale;
+scale: `local.scale *= f` along the entity's own axes, positions spread from the pivot along the gizmo frame for
+multi-selection). `TransformGizmo` (QPainter/DebugDraw drawing, Qt glue) stores the target's local frame every frame
+(`ViewportPanel::updateGizmoTarget` → `frameRotation(primary.worldMatrix())`, so inspector/undo/script rotations
+show at once) and freezes pivot + orientation for a drag (`dragPivot/dragOrientation`). `ViewportPanel::applyGizmoDelta`
+applies the drag to every top-level selected entity about the primary's pivot/frame; one undo command per drag
+(`EditPhase` Begin/Update/End). Space: `ViewportPanel::setGizmoSpace/toggleGizmoSpace` (action `viewport.space`,
+Ctrl+`), persisted as preference `viewport.gizmoSpace` (`"Local"` default / `"World"`, `PreferenceValues::gizmoLocalSpace`).
+
 ## Editing model
 Panels never touch the World directly. `EditorContext::setProperty(ids, "Light", "intensity", value, phase)`,
 `createEntity/createEntities(factory)`, `deleteEntities`, `duplicateEntities`, `reparentEntities`,
@@ -174,9 +204,12 @@ MyFooter(...); }})` with `MyFooter : ComponentExtensionWidget` (`refresh()` foll
 | `IAssetBackend` | `RegistryAssetBackend` (assets) | done |
 | `IPlayRuntime` | `GameplayPlayRuntime` (gameplay + runtime Engine) | done |
 
-## Tests (`editor/tests`, 4 ctest entries)
+## Tests (`editor/tests`, 5 ctest entries)
 Inspector, Command, Settings (as before: editors, undo, play clone, scenes, prefabs, gizmo, scalability, RT/DLSS
-greying, preferences, theme, translation, console, screenshots) and **IntegrationTests**: `.oxproj` create/open
+greying, preferences, theme, translation, console, screenshots), **GizmoTests** (frames incl. sheared/mirrored/
+degenerate matrices, picking of rotated axes/planes/rings, local-axis drag + snapping, local rotation, applying drags
+under a rotated non-uniformly scaled parent, a `ViewportPanel` driven by mouse events in Local space with undo/redo
+and inspector-driven updates, `viewport.gizmoSpace` persistence) and **IntegrationTests**: `.oxproj` create/open
 round trip read back by `ox::Project::load` + Engine started on it + legacy conversion; Play/Simulate/Pause/Step
 through the Engine with a falling rigid body while the edit world stays unchanged and logic systems are restored;
 Finder drop of a PNG → `.meta` + imported texture + thumbnail (memory + disk cache), import settings edit +

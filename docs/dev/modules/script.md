@@ -83,7 +83,7 @@ and reloads all file scripts. Coroutines/timers/subscriptions started by the old
 | `spawn(fn, ...)` / `wait(s)` / `time()` | coroutine scheduler on script time; `wait` only inside `spawn`ed coroutines |
 | `timer` | `timer.after(s, fn)`, `timer.every(s, fn)` → id, `timer.cancel(id)` |
 | `events` | `events.subscribe(name, fn(name, payload))` → id, `events.unsubscribe(id)`, `events.publish(name, payload)` |
-| `require(name)` | `a.b` → `<root>/a/b.lua` or `<root>/a/b/init.lua`; modules run in their own sandbox, results cached |
+| `require(name)` | `a.b` → `<root>/a/b.lua` or `<root>/a/b/init.lua`; modules run in their own sandbox, results cached. Candidates missing on disk go to `ScriptVM::setModuleFileReader` (the runtime's script module reads them through the VFS: `project://…` roots verbatim, paths under the project root as `project://<rel>`; pak-only games get the default root `project://scripts`); such modules are never hot reloaded |
 
 ## Sample script
 

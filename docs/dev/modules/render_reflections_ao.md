@@ -69,6 +69,7 @@ On scene load: `loadOx*` + `setBakedProbe` / `setBakedVolume` (Baked probes / vo
 | `r.SSR.Quality` (reuse 1/4/4/8, temporal blend) | 2 | Reflections: 0, 1, 2, 3 |
 | `r.SSR.MaxSteps` | 64 | Reflections: 24, 40, 64, 96 |
 | `r.SSR.HalfRes` | false | Reflections: on, on, off, off |
+| `r.SSR.HalfResAboveHeight` (half resolution once the render height reaches it; 0 = never) | 1800 | — |
 | `r.SSR.MaxRoughness` | 0.7 | Reflections: 0.35, 0.5, 0.7, 0.85 |
 | `r.SSR.Thickness`, `r.SSR.Temporal` | 0.3, true | — |
 | `r.ReflectionProbes` | true | — |
@@ -83,11 +84,19 @@ On scene load: `loadOx*` + `setBakedProbe` / `setBakedVolume` (Baked probes / vo
 | `r.AO.Method` (0 off, 1 SSAO, 2 GTAO) | 0¹ | GlobalIllumination: 1, 2, 2, 2 |
 | `r.AO.Quality` (GTAO slices×steps 1×4, 2×6, 2×8, 3×12) | 2 | GlobalIllumination: 0, 1, 2, 3 |
 | `r.AO.HalfRes` | false | GlobalIllumination: on, on, off, off |
+| `r.AO.HalfResAboveHeight` (half resolution once the render height reaches it; 0 = never) | 1800 | — |
 | `r.AO.Radius`, `r.AO.Intensity`, `r.AO.Temporal` | 0.75, 1, true | — |
 | `r.GI.IrradianceVolumes` | true | GlobalIllumination: off, on, on, on |
 | `r.GI.IrradianceVolumes.ProbesPerFrame` | 32 | — |
 
 ¹ Declared off so tools/tests that never choose a quality level render as before; every preset enables them.
+
+The SSR and AO traces are the passes whose cost follows the pixel count (2.1-2.3 ms each at native 4K on an RTX
+3080, High). `*.HalfResAboveHeight` (`cv::screenSpaceDownsample`) switches them to half resolution from a render
+height of 1800 px: at native 4K the trace still samples at 1080p density, and the bilateral upsample / resolve keep
+the image (station 4 at 4K: PSNR 40.9 dB against full resolution, run-to-run noise 39.8 dB; frame 11.9 -> 7.8 ms).
+Upscaled 4K (render height 1440 or below) and 1440p are unaffected. Test:
+`ReflectionsTest.ScreenSpaceTracesHalveAboveRenderHeight`.
 
 ## Tests
 

@@ -21,6 +21,8 @@ stays window-system agnostic). Namespace `ox::rhi`. Thin layer over Vulkan: it d
 | `render_graph.hpp` | `RenderGraph`, `PassBuilder`, `PassContext`, `RenderGraphPlan`. |
 | `acceleration_structure.hpp` | `BlasDesc`, `TlasDesc`, `TlasInstance`. |
 | `profiling.hpp` | `GpuTiming`, `GpuMemoryStats`, `RenderDocCapture`. |
+| `multi_device.hpp` | `enumerateAdapters`, `SecondaryDevice`, `CrossDeviceChannel`, `PortableDispatch` (split rendering, see "Multi-device"). |
+| `split_scheduler.hpp` | `CrossDeviceTransfer`, `selectTransferPath`, `chooseSplit`, `SplitController`, `TimingFilter` (pure CPU). |
 | `glfw_surface.hpp` (rhi_glfw) | `initGlfwVulkan()`, `GlfwSurfaceProvider`. |
 
 ## Device, frames, submission
@@ -286,6 +288,102 @@ Verified on Windows 11 with an NVIDIA RTX 3080 (driver 617.42, Vulkan 1.4), MSVC
 * `DeployVulkanRuntime.cmake` uses private temp names (parallel POST_BUILD deployments into one `bin/vulkan` raced).
   `ox_deploy_vulkan_runtime` also copies the NGX/DLSS runtime (`OX_DLSS_RUNTIME_FILES`, Windows/Linux) next to the
   executable.
+
+## Multi-device (split rendering)
+
+`multi_device.hpp` + `split_scheduler.hpp` (new, used by `render::addPortableSegment`, guide chapter 35). Explicit
+multi-adapter without device groups (none exist across vendors): a compute-only **secondary `VkDevice`** next to the
+primary `Device`, created on another `VkPhysicalDevice` of the primary's instance.
+
+* `enumerateAdapters(primary)` → `AdapterInfo` (type, UUIDs, LUID, local memory, `suitable` + reason, external memory
+  extensions); `describeAdapters()` for logs. Requirements of a secondary: Vulkan 1.2, timeline semaphores,
+  descriptor indexing with update-after-bind + partially bound, non-uniform sampled indexing, BDA, scalar layout,
+  synchronization2, a compute queue.
+* `SecondaryDevice::create(primary, {adapterIndex, allowSameAdapter, transfer, calibrate})`: picks the best other
+  adapter (integrated first, never the CPU type); `allowSameAdapter` creates it on the primary's physical device
+  (single-GPU testing). It never presents: no surface, no swapchain, no graphics queue needed.
+  * Calls Vulkan through its own `VolkDeviceTable` (volk's global device functions belong to the primary, so the
+    "one `Device` per process" rule still holds; secondaries are not `Device`s).
+  * A bindless set 0 with the same bindings as the primary (sampled / storage / samplers, default samplers at
+    indices 0–5 mirrored from the primary's descs) + the same 128-byte push-constant layout, so the **same SPIR-V**
+    runs on both. `preparePipeline(handle)` recompiles the primary pipeline's `ComputePipelineDesc` (shader
+    compiler + SPIR-V cache of the primary) per `pipelineVersion` (hot reload works).
+  * Calibration: a 1080p post-process-like kernel (9 bilinear taps + ALU, RGBA8) on both devices, best of 3 →
+    `calibratedSpeedRatio()` (secondary / primary GPU time). Same RTX 3080 for both: 0.123 / 0.121 ms → 0.99.
+* `CrossDeviceCaps` + `selectTransferPath(caps, preference)`:
+  | Path | When | How |
+  | --- | --- | --- |
+  | `ExternalMemory` | `deviceUUID` **and** `driverUUID` equal (same physical GPU) + primary exports opaque Win32/fd memory | one dedicated device-local allocation exported by the primary, imported by the secondary; `VK_QUEUE_FAMILY_EXTERNAL` release/acquire on both sides |
+  | `HostPointer` | `VK_EXT_external_memory_host` on both | aligned host allocation imported into both devices as buffers; GPU copies only (the dGPU reads/writes it over PCIe, an iGPU natively). The real path for dGPU + iGPU |
+  | `Staging` | always | host-visible buffers per device (cached for CPU reads), the worker `memcpy`s between them |
+  The primary needs `appendMultiDeviceExtensions(desc)` (optional external memory win32/fd + host extensions) for
+  the first two; without them Staging is used.
+* `CrossDeviceChannel` (`SecondaryDevice::createChannel({textures, inputs, outputs, slots})`): secondary textures
+  (2D, 1 mip, colour; usage by role, format features checked) + per-direction transfer buffers with one region per
+  texture per slot. Primary side, inside a graph pass on the graphics queue: `recordExport(cmd, slot, inputs)`
+  (images in `TransferRead`), `recordImport(cmd, slot, outputs)` (`TransferWrite`). `submit(slot, ticket,
+  exportDone, dispatches)` queues a job; `wait`/`ready`/`timing(slot)`.
+* **Synchronisation is on the CPU** (opaque semaphores need equal UUIDs; D3D12-fence interop would need D3D12): one
+  worker thread per secondary waits `vkWaitSemaphores` on the primary's graphics timeline for the export's
+  submission, does the staging `memcpy`, records upload copy → `PortableDispatch`es (push constants patched with the
+  secondary's bindless indices) → download copy with 4 timestamps, submits with its own timeline and waits.
+  Textures are transitioned `UNDEFINED → GENERAL` per job (results are fully rewritten). The owner pipelines by
+  `latency` frames so the render thread normally never waits.
+* Failure: `VK_ERROR_DEVICE_LOST` / timeouts mark the device `lost()` (`lostReason()`); queued and later jobs fail,
+  `createChannel` refuses. `simulateDeviceLost()` makes the next job fail (tests). `liveCount()` for leak tests.
+  Destroying a channel waits for its jobs, frees the secondary side at once and retires the primary side through
+  the primary's deferred deletion (the GPU may still copy from it).
+* `split_scheduler.hpp` (pure CPU, `ox_rhi_tests`): `SplitSegmentCost`, `SplitCostModel` (`TransferBandwidth`
+  defaults per path, `primaryFrameMs`, `minGainMs`, `secondaryBudgetFraction` 0.9), `estimateSegment`,
+  `chooseSplit` (max primary saving s.t. secondary + CPU copies ≤ 90 % of the new frame; exact subset search ≤ 16
+  segments, greedy beyond; `force` = offload all portable), `SplitController` (hysteresis: N consecutive equal
+  decisions), `TimingFilter` (EMA).
+* Tests: `ox_rhi_tests` `SplitTransferPath.*`, `SplitScheduler.*`, `SplitController.*`, `TimingFilter.*`;
+  `ox_rhi_gpu_tests` `MultiDeviceTest.*` (adapters, refusal without a second GPU, calibration, round trips through
+  every path with odd sizes and slot reuse, chain with an intermediate texture, device loss, unsupported formats).
+  All run with the secondary on the RTX 3080 itself; the Intel UHD 630 of this machine is disabled in firmware.
+* `RenderGraph::textureDesc(RGTexture)` (additive): declared description of a graph texture (channel signatures).
+
+## Low latency (VK_NV_low_latency2) and swapchain proxies
+
+* `DeviceDesc::enableLowLatency` (default on, windowed devices): `VK_NV_low_latency2` + `VK_KHR_present_id` (+ the
+  `presentId` feature) when listed; on Windows both come from NVIDIA's implicit present layer (`VK_LAYER_NV_present`,
+  driver 617.42: revision 3). `DeviceCaps::lowLatency2 / presentId`.
+* `SwapchainDesc::lowLatency` (default on): swapchains are created with `VkSwapchainLatencyCreateInfoNV`.
+  `Swapchain::setLowLatencyMode({enabled, boost, minimumIntervalUs})` (any thread, re-applied to every recreated
+  swapchain), `latencySleep(timeoutMs)` (`vkLatencySleepNV` + host wait on a private timeline semaphore; returns ms
+  slept or < 0), `setLatencyMarker(presentId, LatencyMarker)`, `latencyTimings()` (`vkGetLatencyTimingsNV`, ≤ 64
+  `LatencyFrameTimings` sorted by present id; `pcLatencyMs()` = simulation start → GPU render end).
+  `setPresentId(id)` (render thread, before the frame's submit): `Device::submit` chains
+  `VkLatencySubmissionPresentIdNV` into the frame's `VkSubmitInfo2` (submits with `SubmitInfo::swapchain`), `present()`
+  chains `VkPresentIdKHR` and emits `PresentStart/End`. A mutex guards the `VkSwapchainKHR` against recreation while
+  the game thread is inside a latency call (`ConcurrentGameThreadSleepWhileTheRenderThreadRecreates`).
+* `ISwapchainProxy` + `Swapchain::setProxy(proxy)`: the swapchain is created / acquired / presented through the
+  proxy's entry points from the next acquire on (AMD FSR 3 frame generation's swapchain, render `features/framegen`).
+  Switching in or out rebuilds the swapchain; Reflex and present ids are off while a proxy owns it
+  (`lowLatencySupported()` false). `DeviceDesc::frameGenerationQueues` reserves the proxy's private queues
+  (`Device::frameGenerationQueues()`: present + image acquire in the graphics family, one compute queue).
+  `Device::graphicsQueueMutex()` exposes the graphics queue's submission lock.
+* Tests (`ox_rhi_gpu_tests`, small GLFW window, skipped without display / extension): `LowLatencyTest.*` — markers in
+  frame order as timestamped by the driver, `VkLatencySubmissionPresentIdNV` ties GPU times to the frame, exactly one
+  sleep per frame, mode toggles + recreation without validation errors, concurrent sleep during recreation.
+
+## Variable rate shading (VK_KHR_fragment_shading_rate)
+
+* `DeviceDesc::enableFragmentShadingRate` (default on); `DeviceCaps::fragmentShadingRate`, `pipelineShadingRate`,
+  `attachmentShadingRate`, `primitiveShadingRate`, attachment texel size range / aspect, `shadingRateMask` (bit
+  `(log2 w << 2) | log2 h` per supported fragment size), combiner and depth/stencil-write properties,
+  `shadingRateSupported(w, h)`.
+* `TextureUsage::ShadingRateAttachment`, `Access::ShadingRateRead` (FRAGMENT_SHADING_RATE_ATTACHMENT stage / layout).
+* Render graph: `PassBuilder::shadingRate(rate, texelSize)` attaches an R8_UINT rate image to a graphics pass
+  (`VkRenderingFragmentShadingRateAttachmentInfoKHR` in `RenderingDesc::shadingRate`); `RenderGraph::pass(i)` returns
+  the builder of an already declared pass, `passType`, `passRenderExtent`, `passShadingRate` let a feature attach it
+  after the passes were declared.
+* Graphics pipelines (`GraphicsPipelineDesc::variableRateShading`, default on) get
+  `VK_PIPELINE_CREATE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR` with combiners (KEEP, REPLACE) when the
+  device has attachment rates — required for draws in a scope with a rate image; without one the rate is 1×1 and the
+  image is bit-identical to a device without the extension (`RenderTest.VrsOffMatchesDeviceWithoutTheExtension`).
+* The only user is render's `VariableRateShading` feature: [render_vrs.md](render_vrs.md).
 
 ## Known limits / TODO
 

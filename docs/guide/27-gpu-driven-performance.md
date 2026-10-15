@@ -16,6 +16,7 @@
 - **async compute** — отсечение света и Hi-Z на отдельной очереди, где это выгодно;
 - **стриминг мипов** — текстуры держат в памяти столько деталей, сколько видно, в рамках бюджета;
 - **параллельный extract и запись команд** на job system;
+- **переменная частота шейдинга (VRS)** — ровные участки кадра шейдятся блоками 2×2 / 4×4;
 - **профилирование**: время каждого пасса на GPU, счётчики отсечения, VRAM, Tracy-зоны.
 
 Пример выигрыша (стресс-сцена, Apple M4 Pro, 1080p, 50 000 экземпляров): CPU-время рендерера **11.4 → 2.1 мс**,
@@ -190,7 +191,81 @@ renderer->stats().parallelRecordedChunks;                           // > 0
 | Асинхронные PSO | пайплайны мешлетов и mesh shaders компилируются на job system; пока не готовы — рисует instanced-путь (`RenderStats::pipelinesCompiling`). Постоянный кэш: `DeviceDesc::pipelineCachePath` |
 | Без аллокаций | extract и списки камеры в установившемся режиме не выделяют память (тест со счётчиком `operator new`); кадр целиком — ~1170 (CPU-путь) / ~1990 (GPU-путь) аллокаций, в основном объявления render graph |
 
-## Шаг 5. Профилирование
+## Шаг 5. Переменная частота шейдинга (VRS)
+
+На ровных участках кадра (небо, туман, гладкие стены, размытые движением или глубиной резкости области) соседние
+пиксели почти одинаковы, и фрагментный шейдер можно запускать один раз на блок 2×2 или 4×4 пикселя. Это делает фича
+`VariableRateShading` через `VK_KHR_fragment_shading_rate`: каждый кадр она строит **карту частоты шейдинга** — по
+байту на плитку 16×16 px (размер плитки задаёт GPU) — и подключает её к дорогим цветовым пассам. Покрытие, глубина и
+края геометрии остаются попиксельными; огрубляется только освещение и текстуры внутри плитки.
+
+```
+AfterDepth:        VRS.Generate      статистика прошлого кадра (перенесённая по Velocity) + движение + DoF → карта
+AfterOpaque:       VRS.AnalyzeOpaque  статистика непрозрачной картинки (только если в кадре есть преломление)
+BeforePostProcess: карта подключается к ForwardOpaque, World.Forward, Sky, воде, прозрачности, частицам;
+                   VRS.Analyze       яркость и перепады яркости каждой плитки → для следующего кадра
+```
+
+Решение для плитки (режим `Adaptive`, по работе NVIDIA «Visually Lossless Content and Motion Adaptive Shading»):
+если перепады яркости внутри плитки меньше порога заметности `r.VRS.Threshold · (яркость + 0.1)`, плитка шейдится
+2×2 (а если в ~2 раза меньше — 4×4, если позволяет `r.VRS.MaxRate`). Быстрое движение и сильное размытие DoF
+огрубляют плитку дополнительно. Гистерезис не даёт плиткам мигать между частотами, а раз в 8 кадров
+(`r.VRS.RefreshPeriod`) каждая плитка один раз шейдится полностью и перемеряется — так грубая плитка замечает
+появившиеся детали (догрузившуюся текстуру, включённый свет).
+
+**Никогда не огрубляются:** depth prepass (нормали, motion vectors и глубина для TAA/DLSS/SSR остаются
+попиксельными, края alpha-test тоже), тени, постобработка, апскейлеры, UI и оверлеи редактора.
+
+**Где работает:** GPU с attachment shading rate — NVIDIA Turing и новее, AMD RDNA 2+, Intel Arc. На Mac (MoltenVK)
+расширения нет, `r.VRS` ничего не делает. Проверка из кода:
+
+```cpp
+#include <oxwald/render/features/vrs/vrs.hpp>
+
+const ox::render::vrs::Availability a = ox::render::vrs::availability(device.caps());
+if (!a.available) OX_LOG_INFO("render", "VRS недоступен: {}", a.reason);    // a.texelSize — размер плитки
+ox::CVarRegistry::instance().set("r.VRS", "1", ox::CVarSource::Code);       // или в консоли: r.VRS 1
+```
+
+| CVar | По умолч. | Low / Medium / High / Ultra | Что делает |
+| --- | --- | --- | --- |
+| `r.VRS` | 0 | 1 / 1 / 0 / 0 | включить VRS |
+| `r.VRS.Mode` | Adaptive | — | `Adaptive` (содержимое + движение), `Motion` (только движение), `Foveated` (края экрана; для шлемов), `DebugOverlay` (раскраска плиток) |
+| `r.VRS.Threshold` | 0.02 | 0.05 / 0.03 / 0.02 / 0.02 | порог заметности; больше — больше грубых плиток |
+| `r.VRS.MaxRate` | 2 | 4 / 2 / 2 / 2 | самый крупный фрагмент: 2 = 2×2, 4 = 4×4 |
+| `r.VRS.RefreshPeriod` | 8 | — | раз в столько кадров плитка перемеряется в полном разрешении (0 — никогда) |
+| `r.VRS.Hysteresis`, `.MotionScale`, `.MotionPixels`, `.Periphery`, `.DepthOfField` | | — | тонкая настройка, см. `docs/dev/modules/render_vrs.md` |
+| `r.VRS.Overlay` | 0 | — | показать карту поверх кадра: синий 1×2/2×1, зелёный 2×2, жёлтый 2×4/4×2, красный 4×4 |
+| `r.VRS.Passes` | (пусто) | — | свой список пассов через запятую вместо встроенного |
+
+**Сколько это даёт** (RTX 3080, станции Showcase, изменение GPU-времени кадра; PSNR / FLIP — разница с кадром без
+VRS, «без VRS повторно» даёт ±1–2 % и PSNR ≥ 66 дБ):
+
+| Станция | 1080p Medium | 4K Medium | 4K Low | качество Medium (PSNR / FLIP) |
+| --- | --- | --- | --- | --- |
+| 01 Свет и тени | −5 % | −8 % | −8 % | 46–49 дБ / 0.007–0.009 |
+| 02 Материалы (стекло) | +1 % | ±0 % | −2 % | 48–49 дБ / 0.008–0.010 |
+| 04 Объёмный свет | −3 % | −7 % | −8 % | 50–52 дБ / 0.008–0.009 |
+| 05 Вода | −2 % | −9 % | −6 % | 50 дБ / 0.008–0.009 |
+| 06 Открытый мир | ≈ −2 % | −6 % | −12 % | 45–47 дБ / 0.011–0.016 |
+
+Сами VRS-пассы стоят 0.04 мс в 1080p и 0.13 мс в 4K (вдвое больше, если в кадре есть преломляющее стекло или вода).
+На RTX 3080 forward-пассы Showcase дешёвые, поэтому выигрыш скромный: VRS включён только на Low и Medium, где
+важнее скорость. На High и Ultra он выключен — потерять даже малую часть детализации там нельзя; при пороге 0.02
+(значение High, если включить `r.VRS 1` вручную) картинка визуально не отличается от исходной, а выигрыш в 4K
+4–7 %. Режим `Motion` ничего не даёт на неподвижной камере, но при повороте камеры экономит столько же, сколько
+Adaptive. Полные таблицы — `docs/dev/perf.md`, раздел «Variable rate shading».
+
+**Подводные камни.**
+- *Текстуры внутри грубой плитки чуть мягче:* производные удваиваются, и выбирается мип на уровень крупнее. Порог
+  0.02–0.03 этого не показывает; на Low (4×4) трава и дерево заметно мягче.
+- *Мелкий текст и тонкие линии в мире* (вывески, провода) на ровном фоне могут огрубиться: поднимите порог только
+  глобально или исключите пасс через `r.VRS.Passes`.
+- *Голый `Renderer` (тесты, утилиты) рисует без VRS* — `r.VRS` по умолчанию 0; игра включает его уровнем качества.
+- *Собственный пасс:* карта подключается к пассам по имени. Чтобы ваш цветовой пасс тоже огрублялся, добавьте его имя
+  в `r.VRS.Passes` (список заменяет встроенный, перечислите и стандартные). Пасс должен рисовать в разрешении рендера.
+
+## Шаг 6. Профилирование
 
 **RenderStats** — всё, что показывает оверлей статистики, доступно из кода (`renderer->stats()`, последний
 завершённый кадр; GPU-времена отстают на число кадров в полёте):
@@ -277,6 +352,7 @@ GPU-времена приходят из timestamp'ов render graph и отст
 | --- | --- |
 | [`render_stats.hpp`](../../engine/render/include/oxwald/render/render_stats.hpp) | `RenderStats`, `PassTiming`, `GpuCullingStats`, `TextureStreamingStats`, `VramCategory` |
 | [`gpu_driven.hpp`](../../engine/render/include/oxwald/render/features/gpu_driven/gpu_driven.hpp) | `asyncComputeHint`, `registerGpuDrivenFeatures` |
+| [`vrs.hpp`](../../engine/render/include/oxwald/render/features/vrs/vrs.hpp) | `vrs::availability`, `chooseTexelSize`, `decideRate` (CPU-эталон решения), `defaultPasses`, `isExcludedPass`, `parsePassList`, `Mode` |
 | [`gpu_types.hpp`](../../engine/render/include/oxwald/render/gpu_types.hpp) | `GpuMeshLod`, `LodSelection`, `selectLod`, `kMaxMeshLods` |
 | [`gpu_scene.hpp`](../../engine/render/include/oxwald/render/gpu_scene.hpp) | `GpuScene`: `structureVersion`, `meshLods`, `instanceLod` |
 | [`render_feature.hpp`](../../engine/render/include/oxwald/render/render_feature.hpp) | `FeatureContext::cullDrawList`, `drawBatches`, `DrawFilter`, `DrawList` |
@@ -286,7 +362,7 @@ GPU-времена приходят из timestamp'ов render graph и отст
 | [`core/profile.hpp`](../../engine/core/include/oxwald/core/profile.hpp), [`rhi/profiling.hpp`](../../engine/rhi/include/oxwald/rhi/profiling.hpp) | `OX_PROFILE_*`, `GpuTiming`, `GpuMemoryStats`, `RenderDocCapture` |
 
 Журнал замеров и методика: [`docs/dev/perf.md`](../dev/perf.md); детали для разработчиков —
-[`docs/dev/modules/render.md`](../dev/modules/render.md) §13.
+[`docs/dev/modules/render.md`](../dev/modules/render.md) §13, VRS — [`render_vrs.md`](../dev/modules/render_vrs.md).
 
 ## Что дальше
 
