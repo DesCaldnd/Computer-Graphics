@@ -16,6 +16,9 @@
 #if OX_HAS_GAMEPLAY
 #include <oxwald/gameplay/gameplay.hpp>
 #endif
+#if OX_HAS_SCRIPT
+#include <oxwald/script/script_vm.hpp>
+#endif
 #if OX_HAS_ASYNC
 #include <oxwald/async/scheduler.hpp>
 #include <oxwald/async/task.hpp>
@@ -23,6 +26,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <fstream>
 
 using namespace ox;
@@ -71,6 +76,7 @@ std::filesystem::path makeProject(const test::TempDir& dir) {
     const auto root = dir / "Game";
     writeLevel(root / "Assets/Levels/start.oxscene", {"Hero", "Ground", "Sky"});
     writeText(root / "Assets/Scripts/hello.lua", "function onUpdate(self, dt) self.entity.name = 'scripted' end\n");
+    writeText(root / "Assets/Scripts/lib/answer.lua", "return { value = 42 }\n");
 #if OX_HAS_GAMEPLAY
     World proto;
     Entity crate = proto.create("Crate");
@@ -150,6 +156,17 @@ TEST(RuntimeAssets, CookedGameRunsFromThePakAlone) {
     EXPECT_TRUE(engine.vfs().exists("project://Game.oxproj"));
     auto listed = engine.vfs().list("project://Assets/Levels", false);
     EXPECT_NE(std::find(listed.begin(), listed.end(), "project://Assets/Levels/start.oxscene"), listed.end());
+#if OX_HAS_SCRIPT
+    // `require` of a module that only exists in the pak: no project directory, so a project:// search root (as the
+    // Showcase adds for Assets/Scripts).
+    ASSERT_FALSE(engine.project());
+    auto& vm = engine.services().get<script::ScriptVM>();
+    vm.addSearchRoot("project://Assets/Scripts");
+    sol::environment env = vm.createEnvironment();
+    script::ScriptResult r = vm.runString("return require('lib.answer').value", "cooked-require", &env);
+    ASSERT_TRUE(r.ok) << r.error;
+    EXPECT_EQ(r.value.as<double>(), 42.0);
+#endif
 
     // Async level change also reads from the pak.
     engine.requestLevelChange("project://Assets/Levels/start.oxscene");
@@ -250,5 +267,36 @@ TEST(RuntimeCoroutines, EntityOwnerIdsMatchOnDestroyAndUnloadPaths) {
         EXPECT_TRUE(globalDone);
         EXPECT_EQ(sched.liveCount(), 0u);
     }
+}
+#endif
+
+#if OX_HAS_ASSETS
+// Editor/dev engines watch the asset tree for hot reimport. The directory walk runs on the watcher's own thread, so
+// a tick does not cost O(asset files) on the game thread (the editor ticks its engine on the UI thread every 16 ms;
+// the synchronous walk cost ~40 ms per tick for the ~750 showcase files on Windows).
+TEST(RuntimeAssets, FileWatchingTickCostDoesNotScaleWithAssetCount) {
+    test::TempDir dir;
+    const auto root = dir / "Game";
+    for (int i = 0; i < 3000; ++i) {
+        writeText(root / "Assets" / "Bulk" / ("d" + std::to_string(i / 100)) / ("f" + std::to_string(i) + ".dat"), "x");
+    }
+    Project p = Project::create(root, "Game");
+    ASSERT_TRUE(p.save());
+    Engine engine;
+    auto cfg = baseConfig(dir);
+    cfg.projectPath = root;
+    cfg.editor = true;
+    cfg.fileWatching = true;
+    ASSERT_TRUE(engine.init(cfg));
+    ASSERT_NE(engine.services().tryGet<assets::AssetRegistry>(), nullptr);
+    engine.tick(1.0 / 60.0);
+    std::vector<double> ms;
+    for (int i = 0; i < 40; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        engine.tick(1.0 / 60.0);
+        ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::sort(ms.begin(), ms.end());
+    EXPECT_LT(ms[ms.size() / 2], 5.0) << "median engine tick with 3000 watched asset files";
 }
 #endif

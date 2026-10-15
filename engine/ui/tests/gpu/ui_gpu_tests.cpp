@@ -10,14 +10,21 @@
 #include <oxwald/runtime/settings.hpp>
 #include <oxwald/rhi/swapchain.hpp>
 #include <oxwald/ui/ui.hpp>
+#if OX_HAS_RHI_GLFW
+#include <oxwald/rhi/glfw_surface.hpp>
+
+#include <GLFW/glfw3.h>
+#endif
 
 #include <RmlUi/Core.h>
 #include <imgui.h>
 
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <string>
 
 using namespace ox;
 using namespace ox::render;
@@ -314,6 +321,111 @@ TEST(UiEngine, WindowedScreenshot) {
     EXPECT_EQ(result.load(), 1);
     EXPECT_TRUE(std::filesystem::exists(png));
     EXPECT_GT(std::filesystem::file_size(png), 100u);
+    std::error_code ec2;
+    std::filesystem::remove_all(dir, ec2);
+}
+
+// A request no frame took before shutdown (e.g. the last frames were skipped while minimised) is reported as failed
+// instead of leaving the callback uncalled.
+TEST(UiEngine, ScreenshotRequestedAfterTheLastFrameFailsAtShutdown) {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("oxwald_shot_" + Uuid::generate().toString());
+#if OX_HAS_RHI_GLFW
+    // A real window: desktop drivers (NVIDIA on Windows) have no VK_EXT_headless_surface.
+    struct Window {
+        GLFWwindow* window = nullptr;
+        ~Window() {
+            if (window) glfwDestroyWindow(window);
+        }
+    } win;
+    if (!rhi::initGlfwVulkan() || !glfwInit()) GTEST_SKIP() << "GLFW/Vulkan loader unavailable (no display?)";
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    win.window = glfwCreateWindow(320, 200, "ox_ui_gpu_tests screenshot at shutdown", nullptr, nullptr);
+    if (!win.window) GTEST_SKIP() << "cannot create a window";
+    rhi::GlfwSurfaceProvider surface(win.window);
+#else
+    TestSurfaceProvider surface;
+#endif
+    Engine engine;
+    engine.setRenderer(render::createRenderer());
+    EngineConfig ec;
+    ec.appName = "OxwaldScreenshotTest";
+    ec.workerThreads = 2;
+    ec.userDir = dir / "user";
+    ec.loadUserSettings = false;
+    ec.saveUserSettingsOnShutdown = false;
+    ec.threadedRendering = false;
+    ec.surface.provider = &surface;
+    ec.surface.framebufferSize = {320, 200};
+    if (Status st = engine.init(ec); !st) {
+        std::filesystem::remove_all(dir);
+        GTEST_SKIP() << "no presentable Vulkan surface: " << st.error().message;
+    }
+    engine.tick(1.0 / 60.0);
+    std::atomic<int> result{-1};
+    ASSERT_TRUE(engine.renderer().requestScreenshot(dir / "never.png", [&](bool ok) { result = ok ? 1 : 0; }));
+    engine.shutdown();
+    EXPECT_EQ(result.load(), 0);
+    EXPECT_FALSE(std::filesystem::exists(dir / "never.png"));
+    std::error_code ec2;
+    std::filesystem::remove_all(dir, ec2);
+}
+
+// Threaded rendering: requests arrive from the game thread while the render thread is in the middle of a frame.
+// The renderer used to look at the queue twice per frame (before rendering the capture view and again when writing),
+// so a request queued in between was written without a capture texture and failed (seen on Android as
+// "screenshot ... FAILED" at the end of --frames runs).
+TEST(UiEngine, WindowedScreenshotsWhileRenderingOnTheRenderThread) {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("oxwald_shot_" + Uuid::generate().toString());
+#if OX_HAS_RHI_GLFW
+    // A real window: desktop drivers (NVIDIA on Windows) have no VK_EXT_headless_surface.
+    struct Window {
+        GLFWwindow* window = nullptr;
+        ~Window() {
+            if (window) glfwDestroyWindow(window);
+        }
+    } win;
+    if (!rhi::initGlfwVulkan() || !glfwInit()) GTEST_SKIP() << "GLFW/Vulkan loader unavailable (no display?)";
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    win.window = glfwCreateWindow(320, 200, "ox_ui_gpu_tests screenshots", nullptr, nullptr);
+    if (!win.window) GTEST_SKIP() << "cannot create a window";
+    rhi::GlfwSurfaceProvider surface(win.window);
+#else
+    TestSurfaceProvider surface;
+#endif
+    Engine engine;
+    engine.setRenderer(render::createRenderer());
+    EngineConfig ec;
+    ec.appName = "OxwaldScreenshotTest";
+    ec.workerThreads = 2;
+    ec.userDir = dir / "user";
+    ec.loadUserSettings = false;
+    ec.saveUserSettingsOnShutdown = false;
+    ec.threadedRendering = true;
+    ec.surface.provider = &surface;
+    ec.surface.framebufferSize = {320, 200};
+    if (Status st = engine.init(ec); !st) {
+        std::filesystem::remove_all(dir);
+        GTEST_SKIP() << "no presentable Vulkan surface: " << st.error().message;
+    }
+    constexpr int kShots = 24;
+    std::array<std::atomic<int>, kShots> results;
+    for (auto& r : results) r = -1;
+    for (int i = 0; i < kShots; ++i) {
+        const auto png = dir / ("shot" + std::to_string(i) + ".png");
+        ASSERT_TRUE(engine.renderer().requestScreenshot(png, [&results, i](bool ok) { results[usize(i)] = ok ? 1 : 0; }));
+        engine.tick(1.0 / 60.0);
+    }
+    engine.tick(1.0 / 60.0); // a request queued during the last frame is taken by the next one
+    engine.tick(1.0 / 60.0);
+    engine.shutdown(); // joins the render thread
+    for (int i = 0; i < kShots; ++i) {
+        EXPECT_EQ(results[usize(i)].load(), 1) << "screenshot " << i;
+        EXPECT_TRUE(std::filesystem::exists(dir / ("shot" + std::to_string(i) + ".png"))) << i;
+    }
     std::error_code ec2;
     std::filesystem::remove_all(dir, ec2);
 }

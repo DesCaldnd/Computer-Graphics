@@ -61,7 +61,7 @@ public:
             });
         const std::optional<Extent2D> up = se == in.render ? std::nullopt : std::optional<Extent2D>(in.render);
         const DenoiserOutputs out = m_shared->denoiser.denoise(
-            ctx, "RtAO", denoiserInputs(in, sig, se), denoiserSettings(st.aoDenoiser, DenoiseOutput::R8, {1, 0, 0, 0}), up);
+            ctx, "RtAO", denoiserInputs(in, sig, se), denoiserSettings(st.aoDenoiser && svgfActive(ctx), DenoiseOutput::R8, {1, 0, 0, 0}), up);
         ctx.resources().setTexture(ox::render::res::kAO, out.result);
     }
 

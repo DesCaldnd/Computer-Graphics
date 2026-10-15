@@ -109,6 +109,11 @@ enum GpuMaterialFlags : u32 {
     kMaterialDoubleSided = 1u << 3,
     kMaterialUnlit = 1u << 4,
     kMaterialSorted = 1u << 5, // transparent: always the sorted path (assets renderQueueOffset != 0), see translucency
+    // Neural texture compression, InferenceOnSample (render/neural): material shaders decode the textures with the
+    // network of slot `flags >> kMaterialNeuralSlotShift` in VIEW.neuralMaterials; the texture indices hold the BC
+    // fallback tail for every other consumer.
+    kMaterialNeural = 1u << 6,
+    kMaterialNeuralSlotShift = 8u,
 };
 
 struct GpuMaterial {
@@ -224,7 +229,7 @@ struct GpuViewConstants {
 
     // Environment / IBL.
     u64 irradianceSH = 0; // address of 9 × vec4 cosine-convolved SH (rgb), evaluate with oxEvalSH9; always valid
-    u32 shPad0 = 0, shPad1 = 0;
+    u64 neuralMaterials = 0; // GpuNeuralMaterial table (render/neural, InferenceOnSample), 0 = none
     u32 prefilteredCube = kInvalidIndex;
     u32 brdfLut = kInvalidIndex;
     u32 skyCube = kInvalidIndex; // environment cubemap (sky capture or HDRI)

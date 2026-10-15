@@ -266,8 +266,37 @@ void ProjectSettingsDialog::buildRendering() {
                 {tr("Off"), tr("SSAO"), tr("GTAO")}, indices(3), cvarBinding(cvars::kAOMethod));
     p->addToggle(tr("Screen Space Reflections"), tr("Hi-Z traced reflections on top of reflection probes."), cvarBinding(cvars::kSSR));
     p->addToggle(tr("Irradiance Volumes"), tr("Baked probe grids for indirect diffuse lighting."), cvarBinding(cvars::kIrradianceVolumes));
+    p->addSection(tr("Neural Rendering"));
+    const QStringList ntcModes = cvarEnumLabels(cvars::kNeuralTextures);
+    p->addCombo(tr("Neural Textures"),
+                tr("Materials imported with neural compression: Off = regular textures, Decode on Load = decompressed to "
+                   "BC7/BC5 when loaded (smaller downloads), Inference on Sample = decoded per sample in the material shader "
+                   "(least memory, costs GPU time)."),
+                ntcModes, indices(int(ntcModes.size())), cvarBinding(cvars::kNeuralTextures));
+    const QStringList ntcFilters = cvarEnumLabels(cvars::kNeuralTexturesFilter);
+    QComboBox* ntcFilter = p->addCombo(tr("Neural Texture Filtering"),
+                                       tr("Stochastic: one decode per sample, smoothed by TAA. Bilinear: four decodes, no noise."),
+                                       ntcFilters, indices(int(ntcFilters.size())), cvarBinding(cvars::kNeuralTexturesFilter));
+    p->addRefresher([ntcFilter] { ntcFilter->setEnabled(cvarBinding(QString::fromLatin1(cvars::kNeuralTextures)).get().toInt() == 2); });
     p->addSection(tr("Display"));
     p->addToggle(tr("VSync"), {}, cvarBinding(cvars::kVSync));
+    const QStringList latencyModes = cvarEnumLabels(cvars::kReflex);
+    p->addCombo(tr("Low Latency"),
+                tr("r.Reflex: NVIDIA Reflex (VK_NV_low_latency2) where supported, otherwise the engine's latency limiter. "
+                   "The editor viewport itself is not affected."),
+                latencyModes, indices(int(latencyModes.size())), cvarBinding(cvars::kReflex));
+    const QStringList limiterModes = cvarEnumLabels(cvars::kReflexFallback);
+    p->addCombo(tr("Latency Limiter"),
+                tr("r.Reflex.Fallback, used without Reflex: Just in Time delays the frame start by the measured "
+                   "queueing, Strict waits for the previous frame's GPU work (lowest latency, lower frame rate)."),
+                limiterModes, indices(int(limiterModes.size())), cvarBinding(cvars::kReflexFallback));
+    const QStringList fgModes = cvarEnumLabels(cvars::kFrameGeneration);
+    p->addCombo(tr("Frame Generation"),
+                tr("r.FrameGeneration: AMD FSR 3 frame interpolation in the player (one generated frame per rendered "
+                   "frame, needs amd_fidelityfx_vk.dll). Never used by the editor viewport."),
+                fgModes, indices(int(fgModes.size())), cvarBinding(cvars::kFrameGeneration));
+
+
     p->addNumber(tr("Frame Rate Limit"), tr("0 = unlimited"), cvarBinding(cvars::kMaxFps), 0, 1000, 1, 0, QStringLiteral(" fps"));
     addPage(p);
 }

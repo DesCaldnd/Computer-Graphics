@@ -56,6 +56,16 @@ if(TARGET glfw)
     set_target_properties(ox_rhi_glfw PROPERTIES FOLDER "engine")
 endif()
 
+# Android surface provider (VK_KHR_android_surface over an ANativeWindow), the counterpart of ox_rhi_glfw.
+if(ANDROID)
+    add_library(ox_rhi_android STATIC android/src/android_surface.cpp android/include/oxwald/rhi/android_surface.hpp)
+    add_library(Oxwald::rhi_android ALIAS ox_rhi_android)
+    target_include_directories(ox_rhi_android PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/android/include>)
+    target_link_libraries(ox_rhi_android PUBLIC ox_rhi PRIVATE android)
+    ox_set_warnings(ox_rhi_android)
+    set_target_properties(ox_rhi_android PROPERTIES FOLDER "engine")
+endif()
+
 if(OX_BUILD_TESTS AND TARGET ox_rhi_tests)
     # tests/*.cpp -> ox_rhi_tests (CPU only); tests/gpu/*.cpp -> ox_rhi_gpu_tests (label gpu, needs a device).
     get_target_property(_srcs ox_rhi_tests SOURCES)
@@ -69,11 +79,15 @@ if(OX_BUILD_TESTS AND TARGET ox_rhi_tests)
         target_link_libraries(ox_rhi_gpu_tests PRIVATE ox_rhi GTest::gtest_main)
         target_include_directories(ox_rhi_gpu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/tests)
         target_compile_definitions(ox_rhi_gpu_tests PRIVATE OX_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+        if(TARGET ox_rhi_glfw) # windowed swapchain tests (low_latency_tests.cpp: VK_NV_low_latency2)
+            target_link_libraries(ox_rhi_gpu_tests PRIVATE ox_rhi_glfw)
+            target_compile_definitions(ox_rhi_gpu_tests PRIVATE OX_RHI_TESTS_HAVE_GLFW=1)
+        endif()
         ox_set_warnings(ox_rhi_gpu_tests)
         ox_add_gpu_test_env(ox_rhi_gpu_tests)
         gtest_discover_tests(ox_rhi_gpu_tests
             DISCOVERY_TIMEOUT 60
-            PROPERTIES LABELS "rhi\;gpu"
-                       ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+            PROPERTIES ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+        ox_gtest_labels(ox_rhi_gpu_tests rhi gpu)
     endif()
 endif()

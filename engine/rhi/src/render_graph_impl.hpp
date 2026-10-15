@@ -33,6 +33,8 @@ struct RGPassDecl {
     std::vector<RGAccessDecl> accesses;
     std::vector<RGAttachmentDecl> colors;
     std::optional<RGAttachmentDecl> depth;
+    u32 shadingRate = ~0u; // fragment shading rate attachment (resource id)
+    VkExtent2D shadingRateTexel{0, 0};
     std::function<void(PassContext&)> fn;
 };
 

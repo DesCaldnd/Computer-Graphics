@@ -22,6 +22,7 @@
 #endif
 #include <nvsdk_ngx_helpers.h>
 #include <nvsdk_ngx_helpers_vk.h>
+#include <nvsdk_ngx_helpers_dlssd_vk.h>
 #include <nvsdk_ngx_vk.h>
 
 #include <atomic>
@@ -56,6 +57,10 @@ NgxState& state() {
     return s;
 }
 std::atomic<bool> g_unavailable{false};
+std::atomic<bool> g_rrUnavailable{false};
+std::atomic<u32> g_liveFeatures{0}; // NGX feature handles alive (all devices)
+// ViewFeature::flags bit marking a Ray Reconstruction feature (never set by NGX's DLSS flags).
+constexpr int kRrFeatureBit = 1 << 30;
 
 std::string resultText(NVSDK_NGX_Result r) {
     const wchar_t* w = GetNGXResultAsString(r);
@@ -90,7 +95,10 @@ NVSDK_NGX_Resource_VK imageResource(rhi::Device& device, rhi::TextureHandle t, b
 }
 
 void releaseLocked(ViewFeature& f) {
-    if (f.handle) NVSDK_NGX_VULKAN_ReleaseFeature(static_cast<NVSDK_NGX_Handle*>(f.handle));
+    if (f.handle) {
+        NVSDK_NGX_VULKAN_ReleaseFeature(static_cast<NVSDK_NGX_Handle*>(f.handle));
+        g_liveFeatures.fetch_sub(1);
+    }
     f = {};
 }
 
@@ -99,6 +107,7 @@ void releaseLocked(ViewFeature& f) {
 bool compiled() { return true; }
 std::string buildUnavailableReason() { return {}; }
 bool knownUnavailable() { return g_unavailable.load(); }
+bool rrKnownUnavailable() { return g_rrUnavailable.load(); }
 
 void requiredExtensions(std::vector<std::string>& instanceExtensions, std::vector<std::string>& deviceExtensions) {
     unsigned int instCount = 0, devCount = 0;
@@ -182,26 +191,43 @@ Status probeLocked(NgxState& s, rhi::Device& device) {
         st.reason = "NGX capability parameters unavailable: " + resultText(r);
         return st;
     }
-    int needsDriver = 0;
-    unsigned int minMajor = 0, minMinor = 0;
-    if (NVSDK_NGX_SUCCEED(NVSDK_NGX_Parameter_GetI(s.params, NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver,
-                                                    &needsDriver)) &&
-        needsDriver) {
-        NVSDK_NGX_Parameter_GetUI(s.params, NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMajor, &minMajor);
-        NVSDK_NGX_Parameter_GetUI(s.params, NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMinor, &minMinor);
-        st.reason = std::format("NVIDIA DLSS needs a newer driver (at least {}.{})", minMajor, minMinor);
-        return st;
-    }
-    int available = 0;
-    r = NVSDK_NGX_Parameter_GetI(s.params, NVSDK_NGX_Parameter_SuperSampling_Available, &available);
-    if (NVSDK_NGX_FAILED(r) || !available) {
-        int initResult = 0;
-        NVSDK_NGX_Parameter_GetI(s.params, NVSDK_NGX_Parameter_SuperSampling_FeatureInitResult, &initResult);
-        st.reason = "NVIDIA DLSS is not supported on this GPU/driver: " +
-                    resultText(NVSDK_NGX_Result(initResult ? initResult : int(r)));
-        return st;
-    }
-    st.available = true;
+    // One NGX feature's capability parameters: <prefix>.NeedsUpdatedDriver / .Available / .FeatureInitResult.
+    struct Caps {
+        const char *needsDriver, *minMajor, *minMinor, *available, *initResult;
+    };
+    auto check = [&](const Caps& c, const char* what, std::string& reason) {
+        int needsDriver = 0;
+        unsigned int minMajor = 0, minMinor = 0;
+        if (NVSDK_NGX_SUCCEED(NVSDK_NGX_Parameter_GetI(s.params, c.needsDriver, &needsDriver)) && needsDriver) {
+            NVSDK_NGX_Parameter_GetUI(s.params, c.minMajor, &minMajor);
+            NVSDK_NGX_Parameter_GetUI(s.params, c.minMinor, &minMinor);
+            reason = std::format("{} needs a newer driver (at least {}.{})", what, minMajor, minMinor);
+            return false;
+        }
+        int available = 0;
+        const NVSDK_NGX_Result ar = NVSDK_NGX_Parameter_GetI(s.params, c.available, &available);
+        if (NVSDK_NGX_FAILED(ar) || !available) {
+            int initResult = 0;
+            NVSDK_NGX_Parameter_GetI(s.params, c.initResult, &initResult);
+            reason = std::format("{} is not supported on this GPU/driver (or its runtime library is missing): {}", what,
+                                 resultText(NVSDK_NGX_Result(initResult ? initResult : int(ar))));
+            return false;
+        }
+        return true;
+    };
+    st.available = check({NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver,
+                          NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMajor,
+                          NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMinor,
+                          NVSDK_NGX_Parameter_SuperSampling_Available,
+                          NVSDK_NGX_Parameter_SuperSampling_FeatureInitResult},
+                         "NVIDIA DLSS", st.reason);
+    // Ray Reconstruction is a separate feature library (nvngx_dlssd.dll / libnvidia-ngx-dlssd.so.*).
+    st.rrAvailable = check({NVSDK_NGX_Parameter_SuperSamplingDenoising_NeedsUpdatedDriver,
+                            NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMajor,
+                            NVSDK_NGX_Parameter_SuperSamplingDenoising_MinDriverVersionMinor,
+                            NVSDK_NGX_Parameter_SuperSamplingDenoising_Available,
+                            NVSDK_NGX_Parameter_SuperSamplingDenoising_FeatureInitResult},
+                           "NVIDIA DLSS Ray Reconstruction", st.rrReason);
     return st;
 }
 
@@ -218,9 +244,14 @@ Status probe(rhi::Device& device) {
     s.probed = true;
     s.device = device.vkDevice();
     s.status = probeLocked(s, device);
+    if (!s.status.available && s.status.rrReason.empty()) s.status.rrReason = s.status.reason; // NGX never came up
     g_unavailable = !s.status.available;
+    g_rrUnavailable = !s.status.rrAvailable;
     if (s.status.available) OX_LOG_INFO("render", "NVIDIA DLSS available (NGX initialised)");
-    else shutdownLocked(s, s.device); // NGX came up but DLSS cannot run: keep nothing on the device
+    if (s.status.rrAvailable) OX_LOG_INFO("render", "NVIDIA DLSS Ray Reconstruction available");
+    else OX_LOG_INFO("render", "DLSS Ray Reconstruction unavailable: {}", s.status.rrReason);
+    // NGX came up but neither feature can run: keep nothing on the device.
+    if (!s.status.available && !s.status.rrAvailable) shutdownLocked(s, s.device);
     // The verdict (and NGX itself) lives exactly as long as the device.
     device.addShutdownCallback([&device] { shutdown(device); });
     return s.status;
@@ -272,6 +303,7 @@ bool evaluate(rhi::Device& device, rhi::CommandList& cmd, ViewFeature& f, const 
             return false;
         }
         f.handle = handle;
+        g_liveFeatures.fetch_add(1);
         f.renderWidth = p.renderWidth;
         f.renderHeight = p.renderHeight;
         f.outputWidth = p.outputWidth;
@@ -321,10 +353,138 @@ bool evaluate(rhi::Device& device, rhi::CommandList& cmd, ViewFeature& f, const 
     return true;
 }
 
+OptimalSettings rrOptimalSettings(rhi::Device& device, u32 outputWidth, u32 outputHeight, UpscalerQuality quality) {
+    OptimalSettings o;
+    if (!probe(device).rrAvailable) return o;
+    NgxState& s = state();
+    std::lock_guard lock(s.mutex);
+    // NGX_DLSSD_GET_OPTIMAL_SETTINGS exists only in the D3D / CUDA helper headers; same callback protocol as DLSS.
+    void* callback = nullptr;
+    NVSDK_NGX_Parameter_GetVoidPointer(s.params, NVSDK_NGX_Parameter_DLSSDOptimalSettingsCallback, &callback);
+    if (!callback) return o;
+    NVSDK_NGX_Parameter_SetUI(s.params, NVSDK_NGX_Parameter_Width, outputWidth);
+    NVSDK_NGX_Parameter_SetUI(s.params, NVSDK_NGX_Parameter_Height, outputHeight);
+    NVSDK_NGX_Parameter_SetI(s.params, NVSDK_NGX_Parameter_PerfQualityValue, perfQuality(quality));
+    NVSDK_NGX_Parameter_SetI(s.params, NVSDK_NGX_Parameter_RTXValue, false);
+    if (NVSDK_NGX_FAILED(reinterpret_cast<PFN_NVSDK_NGX_DLSS_GetOptimalSettingsCallback>(callback)(s.params))) return o;
+    unsigned int w = 0, h = 0;
+    NVSDK_NGX_Parameter_GetUI(s.params, NVSDK_NGX_Parameter_OutWidth, &w);
+    NVSDK_NGX_Parameter_GetUI(s.params, NVSDK_NGX_Parameter_OutHeight, &h);
+    if (w == 0 || h == 0) return o;
+    o.valid = true;
+    o.renderWidth = w;
+    o.renderHeight = h;
+    return o;
+}
+
+bool evaluateRR(rhi::Device& device, rhi::CommandList& cmd, ViewFeature& f, const RrEvaluateParams& p) {
+    if (!probe(device).rrAvailable) return false;
+    NgxState& s = state();
+    std::lock_guard lock(s.mutex);
+    int flags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes |
+                NVSDK_NGX_DLSS_Feature_Flags_DepthInverted; // reversed-Z
+    if (!p.exposure) flags |= NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
+    const bool recreate = !f.handle || f.renderWidth != p.renderWidth || f.renderHeight != p.renderHeight ||
+                          f.outputWidth != p.outputWidth || f.outputHeight != p.outputHeight ||
+                          f.quality != i32(p.quality) || f.flags != (flags | kRrFeatureBit);
+    if (recreate) {
+        if (f.handle) {
+            device.waitIdle(); // the previous feature may still be referenced by frames in flight
+            releaseLocked(f);
+        }
+        NVSDK_NGX_DLSSD_Create_Params cp{};
+        cp.InDenoiseMode = NVSDK_NGX_DLSS_Denoise_Mode_DLUnified;
+        cp.InRoughnessMode = NVSDK_NGX_DLSS_Roughness_Mode_Packed; // Normals.w holds the perceptual roughness
+        cp.InUseHWDepth = NVSDK_NGX_DLSS_Depth_Type_HW;
+        cp.InWidth = p.renderWidth;
+        cp.InHeight = p.renderHeight;
+        cp.InTargetWidth = p.outputWidth;
+        cp.InTargetHeight = p.outputHeight;
+        cp.InPerfQualityValue = perfQuality(p.quality);
+        cp.InFeatureCreateFlags = flags;
+        // Preset E (latest transformer model) for every quality mode instead of the default (preset F): on the
+        // RayReconstructionTest quality scene it is 0.2 dB closer to the path tracer, ~0.1 dB closer to the
+        // converged hybrid frame and flickers less at DLAA (0.045 vs 0.088 mean |dL|), for a 4-15 % slower RR pass
+        // (RTX 3080; docs/dev/modules/render_postprocess.md).
+        for (const char* hint : {NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance,
+                                 NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance}) {
+            NVSDK_NGX_Parameter_SetUI(s.params, hint, NVSDK_NGX_RayReconstruction_Hint_Render_Preset_E);
+        }
+        NVSDK_NGX_Handle* handle = nullptr;
+        const NVSDK_NGX_Result r = NGX_VULKAN_CREATE_DLSSD_EXT1(device.vkDevice(), cmd.vk(), 1, 1, &handle, s.params, &cp);
+        if (NVSDK_NGX_FAILED(r) || !handle) {
+            static std::atomic<bool> logged{false};
+            if (!logged.exchange(true)) {
+                OX_LOG_ERROR("render", "DLSS Ray Reconstruction feature creation failed: {}", resultText(r));
+            }
+            return false;
+        }
+        f.handle = handle;
+        g_liveFeatures.fetch_add(1);
+        f.renderWidth = p.renderWidth;
+        f.renderHeight = p.renderHeight;
+        f.outputWidth = p.outputWidth;
+        f.outputHeight = p.outputHeight;
+        f.quality = i32(p.quality);
+        f.flags = flags | kRrFeatureBit;
+    }
+    NVSDK_NGX_Resource_VK color = imageResource(device, p.color, false);
+    NVSDK_NGX_Resource_VK depth = imageResource(device, p.depth, false);
+    NVSDK_NGX_Resource_VK motion = imageResource(device, p.motion, false);
+    NVSDK_NGX_Resource_VK normals = imageResource(device, p.normals, false);
+    NVSDK_NGX_Resource_VK diffuse = imageResource(device, p.diffuseAlbedo, false);
+    NVSDK_NGX_Resource_VK specular = imageResource(device, p.specularAlbedo, false);
+    NVSDK_NGX_Resource_VK output = imageResource(device, p.output, true);
+    NVSDK_NGX_Resource_VK exposure{}, hitDistance{};
+    if (p.exposure) exposure = imageResource(device, p.exposure, false);
+    if (p.specularHitDistance) hitDistance = imageResource(device, p.specularHitDistance, false);
+    // NGX reads the matrices as row-major 4x4 with row vectors: exactly the memory layout of glm's column-major,
+    // column-vector matrices.
+    glm::mat4 worldToView = p.worldToView, viewToClip = p.viewToClip;
+
+    NVSDK_NGX_VK_DLSSD_Eval_Params e{};
+    e.pInColor = &color;
+    e.pInOutput = &output;
+    e.pInDepth = &depth;
+    e.pInMotionVectors = &motion;
+    e.pInNormals = &normals;
+    e.pInRoughness = &normals; // NVSDK_NGX_DLSS_Roughness_Mode_Packed: roughness in normals.w
+    e.pInDiffuseAlbedo = &diffuse;
+    e.pInSpecularAlbedo = &specular;
+    e.pInSpecularHitDistance = p.specularHitDistance ? &hitDistance : nullptr;
+    e.pInExposureTexture = p.exposure ? &exposure : nullptr;
+    // Same conventions as DLSS super resolution (verified by the PostProcessTest.Dlss* tests).
+    e.InJitterOffsetX = p.jitterPixels.x;
+    e.InJitterOffsetY = p.jitterPixels.y;
+    e.InRenderSubrectDimensions = {p.renderWidth, p.renderHeight};
+    e.InReset = p.reset ? 1 : 0;
+    e.InMVScaleX = -f32(p.renderWidth);
+    e.InMVScaleY = -f32(p.renderHeight);
+    e.InPreExposure = p.preExposure;
+    e.InExposureScale = 1.0f;
+    e.InFrameTimeDeltaInMsec = p.frameTimeMs;
+    e.pInWorldToViewMatrix = &worldToView[0][0];
+    e.pInViewToClipMatrix = &viewToClip[0][0];
+    const NVSDK_NGX_Result r =
+        NGX_VULKAN_EVALUATE_DLSSD_EXT(cmd.vk(), static_cast<NVSDK_NGX_Handle*>(f.handle), s.params, &e);
+    if (NVSDK_NGX_FAILED(r)) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true)) OX_LOG_ERROR("render", "DLSS Ray Reconstruction evaluation failed: {}", resultText(r));
+        return false;
+    }
+    return true;
+}
+
 void release(ViewFeature& f) {
     std::lock_guard lock(state().mutex);
     releaseLocked(f);
 }
+
+u32 liveFeatureCount() { return g_liveFeatures.load(); }
 
 void shutdown(rhi::Device& device) {
     NgxState& s = state();
@@ -335,6 +495,7 @@ void shutdown(rhi::Device& device) {
     s.device = VK_NULL_HANDLE;
     s.status = {};
     g_unavailable = false; // the next device is probed afresh
+    g_rrUnavailable = false;
 }
 
 } // namespace ox::render::dlss

@@ -253,14 +253,15 @@ public:
         // --- denoise + publish ---
         const std::optional<Extent2D> up = se == in.render ? std::nullopt : std::optional<Extent2D>(in.render);
         // Visibility signals: stale history (a shadow that moved on) is clamped away instead of fading out.
+        const bool svgf = st.shadowDenoiser && svgfActive(ctx); // off under DLSS Ray Reconstruction
         DenoiserSettings sunSettings =
-            denoiserSettings(st.shadowDenoiser, DenoiseOutput::RGBA8, {1.0f / 3, 1.0f / 3, 1.0f / 3, 0.0f});
+            denoiserSettings(svgf, DenoiseOutput::RGBA8, {1.0f / 3, 1.0f / 3, 1.0f / 3, 0.0f});
         sunSettings.clampHistory = true;
         const DenoiserOutputs sun = m_shared->denoiser.denoise(ctx, "RtShadowSun", denoiserInputs(in, sunSig, se), sunSettings, up);
         R.setTexture(ox::render::res::kShadowMask, sun.result);
         if (anyLocal) {
             DenoiserSettings localSettings =
-                denoiserSettings(st.shadowDenoiser, DenoiseOutput::RGBA8, {0.25f, 0.25f, 0.25f, 0.25f});
+                denoiserSettings(svgf, DenoiseOutput::RGBA8, {0.25f, 0.25f, 0.25f, 0.25f});
             localSettings.clampHistory = true;
             const DenoiserOutputs local =
                 m_shared->denoiser.denoise(ctx, "RtShadowLocal", denoiserInputs(in, localSig, se), localSettings, up);

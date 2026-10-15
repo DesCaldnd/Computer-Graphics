@@ -43,6 +43,10 @@ struct RenderingDesc {
     // The scope is filled only by executeSecondary() (VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT); viewport
     // and scissor are then set by the secondaries (Device::secondaryCommandList).
     bool secondaryContents = false;
+    // Fragment shading rate attachment (R8_UINT, TextureUsage::ShadingRateAttachment, layout
+    // FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL) covering the render area with texels of shadingRateTexelSize pixels.
+    TextureHandle shadingRate;
+    VkExtent2D shadingRateTexelSize{0, 0};
 };
 
 // Attachment formats / extent a secondary command list inherits (multithreaded recording inside one rendering scope).

@@ -14,6 +14,7 @@ void registerRayTracingFeatures(FeatureRegistry& registry) {
     registry.add(rt::makeVolumetricsRtFeature(shared));
     registry.add(rt::makeTranslucencyRtFeature(shared));
     registry.add(rt::makePathTracerFeature(shared));
+    registry.add(rt::makeRayReconstructionGuidesFeature(shared));
 }
 
 } // namespace ox::render

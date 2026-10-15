@@ -22,6 +22,7 @@ extern CVar<float> cvTaaCurrentWeight;  // r.TAA.CurrentFrameWeight
 extern CVar<bool> cvTaaAntiFlicker;     // r.TAA.AntiFlicker
 extern CVar<int> cvFxaaQuality;         // r.FXAA.Quality
 extern CVar<float> cvUpscalerSharpness; // r.Upscaler.Sharpness
+extern CVar<int> cvDenoiser;            // r.Denoiser (SVGF, DLSSRR, Auto)
 extern CVar<bool> cvBloom;
 extern CVar<int> cvBloomQuality;
 extern CVar<float> cvBloomIntensity;
@@ -50,6 +51,13 @@ inline constexpr std::string_view kExposure = "Exposure";            // R32F 1×
 [[nodiscard]] bool temporalUpscalerActive(const RenderSettings& s, const rhi::DeviceCaps& caps);
 // DLSS can run on this device (compiled with NGX, NVIDIA GPU, NGX initialised without error so far).
 [[nodiscard]] bool dlssUsable(const rhi::DeviceCaps& caps);
+// Ray Reconstruction can run on this device (compiled with NGX, NVIDIA GPU, not known to be unavailable).
+[[nodiscard]] bool rayReconstructionUsable(const rhi::DeviceCaps& caps);
+// Render resolution quality of Ray Reconstruction: r.Upscaler.Quality, or Native (DLAA) when r.Upscaler is Off.
+[[nodiscard]] UpscalerQuality rayReconstructionQuality(const RenderSettings& s);
+// DLSSRR feature: this view runs Ray Reconstruction this frame / no longer runs it.
+void markRayReconstruction(const RenderView& view);
+void forgetRayReconstruction(const RenderView& view);
 
 // Settings of the view being set up (volumes blended for the view's camera position).
 [[nodiscard]] PostProcessSettings viewSettings(FeatureContext& ctx);
@@ -79,6 +87,8 @@ std::unique_ptr<IRenderFeature> makeAutoExposureFeature();
 std::unique_ptr<IRenderFeature> makeTaaFeature();
 std::unique_ptr<IRenderFeature> makeTaauFeature();
 std::unique_ptr<IRenderFeature> makeDlssFeature();
+std::unique_ptr<IRenderFeature> makeDlssRayReconstructionFeature();
+std::unique_ptr<IRenderFeature> makeDlssRayReconstructionReleaseFeature(IRenderFeature& rayReconstruction);
 std::unique_ptr<IRenderFeature> makeFsr1Feature();
 std::unique_ptr<IRenderFeature> makeBloomFeature();
 std::unique_ptr<IRenderFeature> makeDepthOfFieldFeature();

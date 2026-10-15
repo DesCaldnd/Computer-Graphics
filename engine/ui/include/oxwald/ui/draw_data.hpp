@@ -146,7 +146,11 @@ struct RenderInfo {
     rhi::GpuMemoryStats memory;
     rhi::DeviceCaps caps;
     std::vector<UpscalerAvailability> upscalers;
+    // r.FrameGeneration (FSR 3): available on this device (windowed, FidelityFX runtime, queues) or why not.
+    bool frameGenerationAvailable = false;
+    std::string frameGenerationReason;
     glm::uvec2 outputSize{0, 0};
+
     glm::uvec2 renderSize{0, 0};
 };
 

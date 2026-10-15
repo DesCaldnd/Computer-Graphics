@@ -17,6 +17,7 @@ layout(set = 0, binding = 1, r16f) uniform image2D oxImages2D_r16f[];
 
 layout(buffer_reference) buffer LightClusters;
 layout(buffer_reference) buffer OxPlanarReflectionBuffer; // defined in render/reflections/planar.glsl
+layout(buffer_reference) buffer OxNeuralMaterials;        // defined in render/neural/ntc.glsl
 // Irradiance SH9 (see oxEvalSH9 in pbr.glsl); always valid (zero when there is no environment).
 layout(buffer_reference, scalar, buffer_reference_align = 4) readonly buffer OxSHBuffer { vec4 c[9]; };
 
@@ -65,8 +66,7 @@ struct ViewConstants {
     float csmResolution;
     float sunAngularRadius;  // radians (PCSS)
     OxSHBuffer irradianceSH; // 9 × vec4
-    uint shPad0;
-    uint shPad1;
+    OxNeuralMaterials neuralMaterials; // render/neural/ntc.glsl (InferenceOnSample), 0 = none
     uint prefilteredCube;
     uint brdfLut;
     uint skyCube;

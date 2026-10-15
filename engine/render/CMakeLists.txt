@@ -64,6 +64,29 @@ else()
     endif()
 endif()
 set_target_properties(ox_render PROPERTIES SOURCES "${_render_srcs}")
+
+# --- AMD FSR 3 frame generation (features/framegen) ---
+# Overlay port amd-fidelityfx-vk: ffx-api headers + AMD's prebuilt amd_fidelityfx_vk.dll (Windows x64 only). The DLL
+# is loaded at run time (LoadLibrary): without it r.FrameGeneration reports itself unavailable. It is deployed next to
+# executables together with the NGX libraries (OX_DLSS_RUNTIME_FILES, see OxwaldVulkanRuntime.cmake).
+option(OX_ENABLE_FSR3_FRAMEGEN "AMD FSR 3 frame generation (needs the amd-fidelityfx-vk vcpkg port)" ON)
+find_package(amd-fidelityfx-vk CONFIG QUIET)
+if(OX_ENABLE_FSR3_FRAMEGEN AND WIN32 AND TARGET AMD::FidelityFX_VK)
+    target_include_directories(ox_render SYSTEM PRIVATE $<TARGET_PROPERTY:AMD::FidelityFX_VK,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_compile_definitions(ox_render PUBLIC OX_RENDER_HAS_FIDELITYFX=1)
+    set(_ox_rt ${OX_DLSS_RUNTIME_FILES})
+    list(APPEND _ox_rt ${AMD_FIDELITYFX_VK_RUNTIME_FILE})
+    set(OX_DLSS_RUNTIME_FILES "${_ox_rt}" CACHE INTERNAL "NGX + FidelityFX runtime libraries to deploy next to executables")
+    if(OX_DLSS_RUNTIME_FILES_DEBUG)
+        set(_ox_rt ${OX_DLSS_RUNTIME_FILES_DEBUG})
+        list(APPEND _ox_rt ${AMD_FIDELITYFX_VK_RUNTIME_FILE})
+        set(OX_DLSS_RUNTIME_FILES_DEBUG "${_ox_rt}" CACHE INTERNAL "NGX development + FidelityFX runtime libraries (Debug)")
+    endif()
+    message(STATUS "Oxwald render: AMD FSR 3 frame generation enabled (${AMD_FIDELITYFX_VK_RUNTIME_FILE})")
+else()
+    message(STATUS "Oxwald render: AMD FSR 3 frame generation disabled (no amd-fidelityfx-vk package or not Windows)")
+endif()
+
 if(TARGET NVIDIA::DLSSHeaders AND NOT (OX_ENABLE_DLSS AND TARGET NVIDIA::DLSS))
     add_library(ox_dlss_syntax_check OBJECT ${_ox_dlss_dir}/dlss_ngx.cpp)
     target_link_libraries(ox_dlss_syntax_check PRIVATE NVIDIA::DLSSHeaders ox_rhi volk::volk)
@@ -93,8 +116,13 @@ if(OX_BUILD_TESTS AND TARGET ox_render_tests)
         ox_add_gpu_test_env(ox_render_gpu_tests)
         gtest_discover_tests(ox_render_gpu_tests
             DISCOVERY_TIMEOUT 60
-            PROPERTIES LABELS "render\;gpu"
-                       ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+            PROPERTIES ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+        ox_gtest_labels(ox_render_gpu_tests render gpu)
+        # The discovered GPU tests must carry the `gpu` label (ctest -L gpu / -LE gpu split the serial GPU run).
+        add_test(NAME ctest.DiscoveredGpuTestsAreLabelled
+            COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -N -L gpu -R "^GoldenTest\\.")
+        set_tests_properties(ctest.DiscoveredGpuTestsAreLabelled PROPERTIES LABELS "tools"
+            PASS_REGULAR_EXPRESSION "Total Tests: [1-9]")
         # `cmake --build --target ox_render_tests` builds both executables.
         add_dependencies(ox_render_tests ox_render_gpu_tests)
     endif()
@@ -130,3 +158,12 @@ function(ox_render_link_world_skinning)
     endif()
 endfunction()
 cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL ox_render_link_world_skinning)
+
+# Windowed GPU tests (frame_generation_tests.cpp): rhi's GLFW surface provider exists only after engine/rhi ran.
+function(ox_render_link_test_window)
+    if(TARGET ox_render_gpu_tests AND TARGET ox_rhi_glfw)
+        target_link_libraries(ox_render_gpu_tests PRIVATE ox_rhi_glfw)
+        target_compile_definitions(ox_render_gpu_tests PRIVATE OX_RENDER_TESTS_HAVE_GLFW=1)
+    endif()
+endfunction()
+cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL ox_render_link_test_window)

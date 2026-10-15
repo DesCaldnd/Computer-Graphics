@@ -1,6 +1,7 @@
 #include <oxwald/assets/asset_types.hpp>
 #include <oxwald/assets/material.hpp>
 #include <oxwald/assets/model_import.hpp>
+#include <oxwald/assets/neural/ntc.hpp>
 #include <oxwald/assets/texture_import.hpp>
 
 #include "internal.hpp"
@@ -27,6 +28,7 @@ constexpr std::array kTypeNames{
     TypeName{AssetType::Skeleton, "Skeleton", ".oxskel"}, TypeName{AssetType::Font, "Font", ".oxfont"},
     TypeName{AssetType::NavMesh, "NavMesh", ".oxnav"},   TypeName{AssetType::Heightmap, "Heightmap", ".oxheight"},
     TypeName{AssetType::Raw, "Raw", ".bin"},
+    TypeName{AssetType::NeuralTextureSet, "NeuralTextureSet", ".oxntc"},
 };
 } // namespace
 
@@ -87,7 +89,8 @@ void registerAssetTypesOnce() {
         .value("Font", AssetType::Font)
         .value("NavMesh", AssetType::NavMesh)
         .value("Heightmap", AssetType::Heightmap)
-        .value("Raw", AssetType::Raw);
+        .value("Raw", AssetType::Raw)
+        .value("NeuralTextureSet", AssetType::NeuralTextureSet);
 
     OX_REFLECT_ENUM(ShadingModel, "ShadingModel")
         .value("Lit", ShadingModel::Lit)
@@ -131,7 +134,36 @@ void registerAssetTypesOnce() {
         .field("subsurfaceColor", &MaterialAsset::subsurfaceColor, Color{false}, Category{"Subsurface"})
         .field("uvTiling", &MaterialAsset::uvTiling, Category{"UV"})
         .field("uvOffset", &MaterialAsset::uvOffset, Category{"UV"})
-        .field("renderQueueOffset", &MaterialAsset::renderQueueOffset, Range{-1000.0, 1000.0});
+        .field("renderQueueOffset", &MaterialAsset::renderQueueOffset, Range{-1000.0, 1000.0})
+        .field("neuralTextures", &MaterialAsset::neuralTextures, AssetRef{"NeuralTextureSet"}, Category{"Neural"}, ReadOnly{},
+               Tooltip{"Set by the importer (meta setting neuralCompression)"})
+        .field("neuralTexturesOnly", &MaterialAsset::neuralTexturesOnly, Category{"Neural"}, ReadOnly{});
+
+    OX_REFLECT_ENUM(NtcPreset, "NtcPreset")
+        .value("Low", NtcPreset::Low)
+        .value("Medium", NtcPreset::Medium)
+        .value("High", NtcPreset::High)
+        .value("Custom", NtcPreset::Custom);
+    OX_REFLECT_ENUM(NtcLatentFormat, "NtcLatentFormat").value("Q4", NtcLatentFormat::Q4).value("Q8", NtcLatentFormat::Q8);
+    OX_REFLECT_ENUM(NeuralCompressionMode, "NeuralCompressionMode")
+        .value("Off", NeuralCompressionMode::Off)
+        .value("On", NeuralCompressionMode::On)
+        .value("Replace", NeuralCompressionMode::Replace);
+    OX_REFLECT_TYPE(MaterialImportSettings, "MaterialImportSettings")
+        .field("neuralCompression", &MaterialImportSettings::neuralCompression,
+               Tooltip{"Neural texture compression: On keeps the regular textures, Replace ships only the neural set"})
+        .field("neuralPreset", &MaterialImportSettings::neuralPreset)
+        .field("neuralTargetBitsPerTexel", &MaterialImportSettings::neuralTargetBitsPerTexel, Range{0.0, 32.0},
+               Tooltip{"> 0: pick the preset closest to this bit rate (all channels, mip 0)"})
+        .field("neuralLatentStride", &MaterialImportSettings::neuralLatentStride, Range{1.0, 16.0})
+        .field("neuralFeatures0", &MaterialImportSettings::neuralFeatures0, Range{4.0, 16.0})
+        .field("neuralFeatures1", &MaterialImportSettings::neuralFeatures1, Range{0.0, 16.0})
+        .field("neuralLatentFormat", &MaterialImportSettings::neuralLatentFormat)
+        .field("neuralHidden", &MaterialImportSettings::neuralHidden, Range{32.0, 64.0})
+        .field("neuralSteps", &MaterialImportSettings::neuralSteps, Tooltip{"0 = automatic"})
+        .field("neuralFallbackSize", &MaterialImportSettings::neuralFallbackSize)
+        .field("neuralMaxSize", &MaterialImportSettings::neuralMaxSize, Tooltip{"0 = unlimited"})
+        .field("neuralSeed", &MaterialImportSettings::neuralSeed);
 
     OX_REFLECT_ENUM(TextureType, "TextureType")
         .value("Color", TextureType::Color)

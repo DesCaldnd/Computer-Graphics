@@ -400,6 +400,7 @@ void GpuResourceCache::applyMaterial(const Uuid& id, const assets::MaterialAsset
     if (e.state == ResourceState::Unknown && !e.hasSource && e.index == 0) e.index = m_scene->allocateMaterial();
     e.source = material;
     e.hasSource = true;
+    e.id = id;
     e.state = ResourceState::Ready;
     refreshMaterial(e);
 }
@@ -428,10 +429,13 @@ void GpuResourceCache::refreshMaterial(MaterialEntry& e) {
     g.normalStrength = m.normalStrength;
     g.occlusionStrength = m.occlusionStrength;
     g.alphaCutoff = m.alphaCutoff;
-    g.albedoTexture = resolveTexture(m.albedoTexture, m_defaults.checkerIndex);
-    g.normalTexture = resolveTexture(m.normalTexture, kInvalidIndex);
-    g.ormTexture = resolveTexture(m.ormTexture, kInvalidIndex);
-    g.emissiveTexture = resolveTexture(m.emissiveTexture, kInvalidIndex);
+    const bool neural = m_materialHook && m.neuralTextures.isValid();
+    if (!neural) {
+        g.albedoTexture = resolveTexture(m.albedoTexture, m_defaults.checkerIndex);
+        g.normalTexture = resolveTexture(m.normalTexture, kInvalidIndex);
+        g.ormTexture = resolveTexture(m.ormTexture, kInvalidIndex);
+        g.emissiveTexture = resolveTexture(m.emissiveTexture, kInvalidIndex);
+    }
     g.flags = u32(m.blendMode) & kMaterialBlendMask;
     if (m.doubleSided) g.flags |= kMaterialDoubleSided;
     if (m.shadingModel == assets::ShadingModel::Unlit) g.flags |= kMaterialUnlit;
@@ -447,7 +451,22 @@ void GpuResourceCache::refreshMaterial(MaterialEntry& e) {
     g.subsurface = m.subsurface;
     g.uvTiling = m.uvTiling;
     g.uvOffset = m.uvOffset;
+    if (neural && !m_materialHook->resolveMaterial(e.id, m, g)) {
+        g.albedoTexture = resolveTexture(m.albedoTexture, m_defaults.checkerIndex);
+        g.normalTexture = resolveTexture(m.normalTexture, kInvalidIndex);
+        g.ormTexture = resolveTexture(m.ormTexture, kInvalidIndex);
+        g.emissiveTexture = resolveTexture(m.emissiveTexture, kInvalidIndex);
+    }
     m_scene->setMaterial(e.index, g);
+}
+
+void GpuResourceCache::setMaterialResolveHook(IMaterialResolveHook* hook, bool refresh) {
+    m_materialHook = hook;
+    if (refresh) refreshMaterials();
+}
+
+void GpuResourceCache::refreshMaterials() {
+    for (auto& [id, e] : m_materialsById) refreshMaterial(e);
 }
 
 GpuTexture GpuResourceCache::createTextureFromData(const assets::TextureData& tex, u32 firstMip) {

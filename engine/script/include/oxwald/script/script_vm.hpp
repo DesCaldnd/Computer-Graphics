@@ -84,6 +84,11 @@ public:
     // Module search roots for `require`.
     void addSearchRoot(const std::filesystem::path& root);
     std::optional<std::filesystem::path> resolveModule(std::string_view name) const;
+    // Reads module files that are not on disk, e.g. scripts inside a cooked pak (the runtime maps paths under the
+    // project root to project:// URIs). `require` asks it for each candidate (<root>/a/b.lua, <root>/a/b/init.lua)
+    // only when no search root has the file; such modules are not hot reloaded.
+    using ModuleFileReader = std::function<std::optional<std::string>(const std::filesystem::path& path)>;
+    void setModuleFileReader(ModuleFileReader reader) { m_moduleFileReader = std::move(reader); }
 
     // Extension point for other modules: builds a table once; every sandbox sees it as a read-only global `name`,
     // including sandboxes created before the call (a global of the same name defined by the script itself wins,
@@ -164,6 +169,7 @@ private:
         std::filesystem::file_time_type mtime;
     };
     std::unordered_map<std::string, ModuleEntry> m_modules;
+    ModuleFileReader m_moduleFileReader;
     std::vector<std::string> m_loadingModules; // cycle detection
 
     std::vector<std::weak_ptr<ScriptAsset>> m_assets;

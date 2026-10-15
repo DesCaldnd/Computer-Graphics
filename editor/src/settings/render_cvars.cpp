@@ -45,6 +45,8 @@ int ensureRenderingCVars() {
     n += make<int>(cvars::kUpscalerQuality, 3, "Upscaler quality mode",
                    CVarEnum{"UltraPerformance", "Performance", "Balanced", "Quality", "Native"}.alias("DLAA", 4), P);
     n += make<float>(cvars::kUpscalerSharpness, 0.2f, "Upscaler sharpening: FSR 1 RCAS / TAAU CAS / DLSS", 0.0f, 1.0f);
+    n += make<int>(cvars::kDenoiser, 0, "Denoiser of the ray traced effects: SVGF, DLSSRR (DLSS Ray Reconstruction), Auto, Neural (experimental)",
+                   CVarEnum{"SVGF", "DLSSRR", "Auto", "Neural"}.alias("RR", 1), P);
     n += make<int>(cvars::kTonemapper, 0, "Tonemapping operator", CVarEnum{"ACES", "AgX", "Neutral", "Linear"}, P);
     n += make<float>(cvars::kExposure, 0.0f, "Exposure compensation in EV (added)", -16.0f, 16.0f);
     n += make<bool>(cvars::kAutoExposure, false, "Histogram auto exposure (eye adaptation)", P);
@@ -54,6 +56,15 @@ int ensureRenderingCVars() {
     n += makeLv<bool>(cvars::kIrradianceVolumes, true, "Baked irradiance volumes feed IndirectDiffuse", S::GlobalIllumination,
                       {false, true, true, true});
     n += make<bool>(cvars::kVSync, true, "Vertical sync", P);
+    n += make<int>(cvars::kReflex, 1, "Low latency: NVIDIA Reflex when supported, else the engine limiter",
+                   CVarEnum{"Off", "On", "OnBoost"}.alias("Auto", 1).alias("Boost", 2), P);
+    n += make<int>(cvars::kReflexFallback, 1, "Latency limiter without Reflex", CVarEnum{"Off", "JustInTime", "Strict"}, P);
+    n += make<int>(cvars::kFrameGeneration, 0, "Frame generation (runtime player only)", CVarEnum{"Off", "FSR3"}.alias("On", 1), P);
+    n += make<int>(cvars::kNeuralTextures, 1,
+                   "Neural texture compression: Off, DecodeOnLoad (BC7/BC5 at load), InferenceOnSample (decode per sample)",
+                   CVarEnum{"Off", "DecodeOnLoad", "InferenceOnSample"}, P);
+    n += make<int>(cvars::kNeuralTexturesFilter, 0, "InferenceOnSample filtering: Stochastic (TAA) or Bilinear (4 decodes)",
+                   CVarEnum{"Stochastic", "Bilinear"}, P);
     n += make<int>(cvars::kMaxFps, 0, "Frame rate limit (0 = unlimited)", 0, 1000, P);
     return n;
 }
@@ -61,7 +72,14 @@ int ensureRenderingCVars() {
 QString cvarValueLabel(const QString& cvarName, const QString& value) {
     static const QHash<QString, QString> labels = {
         {"FSR1", "AMD FSR 1.0"},
+        {"OnBoost", "On + Boost"},
+        {"JustInTime", "Just in Time"},
+        {"FSR3", "AMD FSR 3 Frame Generation"},
+
+
         {"DLSS", "NVIDIA DLSS"},
+        {"DLSSRR", "DLSS Ray Reconstruction"},
+        {"SVGF", "SVGF (spatio-temporal)"},
         {"UltraPerformance", "Ultra Performance"},
         {"Native", "DLAA / Native"},
         {"DLAA", "DLAA / Native"},

@@ -3,12 +3,14 @@
 // normal distribution of the G-buffer roughness, one bounce with simple hit lighting (sun + one local light with
 // shadow rays, emissive, DDGI / SH diffuse, prefiltered specular), sky on miss. Above `maxRoughness` the weight fades
 // to 0 so the forward pass keeps the probe / IBL result. Output: rgb radiance (not pre-exposed), a = weight.
+// flags bit 1: also write the average hit distance (world units, misses count as 1e4) into outHitDist.r — the
+// specular hit distance guide of DLSS Ray Reconstruction.
 #include "rt_query.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 OX_RENDER_PUSH(RtSceneBuffer rt; uint depth; uint normals; uint outRefl; uint width; uint height; uint scale;
-               uint frame; uint spp; float maxRoughness; uint flags;);
+               uint frame; uint spp; float maxRoughness; uint flags; uint outHitDist;);
 
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -18,8 +20,10 @@ void main() {
     float d = OX_FETCH_2D(pc.depth, gp, 0).r;
     vec4 nr = OX_FETCH_2D(pc.normals, gp, 0);
     float roughness = clamp(nr.w, OX_MIN_PERCEPTUAL_ROUGHNESS, 1.0);
+    bool writeHitDistance = (pc.flags & 2u) != 0u;
     if (d <= 0.0 || roughness > pc.maxRoughness) {
         OX_IMAGE_STORE_2D(rgba16f, pc.outRefl, p, vec4(0.0));
+        if (writeHitDistance) OX_IMAGE_STORE_2D(rgba16f, pc.outHitDist, p, vec4(0.0));
         return;
     }
     vec2 uv = (vec2(gp) + 0.5) * VIEW.renderSize.zw;
@@ -33,6 +37,7 @@ void main() {
     uint rng = oxRtSeed(uvec2(p), pc.frame, 0x4EF1u);
     vec3 Vl = oxToLocal(V, N);
     vec3 sum = vec3(0.0);
+    float hitDistance = 0.0;
     // Firefly clamp: radiance that would exceed ~16× display white after exposure.
     float maxLum = 16.0 / max(VIEW.exposure, 1e-12);
     for (uint i = 0u; i < pc.spp; ++i) {
@@ -40,6 +45,7 @@ void main() {
         vec3 L = reflect(-V, H);
         if (dot(L, N) <= 0.0) L = reflect(L, N);
         RtHit h = oxRtTraceClosest(pc.scene, pc.rt, origin, L, 0.0, 1e4, OX_RT_MASK_ALL);
+        hitDistance += h.t; // tmax (1e4) on a miss
         vec3 radiance;
         if (h.hit) {
             float lod = oxRtConeLod(h.t, alpha * 0.5 + 0.002, 512.0);
@@ -54,4 +60,5 @@ void main() {
     }
     float weight = 1.0 - smoothstep(pc.maxRoughness * 0.75, pc.maxRoughness, roughness);
     OX_IMAGE_STORE_2D(rgba16f, pc.outRefl, p, vec4(sum / float(pc.spp), weight));
+    if (writeHitDistance) OX_IMAGE_STORE_2D(rgba16f, pc.outHitDist, p, vec4(hitDistance / float(pc.spp), 0.0, 0.0, 0.0));
 }

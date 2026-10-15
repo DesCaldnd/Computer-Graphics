@@ -38,6 +38,7 @@ struct DeviceDesc;
 namespace ox::render {
 
 class FeatureRegistry;
+class RenderView;
 struct RenderSnapshot;
 struct RenderSettings;
 struct CameraParams;
@@ -74,6 +75,42 @@ struct UpscalerAvailability {
 // Vulkan instance/device extensions NGX needs (empty where DLSS cannot run). Call before rhi::Device::create.
 void appendUpscalerVulkanExtensions(rhi::DeviceDesc& desc);
 
+// --- DLSS Ray Reconstruction ------------------------------------------------------------------------------------
+//
+// r.Denoiser (SVGF, DLSSRR, Auto; Auto = Ray Reconstruction where it can run). With r.RayTracing on (and the path
+// tracer off) and RR selected and available, the "DLSSRR" feature takes the upscaler slot: the ray traced shadows,
+// AO and reflections skip their SVGF passes, the noisy lit frame plus guide buffers (diffuse / specular albedo,
+// normals + roughness, hardware depth, motion vectors, reflection hit distance, exposure) go to NGX
+// (NVSDK_NGX_Feature_RayReconstruction), which denoises and upscales in one pass. Render resolution follows
+// r.Upscaler.Quality when r.Upscaler is set, DLAA (native) when r.Upscaler is Off. Everywhere else (non-NVIDIA,
+// MoltenVK, missing nvngx_dlssd runtime, old driver) the SVGF path stays.
+
+// Neural: the SVGF pipeline with a learned À-trous kernel (render/neural, vendor neutral).
+enum class DenoiserType : i32 { SVGF = 0, DLSSRR = 1, Auto = 2, Neural = 3 };
+
+struct RayReconstructionAvailability {
+    bool available = false;
+    std::string reason; // why it cannot run (empty when available)
+};
+// With a device, NGX is probed (once per device); without one only static reasons (build, platform) are known.
+[[nodiscard]] RayReconstructionAvailability rayReconstructionAvailability(rhi::Device* device = nullptr);
+// NVIDIA NGX feature instances (DLSS super resolution + Ray Reconstruction, all views) alive right now; 0 without NGX.
+// Diagnostics and leak tests: switching a feature off must give its instance back.
+[[nodiscard]] u32 ngxLiveFeatureCount();
+// r.Denoiser asks for Ray Reconstruction and it can run with these settings on this device (ray tracing active,
+// path tracer off, NVIDIA, not known to be unavailable). Drives feature gating.
+[[nodiscard]] bool rayReconstructionSelected(const RenderSettings& settings, const rhi::DeviceCaps& caps);
+// Ray Reconstruction denoises this view's current frame: set by the DLSSRR feature while it prepares the view, so
+// it is true only when the feature really runs. The ray traced effects use it to skip their SVGF denoisers.
+[[nodiscard]] bool rayReconstructionRunsThisFrame(const RenderView& view);
+
+// Guide resources for Ray Reconstruction (render resolution), published by the ray tracing area.
+namespace res {
+inline constexpr std::string_view kRrDiffuseAlbedo = "RR.DiffuseAlbedo";   // RGBA8: baseColor × (1 − metallic)
+inline constexpr std::string_view kRrSpecularAlbedo = "RR.SpecularAlbedo"; // RGBA8: pre-integrated GGX reflectance
+inline constexpr std::string_view kRrSpecularHitDistance = "RR.SpecularHitDistance"; // RGBA16F, r = metres
+} // namespace res
+
 // --- quality presets ("Auto") ---------------------------------------------------------------------------------
 
 struct RecommendedSettings {
@@ -83,6 +120,7 @@ struct RecommendedSettings {
     UpscalerType upscaler = UpscalerType::Off;
     UpscalerQuality upscalerQuality = UpscalerQuality::Quality;
     f32 screenPercentage = 100.0f; // effective render scale (informational; upscalers set it from the quality)
+    DenoiserType denoiser = DenoiserType::Auto; // r.Denoiser: Ray Reconstruction where it can run, else SVGF
     std::string rationale;         // human readable explanation for the UI / log
 };
 // Combines the GPU benchmark score (render::runGpuBenchmark, 100 = GTX 1060 class) with upscaler availability:

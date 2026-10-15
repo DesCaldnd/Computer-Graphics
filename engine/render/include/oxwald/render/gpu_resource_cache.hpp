@@ -25,6 +25,9 @@
 namespace ox {
 class JobSystem;
 }
+namespace ox::assets {
+struct NeuralTextureSet;
+}
 
 namespace ox::render {
 
@@ -34,6 +37,8 @@ struct AssetProvider {
     std::function<std::shared_ptr<const assets::MeshData>(const Uuid&)> loadMesh;
     std::function<std::shared_ptr<const assets::TextureData>(const Uuid&)> loadTexture;
     std::function<std::shared_ptr<const assets::MaterialAsset>(const Uuid&)> loadMaterial;
+    // Neural texture sets of materials (render/neural); optional.
+    std::function<std::shared_ptr<const assets::NeuralTextureSet>(const Uuid&)> loadNeuralTextures;
 };
 
 enum class ResourceState : u8 { Unknown, Loading, Ready, Missing };
@@ -54,6 +59,15 @@ public:
     // Returns the first mip to make resident now (>= minFirstMip, the r.Textures.MaxSize limit).
     virtual u32 onTextureLoaded(const Uuid& id, std::shared_ptr<const assets::TextureData> data, u32 minFirstMip) = 0;
     virtual void onTextureRemoved(const Uuid& id) = 0;
+};
+
+// Materials with a neural texture set (MaterialAsset::neuralTextures) are resolved by this hook (installed by the
+// NeuralTextures feature, render/neural): it fills the texture indices / flags of the GPU material and returns true,
+// or returns false to use the regular textures. Called on the render thread from refreshMaterial().
+class IMaterialResolveHook {
+public:
+    virtual ~IMaterialResolveHook() = default;
+    virtual bool resolveMaterial(const Uuid& id, const assets::MaterialAsset& source, GpuMaterial& gpu) = 0;
 };
 
 class GpuResourceCache {
@@ -96,6 +110,11 @@ public:
 
     // --- streaming support ---
     void setStreamingHook(ITextureStreamingHook* hook) { m_streaming = hook; }
+    // --- neural materials ---
+    void setMaterialResolveHook(IMaterialResolveHook* hook, bool refresh = true); // refresh: re-resolve every material
+    void refreshMaterials();                                // e.g. after neural resources changed
+    [[nodiscard]] const AssetProvider& provider() const { return m_provider; }
+    [[nodiscard]] JobSystem* jobs() const { return m_jobs; }
     // GPU texture holding mips [firstMip, last] of `data`, uploaded asynchronously (transfer queue). Invalid handle
     // for unsupported data.
     [[nodiscard]] GpuTexture createTextureFromData(const assets::TextureData& data, u32 firstMip);
@@ -125,6 +144,7 @@ private:
         u32 index = 0;
         assets::MaterialAsset source;
         bool hasSource = false;
+        Uuid id;
     };
     struct Completed {
         Uuid id;
@@ -164,6 +184,7 @@ private:
     u32 m_samplerRepeat = 4;
     u32 m_samplerClamp = 1;
     ITextureStreamingHook* m_streaming = nullptr;
+    IMaterialResolveHook* m_materialHook = nullptr;
 };
 
 } // namespace ox::render

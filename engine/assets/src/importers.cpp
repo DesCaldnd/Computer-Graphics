@@ -2,6 +2,7 @@
 #include <oxwald/assets/asset_data.hpp>
 #include <oxwald/assets/importer.hpp>
 #include <oxwald/assets/material.hpp>
+#include <oxwald/assets/neural/ntc.hpp>
 #include <oxwald/assets/texture_import.hpp>
 #include <oxwald/core/reflect.hpp>
 #include <oxwald/core/serial/format.hpp>
@@ -116,19 +117,92 @@ public:
     }
 };
 
+// Image of a texture asset for neural compression: the source file with the texture's flip / size settings when it
+// is a plain image (no BC loss), otherwise mip 0 of the cooked artifact.
+Result<Image> textureImageForNeural(ImportContext& ctx, const Uuid& id) {
+    if (auto src = ctx.sourceOf(id)) {
+        std::string ext = src->first.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" || ext == ".psd") {
+            if (auto img = loadImage(src->first)) {
+                TextureImportSettings ts;
+                fromSettingsJson(src->second, ts);
+                if (ts.flipY)
+                    for (u32 y = 0; y < img->height / 2; ++y)
+                        for (u32 x = 0; x < img->width; ++x) std::swap(img->at(x, y), img->at(x, img->height - 1 - y));
+                if (ts.maxSize > 0 && std::max(img->width, img->height) > ts.maxSize) {
+                    const f32 k = f32(ts.maxSize) / f32(std::max(img->width, img->height));
+                    *img = resizeImage(*img, std::max(1u, u32(std::lround(img->width * k))),
+                                       std::max(1u, u32(std::lround(img->height * k))), ts.mipFilter,
+                                       ts.srgb && ts.type == TextureType::Color);
+                }
+                ctx.addSourceDependency(src->first);
+                return std::move(*img);
+            }
+        }
+    }
+    auto bytes = ctx.readArtifact(id);
+    if (!bytes) return bytes.error();
+    auto tex = deserializeTexture(*bytes);
+    if (!tex) return tex.error();
+    if (tex->mips.empty() || tex->cube) return makeError("texture {} cannot be compressed (cube or empty)", id.toString());
+    return decodeTextureLevel(tex->format, tex->mips[0].data, tex->mips[0].width, tex->mips[0].height);
+}
+
 class MaterialImporter final : public IAssetImporter {
 public:
     std::string_view name() const override { return "material"; }
-    u32 version() const override { return 1; }
+    u32 version() const override { return 2; }
     std::vector<std::string> extensions() const override { return {".oxmat"}; }
     AssetType mainType() const override { return AssetType::Material; }
+    nlohmann::ordered_json defaultSettings() const override { return toSettingsJson(MaterialImportSettings{}); }
     Status import(ImportContext& ctx) override {
         auto bytes = ctx.readSource();
         if (!bytes) return bytes.error();
         auto mat = loadMaterial(*bytes);
         if (!mat) return mat.error();
+        const auto settings = ctx.settings<MaterialImportSettings>();
+        mat->neuralTextures = {};
+        mat->neuralTexturesOnly = false;
+        nlohmann::ordered_json neuralInfo;
+        if (settings.neuralCompression != NeuralCompressionMode::Off) {
+            NtcSourceImages src;
+            bool any = false;
+            const std::pair<Uuid, Image*> slots[] = {{mat->albedoTexture, &src.albedo}, {mat->normalTexture, &src.normal},
+                                                    {mat->ormTexture, &src.orm}, {mat->emissiveTexture, &src.emissive}};
+            for (const auto& [id, img] : slots) {
+                if (!id.isValid()) continue;
+                auto loaded = textureImageForNeural(ctx, id);
+                if (!loaded) {
+                    ctx.warn("neural compression skipped: " + loaded.error().message);
+                    any = false;
+                    break;
+                }
+                *img = std::move(*loaded);
+                any = true;
+            }
+            if (any) {
+                auto set = encodeNeuralTextures(src, settings.toNeuralSettings());
+                if (!set) return set.error();
+                set->stats = evaluateNeuralTextures(*set, src, true);
+                auto& n = ctx.addSubAsset("NeuralTextures", AssetType::NeuralTextureSet, serializeNeuralTextureSet(*set));
+                n.info["preset"] = std::string(ntcPresetName(set->preset));
+                n.info["size"] = {set->width, set->height};
+                n.info["neuralMips"] = set->neuralMips;
+                n.info["bitsPerTexel"] = set->bitsPerTexel();
+                n.info["bytes"] = set->payloadBytes();
+                n.info["bcBytes"] = set->stats.sourceBcBytes;
+                n.info["trainMs"] = set->stats.trainMs;
+                for (const NtcChannelStats& c : set->stats.channels)
+                    n.info["psnr"][c.name] = {{"ntc", c.psnr}, {"bc", c.bcPsnr}, {"ssim", c.ssim}, {"bcSsim", c.bcSsim}};
+                neuralInfo = n.info;
+                mat->neuralTextures = n.uuid;
+                mat->neuralTexturesOnly = settings.neuralCompression == NeuralCompressionMode::Replace;
+            }
+        }
         auto& a = ctx.setMain(AssetType::Material, materialToBinary(*mat));
         a.dependencies = mat->textureDependencies();
+        if (!neuralInfo.is_null()) a.info["neural"] = neuralInfo;
         return {};
     }
 };

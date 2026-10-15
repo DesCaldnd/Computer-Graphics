@@ -8,6 +8,10 @@ namespace ox::assets {
 
 std::vector<Uuid> MaterialAsset::textureDependencies() const {
     std::vector<Uuid> out;
+    if (neuralTextures.isValid()) {
+        out.push_back(neuralTextures);
+        if (neuralTexturesOnly) return out;
+    }
     for (const Uuid& u : {albedoTexture, normalTexture, ormTexture, emissiveTexture, heightTexture}) {
         if (u.isValid() && std::find(out.begin(), out.end(), u) == out.end()) out.push_back(u);
     }
@@ -20,6 +24,12 @@ std::string materialToJson(const MaterialAsset& material) {
     j["oxmat"] = 1;
     const auto fields = valueToPlainJson(serial::toValue(material));
     for (const auto& [k, v] : fields.items()) j[k] = v;
+    // The neural fields are only written when set (importer option neuralCompression), so materials without neural
+    // texture compression keep their pre-NTC text byte-for-byte (missing keys load as the defaults).
+    if (!material.neuralTextures.isValid()) {
+        j.erase("neuralTextures");
+        if (!material.neuralTexturesOnly) j.erase("neuralTexturesOnly");
+    }
     return j.dump(2) + "\n";
 }
 

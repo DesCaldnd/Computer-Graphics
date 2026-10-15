@@ -55,6 +55,11 @@ public:
     PassBuilder& depth(RGTexture t, VkAttachmentLoadOp load = VK_ATTACHMENT_LOAD_OP_CLEAR, ClearDepthStencil clear = {},
                        bool readOnly = false);
     PassBuilder& resolve(RGTexture msaaColor, RGTexture target); // resolve `msaaColor` attachment into `target`
+    // Fragment shading rate attachment of the pass's rendering scope (variable rate shading; needs
+    // DeviceCaps::attachmentShadingRate): an R8_UINT image, one texel per `texelSize` pixels of the render area,
+    // texel = (log2(fragment width) << 2) | log2(fragment height). Declares the read (Access::ShadingRateRead).
+    // Graphics pipelines are created VRS-capable (attachment rate replaces the pipeline rate), so any draw works.
+    PassBuilder& shadingRate(RGTexture rateImage, VkExtent2D texelSize);
     // Queue hint: Compute = async compute if the device has a separate queue (and the graph enables it).
     PassBuilder& queue(QueueType hint);
     // Never culled (e.g. readback, debug capture, writes to memory the graph does not know about).
@@ -185,6 +190,8 @@ public:
     void markOutput(RGBuffer b);
 
     PassBuilder addPass(std::string name, PassType type = PassType::Graphics);
+    // Builder of an already declared pass (index < passCount()), e.g. to attach a shading rate image afterwards.
+    PassBuilder pass(u32 index);
 
     const RenderGraphPlan& compile(const RGCompileOptions& options = {});
     [[nodiscard]] const RenderGraphPlan& plan() const;
@@ -201,8 +208,15 @@ public:
     // Introspection
     [[nodiscard]] u32 passCount() const;
     [[nodiscard]] const std::string& passName(u32 pass) const;
+    [[nodiscard]] PassType passType(u32 pass) const;
+    // Size of the automatic rendering scope (first colour attachment, else depth, at its mip); {0, 0} without one.
+    [[nodiscard]] VkExtent2D passRenderExtent(u32 pass) const;
+    // The shading rate image attached with PassBuilder::shadingRate() (invalid when none).
+    [[nodiscard]] RGTexture passShadingRate(u32 pass) const;
     [[nodiscard]] u32 resourceCount() const;
     [[nodiscard]] const std::string& resourceName(u32 resource) const;
+    // Declared description (transients: usage may still be None, the graph derives it at compile time).
+    [[nodiscard]] const TextureDesc& textureDesc(RGTexture t) const;
     [[nodiscard]] TextureHandle physicalTexture(RGTexture t) const; // valid after execute()
     [[nodiscard]] BufferHandle physicalBuffer(RGBuffer b) const;
 

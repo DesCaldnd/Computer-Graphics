@@ -51,6 +51,28 @@ struct TextureStreamingStats {
     u64 budgetBytes = 0;
 };
 
+// Split rendering (r.SplitRendering, docs/guide/35-split-rendering.md): portable passes on a secondary GPU.
+struct SplitRenderingStats {
+    i32 mode = 0;                 // r.SplitRendering: 0 Off, 1 On, 2 Auto
+    bool active = false;          // a secondary device exists
+    bool sameAdapter = false;     // test mode: secondary VkDevice on the primary GPU
+    std::string adapter;          // secondary adapter name
+    std::string transfer;         // ExternalMemory / HostPointer / Staging
+    u32 latencyFrames = 0;        // results of frame N are used in frame N + latency
+    u32 segments = 0;             // portable segments declared this frame (all views)
+    u32 offloaded = 0;            // of which placed on the secondary
+    u32 imported = 0;             // results imported from the secondary this frame
+    u32 fallbacks = 0;            // imports that failed this frame (input copied through)
+    f64 secondaryGpuMs = 0.0;     // last finished jobs: secondary copies + compute
+    f64 secondaryComputeMs = 0.0; // of which the portable dispatches
+    f64 transferMs = 0.0;         // primary export/import passes + secondary copies + CPU copies
+    f64 cpuCopyMs = 0.0;          // staging memcpys on the worker thread
+    f64 waitMs = 0.0;             // render thread blocked waiting for secondary results
+    f64 predictedSavingMs = 0.0;  // scheduler estimate of the primary time saved by the current placement
+    f32 speedRatio = 0.0f;        // secondary / primary GPU time (calibration, then measured)
+    std::string status;           // decision reason or why split rendering is inactive
+};
+
 struct VramCategory {
     std::string name;
     u64 bytes = 0;
@@ -96,6 +118,7 @@ struct RenderStats {
     TextureStreamingStats streaming;
     u32 pipelinesCompiling = 0; // async PSO compiles in flight
     u32 parallelRecordedChunks = 0; // secondary command lists recorded on the job system (r.ParallelRecording)
+    SplitRenderingStats split;      // r.SplitRendering
 
     void resetCounters();
     [[nodiscard]] std::string toString() const;

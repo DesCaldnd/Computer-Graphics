@@ -50,6 +50,13 @@ struct MaterialAsset {
     glm::vec2 uvOffset{0.0f};
     i32 renderQueueOffset = 0;
 
+    // Neural texture compression (neural/ntc.hpp): set by the material importer when the meta enables "neural".
+    // neuralTexturesOnly = the regular textures are not shipped (dependencies list only the neural set; the renderer
+    // then decodes the set even with r.NeuralTextures Off).
+    Uuid neuralTextures;
+    bool neuralTexturesOnly = false;
+
+    // Textures (and the neural texture set) to load with the material.
     [[nodiscard]] std::vector<Uuid> textureDependencies() const;
     bool operator==(const MaterialAsset&) const = default;
 };

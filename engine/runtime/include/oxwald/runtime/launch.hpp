@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Command line of OxwaldPlayer (and anything else that boots an Engine from argv).
@@ -49,5 +50,9 @@ struct LaunchOptions {
 [[nodiscard]] Result<LaunchOptions> parseLaunchOptions(std::span<const std::string> args);
 [[nodiscard]] Result<LaunchOptions> parseLaunchOptions(int argc, const char* const* argv);
 [[nodiscard]] std::string launchUsage();
+// Splits one command line string into arguments (whitespace separated; "double" / 'single' quotes group, backslash
+// escapes the next character outside single quotes). Used where argv arrives as a single string, e.g. the Android
+// intent extra `adb shell am start ... --es args "--frames 300 --cvar r.Vsync=0"`.
+[[nodiscard]] std::vector<std::string> splitCommandLine(std::string_view line);
 
 } // namespace ox

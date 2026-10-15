@@ -10,7 +10,7 @@ struct ReflPush {
     u64 view, scene, rt;
     u32 depth, normals, outRefl, width, height, scale, frame, spp;
     f32 maxRoughness;
-    u32 flags;
+    u32 flags, outHitDist;
 };
 
 class ReflectionsRtFeature final : public RtFeatureBase {
@@ -50,6 +50,10 @@ public:
         FrameResources& R = ctx.resources();
         const rhi::RGTexture sig = ctx.graph().createTexture(texDesc(VK_FORMAT_R16G16B16A16_SFLOAT, se, "RtReflSignal"));
         const rhi::RGTexture ddgiIrr = R.texture("RtDdgiIrradiance"), ddgiDepth = R.texture("RtDdgiDepth");
+        // DLSS Ray Reconstruction: no SVGF, plus the specular hit distance guide.
+        const bool svgf = svgfActive(ctx);
+        rhi::RGTexture hitDist;
+        if (!svgf) hitDist = ctx.graph().createTexture(texDesc(VK_FORMAT_R16G16B16A16_SFLOAT, se, "RtReflHitDistance"));
         rhi::PassBuilder pb = ctx.graph().addPass("RT.Reflections", rhi::PassType::Compute);
         pb.read(in.depth, rhi::Access::SampledCompute)
             .read(in.normals, rhi::Access::SampledCompute)
@@ -57,22 +61,31 @@ public:
             .overwrite(sig, rhi::Access::StorageWriteCompute);
         if (ddgiIrr.valid()) pb.read(ddgiIrr, rhi::Access::SampledCompute);
         if (ddgiDepth.valid()) pb.read(ddgiDepth, rhi::Access::SampledCompute);
+        if (hitDist.valid()) pb.overwrite(hitDist, rhi::Access::StorageWriteCompute);
         const u32 spp = u32(st.reflectionSpp);
         const f32 maxRough = st.reflectionMaxRoughness;
-        const u32 flags = st.shadowColored ? 1u : 0u;
+        const u32 flags = (st.shadowColored ? 1u : 0u) | (hitDist.valid() ? 2u : 0u);
         pb.execute([=, this](rhi::PassContext& p) {
+            const u32 outHit = hitDist.valid() ? p.storageIndex(hitDist) : p.storageIndex(sig);
             ReflPush pc{in.view, in.scene, in.rt, p.sampledIndex(in.depth), p.sampledIndex(in.normals), p.storageIndex(sig),
-                        se.width, se.height, scale, in.frame, spp, maxRough, flags};
+                        se.width, se.height, scale, in.frame, spp, maxRough, flags, outHit};
             p.cmd.bindPipeline(m_pipe);
             p.cmd.pushConstants(pc);
             p.cmd.dispatch(dispatchGroups(se.width), dispatchGroups(se.height));
         });
         const std::optional<Extent2D> up = se == in.render ? std::nullopt : std::optional<Extent2D>(in.render);
-        DenoiserSettings ds = denoiserSettings(st.reflectionDenoiser, DenoiseOutput::RGBA16F, {0.2126f, 0.7152f, 0.0722f, 0.0f});
+        DenoiserSettings ds =
+            denoiserSettings(st.reflectionDenoiser && svgf, DenoiseOutput::RGBA16F, {0.2126f, 0.7152f, 0.0722f, 0.0f});
         ds.maxHistory = std::min(ds.maxHistory, 12u); // reprojection by surface motion smears mirror reflections
         ds.phiNormal = 256.0f;
         const DenoiserOutputs out = m_shared->denoiser.denoise(ctx, "RtReflections", denoiserInputs(in, sig, se), ds, up);
         R.setTexture(ox::render::res::kReflectionsSpecular, out.result);
+        if (hitDist.valid()) {
+            const rhi::RGTexture h = up ? m_shared->denoiser.upsample(ctx, "RtReflHitDistance", hitDist, se,
+                                                                      denoiserInputs(in, hitDist, se), DenoiseOutput::RGBA16F)
+                                        : hitDist;
+            R.setTexture(ox::render::res::kRrSpecularHitDistance, h);
+        }
     }
 
 private:

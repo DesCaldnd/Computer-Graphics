@@ -3,6 +3,7 @@
 #include <render/common/color.glsl>
 #include <render/common/lighting.glsl>
 #include <render/common/material.glsl>
+#include <render/neural/ntc.glsl>
 
 // inputs: shadowMask, ao, reflections, indirectDiffuse, flags, unused
 OX_RENDER_DRAW_PUSH(uint shadowMask; uint ao; uint reflections; uint indirectDiffuse; uint flags; uint unused;);
@@ -26,7 +27,9 @@ void main() {
     uint materialIndex = instances.i[vInstance].materialIndex;
     uint instanceFlags = instances.i[vInstance].flags;
     Material m = SCENE.materials.m[materialIndex];
-    OxMaterialSample ms = oxSampleMaterial(m, vUv0, vColor, vNormal, vTangent, gl_FrontFacing, VIEW.mipBias);
+    // Neural materials (r.NeuralTextures InferenceOnSample) decode their textures here; others sample as usual.
+    OxMaterialSample ms = oxSampleMaterialView(pc.view, m, vUv0, vColor, vNormal, vTangent, gl_FrontFacing, VIEW.mipBias,
+                                               gl_FragCoord.xy, false);
 
     vec3 camPos = VIEW.cameraPosition.xyz;
     OxSurface s;

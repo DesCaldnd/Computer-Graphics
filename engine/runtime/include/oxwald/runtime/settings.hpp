@@ -34,7 +34,11 @@ struct GraphicsSettings {
     bool rayTracing = false;
     std::string upscaler = "Off";            // Off / FSR1 / DLSS
     std::string upscalerQuality = "Quality"; // UltraPerformance/Performance/Balanced/Quality/Native ("DLAA" = Native)
+    std::string denoiser = "Auto";           // r.Denoiser: SVGF / DLSSRR / Auto (DLSS Ray Reconstruction where available)
     f32 fov = 90.0f;                         // horizontal-ish gameplay FOV in degrees (g.FOV)
+    std::string reflex = "On";               // r.Reflex: Off / On / OnBoost (On = Reflex where supported, else limiter)
+    std::string frameGeneration = "Off";     // r.FrameGeneration: Off / FSR3 (render module; player only)
+
 };
 
 struct AudioSettings {
@@ -118,6 +122,9 @@ CVar<int>& resolutionX();
 CVar<int>& resolutionY();
 CVar<int>& monitor();
 CVar<int>& maxFps();
+CVar<int>& reflex();         // r.Reflex: 0 Off, 1 On, 2 OnBoost
+CVar<int>& reflexFallback(); // r.Reflex.Fallback: 0 Off, 1 JustInTime, 2 Strict
+
 CVar<float>& fov();
 CVar<float>& masterVolume();
 } // namespace cvars

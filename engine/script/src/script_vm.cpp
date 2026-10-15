@@ -455,19 +455,30 @@ bool ScriptVM::hasApi(std::string_view name) const {
 
 void ScriptVM::addSearchRoot(const std::filesystem::path& root) { m_config.searchRoots.push_back(root); }
 
-std::optional<std::filesystem::path> ScriptVM::resolveModule(std::string_view name) const {
+namespace {
+// <root>/a/b.lua and <root>/a/b/init.lua for every search root; empty for names that could escape the roots.
+std::vector<std::filesystem::path> moduleCandidates(std::string_view name,
+                                                    const std::vector<std::filesystem::path>& roots) {
+    std::vector<std::filesystem::path> out;
     if (name.empty() || name.find("..") != std::string_view::npos || name.front() == '/' ||
         name.find('\\') != std::string_view::npos) {
-        return std::nullopt;
+        return out;
     }
     std::string rel(name);
     std::replace(rel.begin(), rel.end(), '.', '/');
-    for (const auto& root : m_config.searchRoots) {
-        for (const auto& candidate : {root / (rel + ".lua"), root / rel / "init.lua"}) {
-            std::error_code ec;
-            if (std::filesystem::is_regular_file(candidate, ec)) {
-                return candidate;
-            }
+    for (const auto& root : roots) {
+        out.push_back(root / (rel + ".lua"));
+        out.push_back(root / rel / "init.lua");
+    }
+    return out;
+}
+} // namespace
+
+std::optional<std::filesystem::path> ScriptVM::resolveModule(std::string_view name) const {
+    for (const auto& candidate : moduleCandidates(name, m_config.searchRoots)) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(candidate, ec)) {
+            return candidate;
         }
     }
     return std::nullopt;
@@ -481,10 +492,22 @@ sol::object ScriptVM::requireModule(const std::string& name) {
         throw sol::error(std::format("circular require of module '{}'", name));
     }
     auto path = resolveModule(name);
+    const bool onDisk = path.has_value();
+    std::optional<std::string> source;
+    if (onDisk) {
+        source = readFile(*path);
+    } else if (m_moduleFileReader) {
+        for (const auto& candidate : moduleCandidates(name, m_config.searchRoots)) {
+            if (auto text = m_moduleFileReader(candidate)) {
+                path = candidate;
+                source = std::move(text);
+                break;
+            }
+        }
+    }
     if (!path) {
         throw sol::error(std::format("module '{}' not found in script search roots", name));
     }
-    auto source = readFile(*path);
     if (!source) {
         throw sol::error(std::format("cannot read module '{}' ({})", name, path->generic_string()));
     }
@@ -497,7 +520,8 @@ sol::object ScriptVM::requireModule(const std::string& name) {
     }
     sol::object value = (r.value.valid() && r.value.get_type() != sol::type::lua_nil) ? r.value
                                                                                        : sol::make_object(m_lua, true);
-    m_modules[name] = ModuleEntry{value, *path, mtimeOf(*path)};
+    // A module from the reader has no file: the default mtime equals mtimeOf() of a missing path (no hot reload).
+    m_modules[name] = ModuleEntry{value, *path, onDisk ? mtimeOf(*path) : std::filesystem::file_time_type{}};
     return value;
 }
 

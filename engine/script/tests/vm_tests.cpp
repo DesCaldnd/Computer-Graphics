@@ -4,6 +4,8 @@
 
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
+
 using namespace ox;
 using namespace ox::script;
 using namespace ox::script::test;
@@ -181,6 +183,38 @@ TEST(ScriptModules, RequireUsesSearchRoots) {
     ScriptResult r = vm.runString("require('../../etc/passwd')", "r", &env);
     EXPECT_FALSE(r.ok);
     EXPECT_NE(r.error.find("not found"), std::string::npos) << r.error;
+}
+
+// Cooked games: the search root is not on disk, the module comes from the reader (the runtime reads project://).
+TEST(ScriptModules, RequireFallsBackToModuleFileReader) {
+    const std::filesystem::path root = std::filesystem::path(OX_TEST_DATA_DIR) / "not-on-disk" / "Scripts";
+    ScriptVMConfig cfg;
+    cfg.searchRoots = {OX_TEST_DATA_DIR, root};
+    ScriptVM vm(cfg);
+    std::vector<std::string> asked;
+    vm.setModuleFileReader([&](const std::filesystem::path& p) -> std::optional<std::string> {
+        asked.push_back(p.lexically_relative(root).generic_string());
+        if (p == root / "lib" / "flow.lua") return std::string("return { answer = 42 }");
+        return std::nullopt;
+    });
+    EXPECT_EQ(eval<f64>(vm, "return require('lib.flow').answer"), 42.0);
+    EXPECT_TRUE(eval<bool>(vm, "return require('lib.flow') == require('lib.flow')")); // cached, reader asked once
+    EXPECT_EQ(std::count(asked.begin(), asked.end(), "lib/flow.lua"), 1);
+    // Files on disk win; the reader is not consulted for them.
+    EXPECT_EQ(eval<f64>(vm, "return require('util.mathx').round2(1.23456)"), 1.23);
+    EXPECT_EQ(std::count(asked.begin(), asked.end(), "util/mathx.lua"), 0);
+    // Unknown modules still fail, invalid names never reach the reader.
+    asked.clear();
+    sol::environment env = vm.createEnvironment();
+    EXPECT_FALSE(vm.runString("require('lib.missing')", "m", &env).ok);
+    EXPECT_FALSE(asked.empty());
+    asked.clear();
+    EXPECT_FALSE(vm.runString("require('../../etc/passwd')", "p", &env).ok);
+    EXPECT_TRUE(asked.empty());
+    // Reader modules have no file to watch: hot reload keeps them cached.
+    vm.pollHotReload();
+    EXPECT_EQ(eval<f64>(vm, "return require('lib.flow').answer"), 42.0);
+    EXPECT_TRUE(asked.empty());
 }
 
 TEST(ScriptApi, BindApiExtensionPoint) {

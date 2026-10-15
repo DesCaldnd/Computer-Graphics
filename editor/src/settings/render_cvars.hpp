@@ -18,6 +18,7 @@ inline constexpr const char* kAntiAliasing = "r.AntiAliasing";        // None, F
 inline constexpr const char* kUpscaler = "r.Upscaler";                // Off, FSR1, DLSS, TAAU
 inline constexpr const char* kUpscalerQuality = "r.Upscaler.Quality"; // UltraPerformance .. Native ("DLAA" alias)
 inline constexpr const char* kUpscalerSharpness = "r.Upscaler.Sharpness";
+inline constexpr const char* kDenoiser = "r.Denoiser"; // SVGF, DLSSRR, Auto (ray traced effects)
 inline constexpr const char* kTonemapper = "r.Tonemapper"; // ACES, AgX
 inline constexpr const char* kExposure = "r.Exposure.Compensation";
 inline constexpr const char* kAutoExposure = "r.Exposure.Auto";
@@ -26,6 +27,14 @@ inline constexpr const char* kAOMethod = "r.AO.Method";              // 0 off, 1
 inline constexpr const char* kSSR = "r.SSR";                         // screen-space reflections
 inline constexpr const char* kIrradianceVolumes = "r.GI.IrradianceVolumes";
 inline constexpr const char* kVSync = "r.VSync";
+inline constexpr const char* kReflex = "r.Reflex";                  // Off, On, OnBoost (runtime settings.cpp)
+inline constexpr const char* kReflexFallback = "r.Reflex.Fallback"; // Off, JustInTime, Strict
+inline constexpr const char* kFrameGeneration = "r.FrameGeneration"; // Off, FSR3 (render framegen; player only)
+
+
+// Neural rendering (engine/render/src/neural, guide chapter 36).
+inline constexpr const char* kNeuralTextures = "r.NeuralTextures";              // Off, DecodeOnLoad, InferenceOnSample
+inline constexpr const char* kNeuralTexturesFilter = "r.NeuralTextures.Filter"; // Stochastic, Bilinear
 inline constexpr const char* kMaxFps = "t.MaxFPS"; // runtime cvar
 } // namespace cvars
 

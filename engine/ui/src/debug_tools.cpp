@@ -147,8 +147,25 @@ struct DebugTools::Impl {
             ImGui::Text("%.0f FPS  %.2f ms", smoothedMs > 0 ? 1000.0 / smoothedMs : 0.0, smoothedMs);
             if (ctx.engine) ImGui::Text("game %.2f ms  render %.2f ms", ctx.engine->stats().gameMs, ctx.engine->stats().renderMs);
             if (ri.valid) ImGui::Text("GPU %.2f ms  %u draws  %.2fM tris", ri.stats.gpuFrameMs, ri.stats.drawCalls, f64(ri.stats.triangles) / 1e6);
+            if (ctx.engine) drawLatencyLine(ctx.engine->stats().latency);
         }
         ImGui::End();
+    }
+
+    // r.Reflex state + the driver's PC latency estimate (simulation start -> GPU render end, vkGetLatencyTimingsNV).
+    static void drawLatencyLine(const LatencyStats& l) {
+        static constexpr const char* kModes[] = {"Off", "On", "On+Boost"};
+        const char* mode = kModes[std::clamp(l.mode, 0, 2)];
+        if (l.reflexSupported && l.reports > 0) {
+            ImGui::Text("Reflex %s  PC latency %.1f ms (sleep %.1f)", mode, l.pcLatencyMs, l.sleepMs);
+        } else if (l.limiterActive) {
+            ImGui::Text("Latency limiter (%s)  sleep %.1f ms, queue %.1f ms", mode, l.sleepMs, l.renderQueueWaitMs);
+        } else {
+            ImGui::Text("Reflex %s%s", mode,
+                        l.reflexSupported               ? ""
+                        : l.reflexBehindFrameGeneration ? " (unavailable with frame generation)"
+                                                        : " (not supported)");
+        }
     }
 
     void drawStats(bool& open) {
@@ -180,6 +197,16 @@ struct DebugTools::Impl {
             ImGui::Text("Wait for render %.2f ms, pacing sleep %.2f ms", s.waitForRenderMs, s.sleepMs);
             ImGui::Text("Fixed steps %u (total %llu), alpha %.2f", s.fixedSteps, (unsigned long long)s.totalFixedSteps, s.alpha);
         }
+        if (ctx.engine && ImGui::CollapsingHeader("Latency", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const LatencyStats& l = ctx.engine->stats().latency;
+            drawLatencyLine(l);
+            if (l.reports > 0) {
+                ImGui::Text("sim->submit %.2f ms, render queue %.2f ms, GPU %.2f ms (%u reports)", l.gameToRenderMs,
+                            l.renderQueueMs, l.gpuRenderMs, l.reports);
+            }
+            ImGui::Text("Latency sleep %.2f ms, render-side queueing %.2f ms", l.sleepMs, l.renderQueueWaitMs);
+        }
+
         if (!ri.valid) {
             ImGui::TextDisabled("Renderer statistics unavailable (no UI render feature attached)");
             ImGui::End();
@@ -202,6 +229,19 @@ struct DebugTools::Impl {
             ImGui::Text("Textures %u, buffers %u, geometry %s, pending loads %u", r.textures, r.buffers,
                         bytesText(r.geometryBytes).c_str(), r.pendingAssetLoads);
             ImGui::TextDisabled("%s", ri.caps.gpuName.c_str());
+        }
+        if (r.split.mode != 0 && ImGui::CollapsingHeader("Split rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const render::SplitRenderingStats& sp = r.split; // r.SplitRendering (docs/guide/35-split-rendering.md)
+            if (sp.active) {
+                ImGui::Text("Secondary %s%s, transfer %s, latency %u frames", sp.adapter.c_str(),
+                            sp.sameAdapter ? " (same adapter)" : "", sp.transfer.c_str(), sp.latencyFrames);
+                ImGui::Text("Segments %u, offloaded %u, imported %u, fallbacks %u", sp.segments, sp.offloaded, sp.imported,
+                            sp.fallbacks);
+                ImGui::Text("Secondary GPU %.3f ms (compute %.3f), transfers %.3f ms (CPU copies %.3f), wait %.3f ms",
+                            sp.secondaryGpuMs, sp.secondaryComputeMs, sp.transferMs, sp.cpuCopyMs, sp.waitMs);
+                ImGui::Text("Speed ratio %.2f, predicted primary saving %.3f ms", sp.speedRatio, sp.predictedSavingMs);
+            }
+            ImGui::TextWrapped("%s", sp.status.c_str());
         }
         if (ImGui::CollapsingHeader("GPU passes", ImGuiTreeNodeFlags_DefaultOpen)) {
             std::vector<render::PassTiming> passes = r.passes;
@@ -412,8 +452,12 @@ struct DebugTools::Impl {
                         if (ImGui::Selectable(names[n].c_str(), int(n) == i)) setCVar(v.name(), names[n]);
                     ImGui::EndCombo();
                 }
-            } else if (ImGui::InputInt(id.c_str(), &i, 1, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
-                setCVar(v.name(), std::to_string(i));
+            } else {
+                // Edited as text and committed on Enter: Dear ImGui's InputInt/InputScalar does not support
+                // EnterReturnsTrue (IM_ASSERT in Debug builds).
+                std::string s = std::to_string(i);
+                if (ImGui::InputText(id.c_str(), &s, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsDecimal))
+                    setCVar(v.name(), s);
             }
             break;
         }
@@ -543,6 +587,18 @@ struct DebugTools::Impl {
                 ImGui::TextUnformatted("Upscaler quality");
             }
         }
+
+        // Split rendering: portable passes on a second GPU (integrated graphics); Off by default.
+        ImGui::SeparatorText("Split rendering (second GPU)");
+        for (const char* name : {"r.SplitRendering", "r.SplitRendering.Adapter", "r.SplitRendering.Transfer"}) {
+            if (ICVar* v = CVarRegistry::instance().find(name)) {
+                ImGui::SetNextItemWidth(200.0f);
+                cvarEditor(*v);
+                ImGui::SameLine();
+                ImGui::TextUnformatted(name);
+            }
+        }
+        if (ri.valid && ri.stats.split.mode != 0) ImGui::TextWrapped("%s", ri.stats.split.status.c_str());
 
         ImGui::SeparatorText("Console variables");
         cvarFilter.Draw("Filter##cvars", 220.0f);

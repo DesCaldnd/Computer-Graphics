@@ -10,8 +10,7 @@ const QHash<QString, QString>& russianTable() {
         {QStringLiteral(" · play world"), QStringLiteral(" · игровой мир")},
         {QStringLiteral(" · prefab instance"), QStringLiteral(" · экземпляр префаба")},
         {QStringLiteral("%1 (built-in)"), QStringLiteral("%1 (встроенный)")},
-        {QStringLiteral("%1 FPS  ·  %2 ms"), QStringLiteral("%1 FPS  ·  %2 мс")},
-        {QStringLiteral("%1 FPS · %2 ms"), QStringLiteral("%1 FPS · %2 мс")},
+        {QStringLiteral("%1 FPS · %2 ms · CPU %3 ms · GPU %4 ms"), QStringLiteral("%1 FPS · %2 мс · ЦП %3 мс · ГП %4 мс")},
         {QStringLiteral("%1 buffer visualisation"), QStringLiteral("Визуализация буфера «%1»")},
         {QStringLiteral("%1 is not a prefab"), QStringLiteral("%1 не является префабом")},
         {QStringLiteral("%1 is not a valid project file"), QStringLiteral("%1 не является файлом проекта")},
@@ -181,6 +180,8 @@ const QHash<QString, QString>& russianTable() {
         {QStringLiteral("Editor %1"), QStringLiteral("Редактор %1")},
         {QStringLiteral("Editor %1  ·  Vulkan · Ray tracing · Lua"), QStringLiteral("Редактор %1  ·  Vulkan · Трассировка лучей · Lua")},
         {QStringLiteral("Editor Frame Limit"), QStringLiteral("Ограничение FPS редактора")},
+        {QStringLiteral("Match Display Refresh Rate"), QStringLiteral("Частота обновления дисплея")},
+        {QStringLiteral("Refresh the viewport at the refresh rate of its monitor (the frame limit below is ignored)."), QStringLiteral("Обновлять вьюпорт с частотой его монитора (ограничение FPS ниже не применяется).")},
         {QStringLiteral("Editor Language"), QStringLiteral("Язык редактора")},
         {QStringLiteral("Editor Preferences"), QStringLiteral("Настройки редактора")},
         {QStringLiteral("Editor Preferences…"), QStringLiteral("Настройки редактора…")},
@@ -223,6 +224,8 @@ const QHash<QString, QString>& russianTable() {
         {QStringLiteral("Game Mode"), QStringLiteral("Игровой режим")},
         {QStringLiteral("Gameplay rules object spawned for new maps."), QStringLiteral("Объект правил игры, создаваемый для новых карт.")},
         {QStringLiteral("General"), QStringLiteral("Общие")},
+        {QStringLiteral("Gizmo axes are aligned with the world axes"), QStringLiteral("Оси гизмо совпадают с мировыми осями")},
+        {QStringLiteral("Gizmo axes follow the selected object's rotation"), QStringLiteral("Оси гизмо поворачиваются вместе с выбранным объектом")},
         {QStringLiteral("Gizmo Size"), QStringLiteral("Размер гизмо")},
         {QStringLiteral("Gizmos"), QStringLiteral("Гизмо")},
         {QStringLiteral("Global Illumination"), QStringLiteral("Глобальное освещение")},
@@ -279,6 +282,7 @@ const QHash<QString, QString>& russianTable() {
         {QStringLiteral("Loading %1…"), QStringLiteral("Загрузка %1…")},
         {QStringLiteral("Loading project Showcase…"), QStringLiteral("Загрузка проекта Showcase…")},
         {QStringLiteral("Loading project…"), QStringLiteral("Загрузка проекта…")},
+        {QStringLiteral("Local Gizmo Axes"), QStringLiteral("Локальные оси гизмо")},
         {QStringLiteral("Local space (click for world)"), QStringLiteral("Локальные оси (щёлкните для мировых)")},
         {QStringLiteral("Location"), QStringLiteral("Расположение")},
         {QStringLiteral("Lock: prevents selecting the entity in the viewport"), QStringLiteral("Замок: запрещает выбирать сущность во вьюпорте")},
@@ -304,6 +308,7 @@ const QHash<QString, QString>& russianTable() {
         {QStringLiteral("Mixer buses and device defaults."), QStringLiteral("Шины микшера и параметры устройства.")},
         {QStringLiteral("Motion Vectors"), QStringLiteral("Векторы движения")},
         {QStringLiteral("Mouse Sensitivity"), QStringLiteral("Чувствительность мыши")},
+        {QStringLiteral("Move and rotate gizmos follow the selected object's rotation (World / Local Space, Ctrl+`). Scale is always local."), QStringLiteral("Гизмо перемещения и вращения поворачиваются вместе с выбранным объектом (Мировые / локальные оси, Ctrl+`). Масштаб всегда локальный.")},
         {QStringLiteral("Move"), QStringLiteral("Перемещение")},
         {QStringLiteral("Move (W)"), QStringLiteral("Перемещение (W)")},
         {QStringLiteral("Multiple values"), QStringLiteral("Разные значения")},
@@ -566,10 +571,39 @@ const QHash<QString, QString>& russianTable() {
         {QStringLiteral("Unsaved Changes"), QStringLiteral("Несохранённые изменения")},
         {QStringLiteral("Untitled"), QStringLiteral("Без имени")},
         {QStringLiteral("Upscaler"), QStringLiteral("Апскейлер")},
+        {QStringLiteral("Ray Tracing Denoiser"), QStringLiteral("Шумоподавление трассировки лучей")},
+        {QStringLiteral("DLSS Ray Reconstruction"), QStringLiteral("DLSS Ray Reconstruction")},
+        {QStringLiteral("Auto uses NVIDIA DLSS Ray Reconstruction where it can run (it then also replaces the upscaler) and the SVGF denoisers elsewhere."),
+         QStringLiteral("Auto: NVIDIA DLSS Ray Reconstruction там, где она доступна (тогда она заменяет и апскейлер), иначе шумодавы SVGF.")},
         {QStringLiteral("Upscaler Quality"), QStringLiteral("Качество апскейлера")},
         {QStringLiteral("Used for selection, focus rings and primary buttons."), QStringLiteral("Используется для выделения, фокуса и основных кнопок.")},
         {QStringLiteral("Uses VK_KHR_acceleration_structure + VK_KHR_ray_query. Raster fallbacks are used for disabled effects."), QStringLiteral("Использует VK_KHR_acceleration_structure + VK_KHR_ray_query. Для выключенных эффектов — растровые замены.")},
         {QStringLiteral("VSync"), QStringLiteral("Вертикальная синхронизация")},
+        {QStringLiteral("Low Latency"), QStringLiteral("Низкая задержка")},
+        {QStringLiteral("Latency Limiter"), QStringLiteral("Ограничитель задержки")},
+        {QStringLiteral("On + Boost"), QStringLiteral("Вкл. + Boost")},
+        {QStringLiteral("Frame Generation"), QStringLiteral("Генерация кадров")},
+        {QStringLiteral("r.FrameGeneration: AMD FSR 3 frame interpolation in the player (one generated frame per rendered "
+                        "frame, needs amd_fidelityfx_vk.dll). Never used by the editor viewport."),
+         QStringLiteral("r.FrameGeneration: интерполяция кадров AMD FSR 3 в плеере (один сгенерированный кадр на каждый "
+                        "отрисованный, нужна amd_fidelityfx_vk.dll). Во вьюпорте редактора не используется.")},
+        {QStringLiteral("AMD FSR 3 frame interpolation in the player (Windows, amd_fidelityfx_vk.dll). The editor viewport "
+                        "never generates frames."),
+         QStringLiteral("Интерполяция кадров AMD FSR 3 в плеере (Windows, amd_fidelityfx_vk.dll). Вьюпорт редактора "
+                        "кадры не генерирует.")},
+        {QStringLiteral("r.Reflex: NVIDIA Reflex (VK_NV_low_latency2) where the GPU and driver support it, otherwise the "
+                        "engine's latency limiter (r.Reflex.Fallback). On + Boost also keeps the GPU clocks up."),
+         QStringLiteral("r.Reflex: NVIDIA Reflex (VK_NV_low_latency2), если его поддерживают GPU и драйвер, иначе "
+                        "ограничитель задержки движка (r.Reflex.Fallback). «Вкл. + Boost» также держит высокие частоты GPU.")},
+        {QStringLiteral("r.Reflex: NVIDIA Reflex (VK_NV_low_latency2) where supported, otherwise the engine's latency limiter. "
+                        "The editor viewport itself is not affected."),
+         QStringLiteral("r.Reflex: NVIDIA Reflex (VK_NV_low_latency2), где он поддерживается, иначе ограничитель задержки "
+                        "движка. На вьюпорт редактора не влияет.")},
+        {QStringLiteral("r.Reflex.Fallback, used without Reflex: Just in Time delays the frame start by the measured "
+                        "queueing, Strict waits for the previous frame's GPU work (lowest latency, lower frame rate)."),
+         QStringLiteral("r.Reflex.Fallback, без Reflex: «Just in Time» откладывает начало кадра на измеренное время "
+                        "ожидания в очереди, «Strict» ждёт завершения GPU-работы предыдущего кадра (минимальная "
+                        "задержка, ниже частота кадров).")},
         {QStringLiteral("Value"), QStringLiteral("Значение")},
         {QStringLiteral("Version"), QStringLiteral("Версия")},
         {QStringLiteral("Version control and external programs."), QStringLiteral("Контроль версий и внешние программы.")},

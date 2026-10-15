@@ -336,7 +336,14 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
     const bool hasRayQuery = hasAS && want(VK_KHR_RAY_QUERY_EXTENSION_NAME);
     const bool hasRtPipeline = hasAS && want(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
     const bool hasMesh = desc.enableMeshShaders && want(VK_EXT_MESH_SHADER_EXTENSION_NAME);
-    const bool hasFsr = want(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    const bool hasFsr = desc.enableFragmentShadingRate && want(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    // Machine learning (render/neural): tensor-core matrix products, optional.
+    const bool hasCoopMat = want(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+    const bool hasCoopVec = want(VK_NV_COOPERATIVE_VECTOR_EXTENSION_NAME);
+    // Low latency (NVIDIA Reflex): VK_NV_low_latency2 + VK_KHR_present_id (both exposed by NVIDIA's implicit
+    // present layer on Windows). Only meaningful with a swapchain.
+    const bool hasPresentId = s.surface && desc.enableLowLatency && want(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+    const bool hasLowLatency2 = s.surface && desc.enableLowLatency && want(VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
     for (const std::string& ext : desc.optionalDeviceExtensions) {
         const bool already = std::any_of(enableExts.begin(), enableExts.end(),
                                          [&](const char* e) { return ext == e; });
@@ -354,6 +361,9 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR supRT{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
     VkPhysicalDeviceMeshShaderFeaturesEXT supMesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR supFsr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR supCM{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+    VkPhysicalDeviceCooperativeVectorFeaturesNV supCV{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_FEATURES_NV};
+    VkPhysicalDevicePresentIdFeaturesKHR supPid{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
     VkPhysicalDeviceFeatures2 sup{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     {
         void** next = &sup.pNext;
@@ -369,6 +379,9 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
         if (hasRtPipeline) chain(supRT);
         if (hasMesh) chain(supMesh);
         if (hasFsr) chain(supFsr);
+        if (hasCoopMat) chain(supCM);
+        if (hasCoopVec) chain(supCV);
+        if (hasPresentId) chain(supPid);
         vkGetPhysicalDeviceFeatures2(s.physical, &sup);
     }
     if (!(core13 ? (sup13.dynamicRendering && sup13.synchronization2) : (supDR.dynamicRendering && supS2.synchronization2))) {
@@ -438,6 +451,15 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
     enFsr.pipelineFragmentShadingRate = supFsr.pipelineFragmentShadingRate;
     enFsr.attachmentFragmentShadingRate = supFsr.attachmentFragmentShadingRate;
     enFsr.primitiveFragmentShadingRate = supFsr.primitiveFragmentShadingRate;
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR enCM{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+    enCM.cooperativeMatrix = supCM.cooperativeMatrix;
+    VkPhysicalDeviceCooperativeVectorFeaturesNV enCV{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_FEATURES_NV};
+    enCV.cooperativeVector = supCV.cooperativeVector;
+    enCV.cooperativeVectorTraining = supCV.cooperativeVectorTraining;
+    VkPhysicalDevicePresentIdFeaturesKHR enPid{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
+    enPid.presentId = supPid.presentId;
+    s.caps.presentId = hasPresentId && enPid.presentId;
+    s.caps.lowLatency2 = hasLowLatency2;
     if (en12.drawIndirectCount == VK_FALSE) {
         // VK_KHR_draw_indirect_count is promoted; fall back to the extension on older drivers.
         if (want(VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME)) s.caps.drawIndirectCount = true;
@@ -459,6 +481,9 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
         if (hasRtPipeline && enRT.rayTracingPipeline) chain(enRT);
         if (hasMesh && enMesh.meshShader) chain(enMesh);
         if (hasFsr && (enFsr.pipelineFragmentShadingRate || enFsr.attachmentFragmentShadingRate)) chain(enFsr);
+        if (hasCoopMat && enCM.cooperativeMatrix) chain(enCM);
+        if (hasCoopVec && enCV.cooperativeVector) chain(enCV);
+        if (hasPresentId && enPid.presentId) chain(enPid);
     }
 
     // ---------------- queues ----------------
@@ -521,6 +546,18 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
     }
     slots[1] = compute.value_or(slots[0]);
     slots[2] = transfer.value_or(slots[0]);
+    // FSR 3 frame generation swapchain proxy: present + image acquire queues in the (present capable) graphics family,
+    // one compute queue; all private to the proxy.
+    std::optional<Slot> fgPresent, fgAcquire, fgCompute;
+    if (desc.frameGenerationQueues && s.surface) {
+        fgPresent = extraInFamily(u32(gfx));
+        fgAcquire = extraInFamily(u32(gfx));
+        fgCompute = pickDedicated(VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT);
+        if (!fgCompute) fgCompute = extraInFamily(u32(gfx));
+        if (!fgPresent || !fgAcquire || !fgCompute) {
+            OX_LOG_WARN("rhi", "not enough queues for frame generation (graphics family has {})", families[gfx].queueCount);
+        }
+    }
 
     std::vector<std::vector<f32>> priorities(familyCount);
     for (u32 i = 0; i < familyCount; ++i) priorities[i].assign(usedPerFamily[i], 1.f);
@@ -546,6 +583,19 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
         return false;
     }
     volkLoadDevice(s.device);
+    if (fgPresent && fgAcquire && fgCompute) {
+        auto get = [&](const Slot& sl) {
+            ExternalQueue q;
+            q.family = sl.family;
+            vkGetDeviceQueue(s.device, sl.family, sl.index, &q.queue);
+            return q;
+        };
+        s.frameGenerationQueues = {get(*fgPresent), get(*fgAcquire), get(*fgCompute)};
+        setDebugName(VK_OBJECT_TYPE_QUEUE, u64(s.frameGenerationQueues.present.queue), "queue.fg.present");
+        setDebugName(VK_OBJECT_TYPE_QUEUE, u64(s.frameGenerationQueues.imageAcquire.queue), "queue.fg.acquire");
+        setDebugName(VK_OBJECT_TYPE_QUEUE, u64(s.frameGenerationQueues.asyncCompute.queue), "queue.fg.compute");
+    }
+
 
     for (u32 t = 0; t < kQueueTypeCount; ++t) {
         i32 found = -1;
@@ -641,6 +691,33 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
         c.drawIndirectCount = c.drawIndirectCount || en12.drawIndirectCount;
         c.multiDrawIndirect = en10.multiDrawIndirect;
         c.fragmentShadingRate = hasFsr && (enFsr.pipelineFragmentShadingRate || enFsr.attachmentFragmentShadingRate);
+        if (c.fragmentShadingRate) {
+            VkPhysicalDeviceFragmentShadingRatePropertiesKHR pFsr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
+            VkPhysicalDeviceProperties2 pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            pp.pNext = &pFsr;
+            vkGetPhysicalDeviceProperties2(s.physical, &pp);
+            c.pipelineShadingRate = enFsr.pipelineFragmentShadingRate;
+            c.attachmentShadingRate = enFsr.attachmentFragmentShadingRate;
+            c.primitiveShadingRate = enFsr.primitiveFragmentShadingRate;
+            c.shadingRateTexelMinWidth = pFsr.minFragmentShadingRateAttachmentTexelSize.width;
+            c.shadingRateTexelMinHeight = pFsr.minFragmentShadingRateAttachmentTexelSize.height;
+            c.shadingRateTexelMaxWidth = pFsr.maxFragmentShadingRateAttachmentTexelSize.width;
+            c.shadingRateTexelMaxHeight = pFsr.maxFragmentShadingRateAttachmentTexelSize.height;
+            c.shadingRateMaxAspect = pFsr.maxFragmentShadingRateAttachmentTexelSizeAspectRatio;
+            c.shadingRateNonTrivialCombinerOps = pFsr.fragmentShadingRateNonTrivialCombinerOps;
+            c.shadingRateWithShaderDepthStencilWrites = pFsr.fragmentShadingRateWithShaderDepthStencilWrites;
+            u32 rateCount = 0;
+            vkGetPhysicalDeviceFragmentShadingRatesKHR(s.physical, &rateCount, nullptr);
+            std::vector<VkPhysicalDeviceFragmentShadingRateKHR> rates(rateCount, {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_KHR});
+            vkGetPhysicalDeviceFragmentShadingRatesKHR(s.physical, &rateCount, rates.data());
+            for (const auto& r : rates) {
+                if (!(r.sampleCounts & VK_SAMPLE_COUNT_1_BIT)) continue;
+                const u32 w = r.fragmentSize.width, h = r.fragmentSize.height;
+                if (w > 4 || h > 4) continue;
+                const u32 lw = w >= 4 ? 2u : w >= 2 ? 1u : 0u, lh = h >= 4 ? 2u : h >= 2 ? 1u : 0u;
+                c.shadingRateMask |= u16(1u << ((lw << 2) | lh));
+            }
+        }
         c.fillModeNonSolid = en10.fillModeNonSolid;
         c.wideLines = en10.wideLines;
         c.depthClamp = en10.depthClamp;
@@ -652,6 +729,46 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
         c.shaderFloat16 = en12.shaderFloat16;
         c.storageImageReadWithoutFormat = en10.shaderStorageImageReadWithoutFormat;
         c.storageImageWriteWithoutFormat = en10.shaderStorageImageWriteWithoutFormat;
+        c.storageBuffer16BitAccess = en11.storageBuffer16BitAccess;
+        c.shaderBufferInt64Atomics = en12.shaderBufferInt64Atomics;
+        if (hasCoopMat && enCM.cooperativeMatrix && vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR) {
+            VkPhysicalDeviceCooperativeMatrixPropertiesKHR pCM{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR};
+            VkPhysicalDeviceProperties2 pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            pp.pNext = &pCM;
+            vkGetPhysicalDeviceProperties2(s.physical, &pp);
+            c.cooperativeMatrixStages = pCM.cooperativeMatrixSupportedStages;
+            u32 count = 0;
+            vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(s.physical, &count, nullptr);
+            std::vector<VkCooperativeMatrixPropertiesKHR> cfgs(count, {VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR});
+            vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(s.physical, &count, cfgs.data());
+            for (const auto& m : cfgs) {
+                if (m.MSize != 16 || m.NSize != 16 || m.KSize != 16 || m.scope != VK_SCOPE_SUBGROUP_KHR) continue;
+                if (m.AType != VK_COMPONENT_TYPE_FLOAT16_KHR || m.BType != VK_COMPONENT_TYPE_FLOAT16_KHR) continue;
+                if (m.CType == VK_COMPONENT_TYPE_FLOAT32_KHR && m.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR) c.cooperativeMatrix = true;
+                if (m.CType == VK_COMPONENT_TYPE_FLOAT16_KHR && m.ResultType == VK_COMPONENT_TYPE_FLOAT16_KHR)
+                    c.cooperativeMatrixFp16Accumulate = true;
+            }
+            c.cooperativeMatrix = c.cooperativeMatrix && en12.shaderFloat16 && en11.storageBuffer16BitAccess;
+        }
+        if (hasCoopVec && enCV.cooperativeVector && vkGetPhysicalDeviceCooperativeVectorPropertiesNV) {
+            VkPhysicalDeviceCooperativeVectorPropertiesNV pCV{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_VECTOR_PROPERTIES_NV};
+            VkPhysicalDeviceProperties2 pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            pp.pNext = &pCV;
+            vkGetPhysicalDeviceProperties2(s.physical, &pp);
+            c.cooperativeVectorStages = pCV.cooperativeVectorSupportedStages;
+            u32 count = 0;
+            vkGetPhysicalDeviceCooperativeVectorPropertiesNV(s.physical, &count, nullptr);
+            std::vector<VkCooperativeVectorPropertiesNV> cfgs(count, {VK_STRUCTURE_TYPE_COOPERATIVE_VECTOR_PROPERTIES_NV});
+            vkGetPhysicalDeviceCooperativeVectorPropertiesNV(s.physical, &count, cfgs.data());
+            for (const auto& v : cfgs) {
+                if (v.inputType == VK_COMPONENT_TYPE_FLOAT16_KHR && v.inputInterpretation == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                    v.matrixInterpretation == VK_COMPONENT_TYPE_FLOAT16_KHR && v.biasInterpretation == VK_COMPONENT_TYPE_FLOAT16_KHR &&
+                    v.resultType == VK_COMPONENT_TYPE_FLOAT16_KHR)
+                    c.cooperativeVector = true;
+            }
+            c.cooperativeVector = c.cooperativeVector && en12.shaderFloat16 && en11.storageBuffer16BitAccess;
+            c.cooperativeVectorTraining = c.cooperativeVector && enCV.cooperativeVectorTraining;
+        }
 
         c.samplerAnisotropy = en10.samplerAnisotropy;
         c.maxSamplerAnisotropy = lim.maxSamplerAnisotropy;
@@ -697,7 +814,9 @@ bool Device::init(const DeviceDesc& desc, std::string& error) {
     if (!s.caps.tessellationShader) {
         s.supportedStages &= ~(VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT);
     }
+    if (!s.caps.attachmentShadingRate) s.supportedStages &= ~VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
     s.supportedAccess = ~0ull;
+    if (!s.caps.attachmentShadingRate) s.supportedAccess &= ~VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
     if (!s.caps.accelerationStructure) {
         s.supportedAccess &= ~(VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
     }
@@ -859,7 +978,36 @@ VkPhysicalDevice Device::vkPhysicalDevice() const { return m_s->physical; }
 VkDevice Device::vkDevice() const { return m_s->device; }
 VkQueue Device::vkQueue(QueueType q) const { return m_s->queues[m_s->queueOf[u32(q)]].queue; }
 u32 Device::queueFamily(QueueType q) const { return m_s->queues[m_s->queueOf[u32(q)]].family; }
+FrameGenerationQueues Device::frameGenerationQueues() const { return m_s->frameGenerationQueues; }
+std::mutex& Device::graphicsQueueMutex() { return *m_s->queue(QueueType::Graphics).mutex; }
 VkSurfaceKHR Device::surface() const { return m_s->surface; }
+
+void Device::releaseSurface() {
+    DeviceState& s = *m_s;
+    if (!s.surface) return;
+    if (s.surfaceProvider) s.surfaceProvider->destroySurface(s.instance, s.surface);
+    else vkDestroySurfaceKHR(s.instance, s.surface, nullptr);
+    s.surface = VK_NULL_HANDLE;
+}
+
+bool Device::recreateSurface() {
+    DeviceState& s = *m_s;
+    if (!s.surfaceProvider) return false;
+    releaseSurface();
+    s.surface = s.surfaceProvider->createSurface(s.instance);
+    if (!s.surface) {
+        OX_LOG_ERROR("rhi", "recreateSurface: ISurfaceProvider::createSurface failed");
+        return false;
+    }
+    VkBool32 ok = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(s.physical, s.queue(QueueType::Graphics).family, s.surface, &ok);
+    if (!ok) {
+        OX_LOG_ERROR("rhi", "recreateSurface: the graphics queue cannot present to the new surface");
+        return false;
+    }
+    OX_LOG_INFO("rhi", "window surface recreated");
+    return true;
+}
 ISurfaceProvider* Device::surfaceProvider() const { return m_s->surfaceProvider; }
 VkPipelineLayout Device::pipelineLayout() const { return m_s->pipelineLayout; }
 VkDescriptorSet Device::bindlessSet() const { return m_s->bindlessSet; }
@@ -1106,10 +1254,12 @@ void recordAcquires(Device& device, DeviceState& s, CommandList& cmd, const std:
 
 } // namespace
 
-namespace detail {
+namespace {
 
-u64 submitRaw(DeviceState& s, QueueType queue, std::span<const VkCommandBuffer> cmds, std::vector<VkSemaphoreSubmitInfo> waits,
-              std::vector<VkSemaphoreSubmitInfo> signals) {
+// submitNext: chained into VkSubmitInfo2::pNext (VkLatencySubmissionPresentIdNV for frame submits).
+u64 submitRawChained(DeviceState& s, QueueType queue, std::span<const VkCommandBuffer> cmds,
+                     std::vector<VkSemaphoreSubmitInfo> waits, std::vector<VkSemaphoreSubmitInfo> signals,
+                     const void* submitNext) {
     PhysicalQueue& pq = s.queue(queue);
     std::lock_guard lock(*pq.mutex);
     const u64 value = ++pq.submitted;
@@ -1125,6 +1275,7 @@ u64 submitRaw(DeviceState& s, QueueType queue, std::span<const VkCommandBuffer> 
         cbs.push_back(ci);
     }
     VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    si.pNext = submitNext;
     si.waitSemaphoreInfoCount = u32(waits.size());
     si.pWaitSemaphoreInfos = waits.data();
     si.commandBufferInfoCount = u32(cbs.size());
@@ -1133,6 +1284,15 @@ u64 submitRaw(DeviceState& s, QueueType queue, std::span<const VkCommandBuffer> 
     si.pSignalSemaphoreInfos = signals.data();
     OX_VK_CHECK(vkQueueSubmit2(pq.queue, 1, &si, VK_NULL_HANDLE));
     return value;
+}
+
+} // namespace
+
+namespace detail {
+
+u64 submitRaw(DeviceState& s, QueueType queue, std::span<const VkCommandBuffer> cmds, std::vector<VkSemaphoreSubmitInfo> waits,
+              std::vector<VkSemaphoreSubmitInfo> signals) {
+    return submitRawChained(s, queue, cmds, std::move(waits), std::move(signals), nullptr);
 }
 
 } // namespace detail
@@ -1189,7 +1349,14 @@ TimelinePoint Device::submit(CommandList& cmd, const SubmitInfo& info) {
         }
     }
     cmds.push_back(cmd.vk());
-    const u64 value = submitRaw(s, cmd.queue(), cmds, std::move(waits), std::move(signals));
+    // NVIDIA Reflex: tie the frame's final submit to its present id (Swapchain::setPresentId).
+    VkLatencySubmissionPresentIdNV latencyId{VK_STRUCTURE_TYPE_LATENCY_SUBMISSION_PRESENT_ID_NV};
+    const void* submitNext = nullptr;
+    if (info.swapchain && s.caps.lowLatency2 && info.swapchain->lowLatencySupported() && info.swapchain->presentId() != 0) {
+        latencyId.presentID = info.swapchain->presentId();
+        submitNext = &latencyId;
+    }
+    const u64 value = submitRawChained(s, cmd.queue(), cmds, std::move(waits), std::move(signals), submitNext);
     return {cmd.queue(), value};
 }
 
@@ -1248,7 +1415,14 @@ TimelinePoint Device::lastSubmitted(QueueType queue) const {
 
 void Device::waitIdle() {
     DeviceState& s = *m_s;
-    vkDeviceWaitIdle(s.device);
+    // The engine's own queues only, each under its submit mutex — not vkDeviceWaitIdle: that also waits for the
+    // private queues of the FSR 3 frame generation proxy (DeviceDesc::frameGenerationQueues), which its threads use
+    // concurrently (an external synchronisation violation) and which may hold work waiting for a present the proxy
+    // only issues later; leaving the proxy then hung in vkDeviceWaitIdle.
+    for (PhysicalQueue& q : s.queues) {
+        std::lock_guard lock(*q.mutex);
+        vkQueueWaitIdle(q.queue);
+    }
     s.collectGarbage(true);
 }
 

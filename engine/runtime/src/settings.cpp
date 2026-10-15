@@ -34,6 +34,20 @@ CVar<int>& monitor() {
     static CVar<int> cv("r.Monitor", 0, "Monitor index for fullscreen", 0, 16, CVarFlags::Persist);
     return cv;
 }
+CVar<int>& reflex() {
+    static CVar<int> cv("r.Reflex", 1,
+                        "Low latency: NVIDIA Reflex (VK_NV_low_latency2) when supported, else the engine limiter "
+                        "(r.Reflex.Fallback). On = Auto",
+                        CVarEnum{"Off", "On", "OnBoost"}.alias("Auto", 1).alias("Boost", 2), CVarFlags::Persist);
+    return cv;
+}
+CVar<int>& reflexFallback() {
+    static CVar<int> cv("r.Reflex.Fallback", 1,
+                        "Latency limiter without Reflex: Off, JustInTime (delay frame start by the measured queueing), "
+                        "Strict (wait for the previous frame's GPU completion)",
+                        CVarEnum{"Off", "JustInTime", "Strict"}, CVarFlags::Persist);
+    return cv;
+}
 CVar<int>& maxFps() {
     static CVar<int> cv("t.MaxFPS", 0, "Frame rate limit (0 = unlimited)", 0, 1000, CVarFlags::Persist);
     return cv;
@@ -61,13 +75,16 @@ namespace {
     cvars::maxFps();
     cvars::fov();
     cvars::masterVolume();
+    cvars::reflex();
+    cvars::reflexFallback();
     return true;
 }();
 
 // Cvars mirrored by explicit UserSettings fields (not duplicated into UserSettings::cvars).
-constexpr std::array<std::string_view, 11> kManagedCVars = {
+constexpr std::array<std::string_view, 13> kManagedCVars = {
     "r.VSync",   "r.WindowMode", "r.ResolutionX", "r.ResolutionY",     "r.Monitor",   "t.MaxFPS",
-    "g.FOV",     "a.MasterVolume", "r.RayTracing", "r.Upscaler", "r.Upscaler.Quality"};
+    "g.FOV",     "a.MasterVolume", "r.RayTracing", "r.Upscaler", "r.Upscaler.Quality", "r.Reflex",
+    "r.FrameGeneration"};
 
 bool isManaged(std::string_view name) {
     return name.starts_with("sg.") || std::find(kManagedCVars.begin(), kManagedCVars.end(), name) != kManagedCVars.end();
@@ -116,6 +133,9 @@ void registerSettingsTypes() {
         .field("rayTracing", &GraphicsSettings::rayTracing)
         .field("upscaler", &GraphicsSettings::upscaler)
         .field("upscalerQuality", &GraphicsSettings::upscalerQuality)
+        .field("denoiser", &GraphicsSettings::denoiser)
+        .field("reflex", &GraphicsSettings::reflex)
+        .field("frameGeneration", &GraphicsSettings::frameGeneration)
         .field("fov", &GraphicsSettings::fov);
     OX_REFLECT_TYPE(AudioSettings, "AudioSettings")
         .field("masterVolume", &AudioSettings::masterVolume, attr::Range{0.0, 1.0})
@@ -141,6 +161,8 @@ Settings::Settings(Vfs* vfs, std::string uri) : m_vfs(vfs), m_uri(std::move(uri)
     cvars::maxFps();
     cvars::fov();
     cvars::masterVolume();
+    cvars::reflex();
+    cvars::reflexFallback();
 }
 
 void Settings::applyProjectDefaults() {
@@ -214,9 +236,12 @@ void Settings::apply(SettingsCategory categories) {
         cvars::monitor().set(g.monitor, CVarSource::Config);
         cvars::maxFps().set(g.maxFps, CVarSource::Config);
         cvars::fov().set(g.fov, CVarSource::Config);
+        cvars::reflex().setFromString(g.reflex, CVarSource::Config);
         setByName("r.RayTracing", g.rayTracing);
         setByName("r.Upscaler", g.upscaler);
         setByName("r.Upscaler.Quality", g.upscalerQuality);
+        setByName("r.Denoiser", g.denoiser);
+        setByName("r.FrameGeneration", g.frameGeneration);
     }
     if (hasCategory(categories, SettingsCategory::Audio)) {
         cvars::masterVolume().set(m_user.audio.masterVolume, CVarSource::Config);
@@ -252,11 +277,16 @@ void Settings::captureFromCVars() {
     g.monitor = cvars::monitor().get();
     g.maxFps = cvars::maxFps().get();
     g.fov = cvars::fov().get();
+    g.reflex = cvars::reflex().toString();
+
     m_user.audio.masterVolume = cvars::masterVolume().get();
     auto& reg = CVarRegistry::instance();
     if (auto* c = reg.find("r.RayTracing")) g.rayTracing = c->toString() == "true";
     if (auto* c = reg.find("r.Upscaler")) g.upscaler = c->toString();
     if (auto* c = reg.find("r.Upscaler.Quality")) g.upscalerQuality = c->toString();
+    if (auto* c = reg.find("r.Denoiser")) g.denoiser = c->toString();
+    if (auto* c = reg.find("r.FrameGeneration")) g.frameGeneration = c->toString();
+
 
     const QualityLevel overall = scalability::overallLevel();
     g.groups.clear();

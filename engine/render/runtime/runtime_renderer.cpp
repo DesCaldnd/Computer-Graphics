@@ -6,17 +6,21 @@
 #include <oxwald/core/profile.hpp>
 #include <oxwald/core/services.hpp>
 #include <oxwald/core/vfs.hpp>
+#include <oxwald/render/features/framegen/frame_generation.hpp>
 #include <oxwald/render/features/postprocess/postprocess.hpp>
 #include <oxwald/render/features/reflections/reflections.hpp>
+#include <oxwald/render/mobile_quality.hpp>
 #include <oxwald/render/quality.hpp>
 #include <oxwald/render/register_types.hpp>
 #include <oxwald/render/renderer.hpp>
 #include <oxwald/render/runtime_renderer.hpp>
+#include <oxwald/render/split_rendering.hpp>
 #include <oxwald/rhi/device.hpp>
 #include <oxwald/runtime/settings.hpp>
 #include <oxwald/rhi/swapchain.hpp>
 #include <oxwald/scene/scene.hpp>
 #include <oxwald/scene/world.hpp>
+#include "latency_tracker.hpp"
 #if OX_RENDER_HAS_ASSETS
 #include <oxwald/assets/asset_manager.hpp>
 #include <oxwald/assets/image.hpp>
@@ -26,9 +30,12 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace ox::render {
 
@@ -55,12 +62,18 @@ public:
         dd.surface = surface.provider;
         dd.pipelineCachePath = pipelineCachePath(services);
         appendUpscalerVulkanExtensions(dd); // NGX (DLSS) extensions where DLSS can run
+        appendSplitRenderingVulkanExtensions(dd); // shared memory for r.SplitRendering (staging works without)
+        framegen::appendVulkanRequirements(dd);   // FSR 3 frame generation queues (windowed, DLL present)
+        // OX_DISABLE_REFLEX=1: no VK_NV_low_latency2, so r.Reflex uses the engine limiter (measuring it on NVIDIA).
+        if (const char* e = std::getenv("OX_DISABLE_REFLEX"); e && e[0] == '1') dd.enableLowLatency = false;
         std::string error;
         m_device = rhi::Device::create(dd, &error);
         if (!m_device) return makeError("Vulkan device creation failed: {}", error);
         if (surface.provider) {
             m_swapchain = rhi::Swapchain::create(*m_device, {presentMode()});
             if (!m_swapchain) return makeError("swapchain creation failed");
+            OX_LOG_INFO("render", "NVIDIA Reflex (VK_NV_low_latency2): {}",
+                        m_swapchain->lowLatencySupported() ? "available" : "not available (engine latency limiter)");
         } else {
             rhi::TextureDesc td;
             td.name = "runtime.offscreen";
@@ -73,17 +86,30 @@ public:
         // Only on first launch: afterwards the player's own (saved) quality settings must win.
         Settings* userSettings = services.tryGet<Settings>();
         if (m_options.autoDetectQuality && (!userSettings || !userSettings->hasUserFile())) {
+#if defined(__ANDROID__)
+            // Phones: a capability/vendor based profile instead of the desktop synthetic benchmark (Low/Medium,
+            // FSR 1, no ray tracing by default, vertex pipeline when mesh shaders are missing).
+            applyMobileQualityProfile(mobileQualityProfile(m_device->caps()));
+            if (userSettings) userSettings->captureFromCVars();
+#else
             // Scalability levels + AA/upscaler (DLSS on RTX, TAAU/FSR 1 on slower GPUs, see recommendedSettings()).
             const BenchmarkResult bench = autoDetectQuality(*m_device);
             if (bench.valid) {
                 applyRecommendedSettings(recommendedSettings(*m_device, bench.score));
                 if (userSettings) userSettings->captureFromCVars(); // saved on shutdown -> not detected again
             }
+#endif
         }
         RendererDesc rd;
         rd.jobs = services.tryGet<JobSystem>();
+        m_latency.start(*m_device, m_swapchain.get());
         m_renderer = Renderer::create(*m_device, rd);
         m_view = m_renderer->createView({.name = "Main"});
+        if (m_swapchain) {
+            std::string reason;
+            m_frameGen = framegen::FrameGenerator::create(*m_device, *m_renderer, m_view, &reason);
+            OX_LOG_INFO("render", "FSR 3 frame generation: {}", m_frameGen ? "available (r.FrameGeneration)" : reason);
+        }
         m_debugDraw = services.tryGet<DebugDraw>();
         m_services = &services;
 #if OX_RENDER_HAS_ASSETS
@@ -100,11 +126,18 @@ public:
     void shutdown() override {
         if (!m_device) return;
         m_device->waitIdle();
+        m_latency.stop();
+        // Requests no rendered frame took (the last frames were skipped: minimised, surface lost): report them.
+        for (const ScreenshotRequest& r : takeScreenshots()) {
+            OX_LOG_ERROR("render", "screenshot {}: no frame was rendered after the request", r.path.string());
+            if (r.done) r.done(false);
+        }
 #if OX_RENDER_HAS_ASSETS
         m_hotReload = {};
 #endif
         m_renderer.reset();
-        m_swapchain.reset();
+        m_swapchain.reset(); // before the frame generator: it may own the swapchain (proxy)
+        m_frameGen.reset();
         if (m_offscreen) m_device->destroy(m_offscreen);
         m_offscreen = {};
         if (m_capture) m_device->destroy(m_capture);
@@ -129,11 +162,17 @@ public:
         const auto t0 = std::chrono::steady_clock::now();
         const RenderSnapshot& snap = m_slots[ctx.slot % kRenderSnapshotSlots];
         installBakedProbes(snap);
-        m_device->beginFrame();
+        using Ms = std::chrono::duration<f64, std::milli>;
+        m_device->beginFrame(); // waits for the GPU to retire this frame slot
+        const auto tFrameSlot = std::chrono::steady_clock::now();
+        if (m_frameGen && m_swapchain) m_frameGen->beginFrame(*m_swapchain, framegen::requestedMode() == 1);
         if (m_swapchain && !m_swapchain->acquire()) { // minimised
             m_device->endFrame();
             return;
         }
+        const auto tAcquired = std::chrono::steady_clock::now();
+        m_latency.renderSubmitStart(ctx.frameIndex); // present id = frame + 1 (VkPresentIdKHR, Reflex markers)
+        if (m_frameGen && m_swapchain) m_frameGen->prepareFrame(*m_swapchain, ctx.realDt * 1000.0f);
         m_renderer->beginFrame(snap);
         ViewRenderRequest req;
         req.view = m_view;
@@ -145,8 +184,12 @@ public:
         }
         // Windowed screenshot: the same view (same exposure/TAA state) is also rendered into a capture texture of
         // the swapchain's size right before the presented image.
+        // Requests are taken once per frame, so one queued by the game thread after this point waits for the next
+        // frame (taking them again at the end of the frame raced with requestScreenshot(): a request that arrived
+        // in between had no capture texture and failed).
+        std::vector<ScreenshotRequest> shots = takeScreenshots();
         rhi::TextureHandle capture = m_offscreen;
-        if (m_swapchain && screenshotPending()) {
+        if (m_swapchain && !shots.empty()) {
             capture = captureTexture(m_swapchain->extent());
             ViewRenderRequest creq = req;
             creq.target.texture = capture;
@@ -157,12 +200,39 @@ public:
         else req.target.texture = m_offscreen;
         m_renderer->renderView(req);
         m_renderer->endFrame();
+        m_latency.renderSubmitEnd(ctx.frameIndex);
+        const auto tRecorded = std::chrono::steady_clock::now();
+        m_latency.frameSubmitted(ctx.frameIndex, m_device->lastSubmitted(rhi::QueueType::Graphics).value, tRecorded);
         if (m_swapchain) m_swapchain->present();
+        const auto tPresented = std::chrono::steady_clock::now();
+        if (m_frameGen && m_swapchain) m_frameGen->endFrame(*m_swapchain);
         m_device->endFrame();
-        writePendingScreenshot(capture);
-        m_frames.fetch_add(1);
-        m_drawCalls.store(m_renderer->stats().drawCalls);
-        m_lastRenderMs.store(std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        writePendingScreenshot(capture, std::move(shots));
+        {
+            const RenderStats& rs = m_renderer->stats();
+            std::lock_guard lock(m_statsMutex);
+            m_timing.lastFrameWaitMs = Ms(tFrameSlot - t0).count();
+            m_timing.lastAcquireMs = Ms(tAcquired - tFrameSlot).count();
+            m_timing.lastCpuRenderMs = Ms(tRecorded - tAcquired).count();
+            m_timing.lastPresentMs = Ms(tPresented - tRecorded).count();
+            m_timing.lastGpuFrameMs = rs.gpuFrameMs;
+            m_timing.vsync = m_swapchain && m_swapchain->presentMode() == rhi::PresentMode::VSync;
+            m_timing.drawCalls = rs.drawCalls;
+            m_timing.lastRenderMs = Ms(std::chrono::steady_clock::now() - t0).count();
+            m_timing.framesRendered++;
+            m_latency.fillStats(m_timing.latency, ctx.frameIndex);
+            if (m_frameGen) {
+                const framegen::Stats fg = m_frameGen->stats();
+                m_timing.frameGeneration.active = fg.active;
+                m_timing.frameGeneration.renderedFrames = fg.renderedFrames;
+                m_timing.frameGeneration.presentedFrames = fg.presentedFrames;
+                m_timing.frameGeneration.addedLatencyMs = fg.addedLatencyMs;
+            }
+            // Not lastFrameWaitMs: it has a CPU floor (~0.8 ms of beginFrame work at 1440p) the limiter cannot sleep
+            // away, which made it oversleep until the GPU starved; a real frame-slot wait also shows up as positive
+            // GPU queueing. The GPU term is signed (negative: the GPU idled), so starvation backs the limiter off.
+            m_timing.latency.renderQueueWaitMs = m_timing.lastAcquireMs + m_latency.gpuQueueMs();
+        }
     }
 
     // Baked reflection probes / irradiance volumes of newly seen entities: project://Baked/<uuid>.oxcube|.oxirr
@@ -196,12 +266,20 @@ public:
 
     ox::RenderStats stats() const override {
         ox::RenderStats s;
-        s.framesRendered = m_frames.load();
-        s.lastRenderMs = m_lastRenderMs.load();
+        {
+            std::lock_guard lock(m_statsMutex);
+            s = m_timing;
+        }
         s.lastExtractMs = m_lastExtractMs.load();
-        s.drawCalls = m_drawCalls.load();
         return s;
     }
+
+    // Low latency (game thread): NVIDIA Reflex sleep + markers, previous-frame GPU wait for the strict limiter.
+    f64 latencySleep(u64 frameIndex, i32 mode) override { return m_device ? m_latency.sleep(frameIndex, mode) : -1.0; }
+    void latencyMarker(u64 frameIndex, LatencyMarker marker) override {
+        if (m_device) m_latency.marker(frameIndex, marker);
+    }
+    bool waitForFrameGpu(u64 frameIndex) override { return m_device && m_latency.waitForFrame(frameIndex); }
 
     Renderer* renderer() { return m_renderer.get(); }
 
@@ -217,9 +295,9 @@ private:
         std::function<void(bool)> done;
     };
 
-    bool screenshotPending() {
+    std::vector<ScreenshotRequest> takeScreenshots() {
         std::lock_guard lock(m_screenshotMutex);
-        return !m_screenshots.empty();
+        return std::exchange(m_screenshots, {});
     }
 
     rhi::TextureHandle captureTexture(VkExtent2D size) {
@@ -238,17 +316,13 @@ private:
         return m_capture;
     }
 
-    void writePendingScreenshot(rhi::TextureHandle source) {
-        std::vector<ScreenshotRequest> requests;
-        {
-            std::lock_guard lock(m_screenshotMutex);
-            requests.swap(m_screenshots);
-        }
+    void writePendingScreenshot(rhi::TextureHandle source, std::vector<ScreenshotRequest> requests) {
         if (requests.empty()) return;
         bool ok = false;
 #if OX_RENDER_HAS_ASSETS
         if (!source) {
             for (const ScreenshotRequest& r : requests) {
+                OX_LOG_ERROR("render", "screenshot {}: no capture texture for this frame", r.path.string());
                 if (r.done) r.done(false);
             }
             return;
@@ -288,16 +362,19 @@ private:
     std::unique_ptr<rhi::Device> m_device;
     std::unique_ptr<rhi::Swapchain> m_swapchain;
     std::unique_ptr<Renderer> m_renderer;
+    std::unique_ptr<framegen::FrameGenerator> m_frameGen; // windowed + FidelityFX runtime only
+    LatencyTracker m_latency;
+
     rhi::TextureHandle m_offscreen;
+
     rhi::TextureHandle m_capture; // windowed screenshots
     ViewId m_view = 0;
     DebugDraw* m_debugDraw = nullptr;
     Services* m_services = nullptr; // ExtractHookEx hooks (gameplay WorldRenderData bridge)
     std::array<RenderSnapshot, kRenderSnapshotSlots> m_slots;
     glm::uvec2 m_size{0, 0};
-    std::atomic<u64> m_frames{0};
-    std::atomic<u64> m_drawCalls{0};
-    std::atomic<f64> m_lastRenderMs{0.0};
+    mutable std::mutex m_statsMutex;
+    ox::RenderStats m_timing; // render thread writes, any thread reads (m_statsMutex)
     std::atomic<f64> m_lastExtractMs{0.0};
 #if OX_RENDER_HAS_ASSETS
     ScopedConnection m_hotReload;

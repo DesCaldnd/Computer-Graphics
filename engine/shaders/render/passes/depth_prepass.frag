@@ -1,6 +1,7 @@
 #version 460
 // Depth prepass: Normals (world normal + roughness), Velocity (uv motion), EntityID (editor), alpha test.
 #include <render/common/material.glsl>
+#include <render/neural/ntc.glsl>
 
 OX_RENDER_DRAW_PUSH(uint inputs[6];);
 
@@ -37,7 +38,8 @@ void main() {
         discard;
     }
 #endif
-    OxMaterialSample ms = oxSampleMaterial(m, vUv0, vColor, vNormal, vTangent, gl_FrontFacing, VIEW.mipBias);
+    OxMaterialSample ms = oxSampleMaterialView(pc.view, m, vUv0, vColor, vNormal, vTangent, gl_FrontFacing, VIEW.mipBias,
+                                               gl_FragCoord.xy, true);
     outNormals = vec4(ms.normal, clamp(ms.perceptualRoughness, 0.0, 1.0));
     vec2 cur = vCurClip.xy / vCurClip.w;
     vec2 prev = vPrevClip.xy / vPrevClip.w;

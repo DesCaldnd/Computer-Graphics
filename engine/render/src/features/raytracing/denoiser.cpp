@@ -1,5 +1,6 @@
 // SVGF-style denoiser (see denoiser.hpp). Plain compute: runs on every device, including MoltenVK.
 #include <oxwald/render/features/raytracing/denoiser.hpp>
+#include <oxwald/render/neural/neural.hpp>
 #include <oxwald/render/render_types.hpp>
 #include <oxwald/rhi/device.hpp>
 #include <oxwald/rhi/render_graph.hpp>
@@ -73,13 +74,15 @@ bool SvgfDenoiser::initialize(rhi::Device& device) {
                                             "render/raytracing/denoise_atrous.comp", d);
         m_upsample[i] = createComputePipeline(device, std::format("rt.denoise.upsample.{}", names[i]),
                                               "render/raytracing/denoise_upsample.comp", d);
+        m_neural[i] = createComputePipeline(device, std::format("neural.denoise.atrous.{}", names[i]),
+                                            "render/neural/denoise_neural.comp", d);
     }
     return device.vkPipeline(m_temporal) != VK_NULL_HANDLE;
 }
 
 void SvgfDenoiser::shutdown(rhi::Device& device) {
     for (rhi::PipelineHandle* p : {&m_temporal, &m_variance, &m_atrous[0], &m_atrous[1], &m_atrous[2], &m_upsample[0],
-                                   &m_upsample[1], &m_upsample[2]}) {
+                                   &m_upsample[1], &m_upsample[2], &m_neural[0], &m_neural[1], &m_neural[2]}) {
         if (*p) device.destroy(*p);
         *p = {};
     }
@@ -207,6 +210,7 @@ DenoiserOutputs SvgfDenoiser::denoise(FeatureContext& ctx, std::string_view name
 
     // 3. À-trous iterations. Iteration 0 feeds the colour history; the last one writes the output format.
     rhi::RGTexture curColor = accum, curVar = variance;
+    const bool useNeural = neural::neuralDenoiserSelected(); // r.Denoiser Neural: learned kernel, same inputs / outputs
     for (u32 it = 0; it < iterations; ++it) {
         const bool last = it + 1 == iterations;
         const bool toFinal = last && it > 0;
@@ -217,14 +221,14 @@ DenoiserOutputs SvgfDenoiser::denoise(FeatureContext& ctx, std::string_view name
         const bool writesVariance = fmt == DenoiseOutput::RGBA16F;
         rhi::RGTexture outVar;
         if (writesVariance) outVar = graph.createTexture(texDesc(VK_FORMAT_R16_SFLOAT, e, std::format("{}.Var{}", name, it)));
-        rhi::PassBuilder pb = graph.addPass(std::format("{}.Atrous{}", name, it), rhi::PassType::Compute);
+        rhi::PassBuilder pb = graph.addPass(std::format("{}.{}Atrous{}", name, useNeural ? "Neural" : "", it), rhi::PassType::Compute);
         pb.read(curColor, rhi::Access::SampledCompute)
             .read(curVar, rhi::Access::SampledCompute)
             .read(geoCur, rhi::Access::SampledCompute)
             .overwrite(outColor, rhi::Access::StorageWriteCompute);
         if (writesVariance) pb.overwrite(outVar, rhi::Access::StorageWriteCompute);
         const rhi::RGTexture srcC = curColor, srcV = curVar;
-        const rhi::PipelineHandle pipe = m_atrous[u32(fmt)];
+        const rhi::PipelineHandle pipe = useNeural && m_neural[u32(fmt)] ? m_neural[u32(fmt)] : m_atrous[u32(fmt)];
         pb.execute([=](rhi::PassContext& p) {
             AtrousPush pc{};
             pc.view = view;

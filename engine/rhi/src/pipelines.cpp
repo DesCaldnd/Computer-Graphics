@@ -246,6 +246,16 @@ VkPipeline buildGraphics(Device& device, DeviceState& s, PipelineRecord& rec) {
 
         VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
         ci.pNext = &ri;
+        // Variable rate shading: the pipeline rate stays 1×1 and the attachment rate (if a pass binds a shading rate
+        // image) replaces it. Without an attachment the implementation behaves as if every texel were 1×1.
+        VkPipelineFragmentShadingRateStateCreateInfoKHR fsr{VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR};
+        if (d.variableRateShading && s.caps.attachmentShadingRate) {
+            fsr.fragmentSize = {1, 1};
+            fsr.combinerOps[0] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
+            fsr.combinerOps[1] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR;
+            ri.pNext = &fsr;
+            ci.flags |= VK_PIPELINE_CREATE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
+        }
         ci.stageCount = u32(stages.size());
         ci.pStages = stages.data();
         ci.pVertexInputState = meshPipeline ? nullptr : &vi;

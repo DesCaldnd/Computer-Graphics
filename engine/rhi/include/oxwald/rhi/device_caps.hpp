@@ -49,7 +49,19 @@ struct DeviceCaps {
     bool shaderOutputViewportIndex = false;
     bool drawIndirectCount = false;
     bool multiDrawIndirect = false;
-    bool fragmentShadingRate = false;
+    bool fragmentShadingRate = false; // VK_KHR_fragment_shading_rate with pipeline or attachment rates
+    // Variable rate shading details (VK_KHR_fragment_shading_rate). Rates are encoded like the attachment texels:
+    // (log2(width) << 2) | log2(height), so bit (rate) of shadingRateMask = that fragment size is supported (1 sample).
+    bool pipelineShadingRate = false;
+    bool attachmentShadingRate = false;  // rate image bound through PassBuilder::shadingRate()
+    bool primitiveShadingRate = false;
+    u32 shadingRateTexelMinWidth = 0, shadingRateTexelMinHeight = 0; // attachment texel size limits (pixels)
+    u32 shadingRateTexelMaxWidth = 0, shadingRateTexelMaxHeight = 0;
+    u32 shadingRateMaxAspect = 0;   // maxFragmentShadingRateAttachmentTexelSizeAspectRatio
+    u16 shadingRateMask = 0;        // supported fragment sizes, see above
+    bool shadingRateNonTrivialCombinerOps = false;
+    bool shadingRateWithShaderDepthStencilWrites = false;
+    [[nodiscard]] bool shadingRateSupported(u32 width, u32 height) const;
     bool fillModeNonSolid = false;
     bool wideLines = false;
     bool depthClamp = false;
@@ -61,6 +73,17 @@ struct DeviceCaps {
     bool shaderFloat16 = false;
     bool storageImageReadWithoutFormat = false;
     bool storageImageWriteWithoutFormat = false;
+    bool storageBuffer16BitAccess = false;
+    bool shaderBufferInt64Atomics = false;
+    // Machine learning (render/neural). cooperativeMatrix: VK_KHR_cooperative_matrix with a subgroup-scope
+    // 16x16x16 FP16 x FP16 -> FP32 configuration (+ FP16 accumulators); cooperativeVector: VK_NV_cooperative_vector
+    // with FP16 inputs / matrices / results (matrix-vector products in any supported stage, e.g. fragment shaders).
+    bool cooperativeMatrix = false;
+    bool cooperativeMatrixFp16Accumulate = false;
+    u32 cooperativeMatrixStages = 0; // VkShaderStageFlags
+    bool cooperativeVector = false;
+    bool cooperativeVectorTraining = false;
+    u32 cooperativeVectorStages = 0; // VkShaderStageFlags
 
     // textures
     bool samplerAnisotropy = false;
@@ -94,6 +117,11 @@ struct DeviceCaps {
     bool debugUtils = false;
     bool validationEnabled = false;
     bool hostQueryReset = false;
+
+    // presentation / latency (only with a surface). lowLatency2: VK_NV_low_latency2 (NVIDIA Reflex: latency sleep,
+    // markers, timings; Swapchain::setLowLatencyMode). presentId: VK_KHR_present_id (VkPresentIdKHR on present).
+    bool lowLatency2 = false;
+    bool presentId = false;
 
     // misc limits
     u64 minUniformBufferOffsetAlignment = 0;

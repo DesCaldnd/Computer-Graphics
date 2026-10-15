@@ -3,6 +3,7 @@
 #include <oxwald/runtime/renderer.hpp>
 
 #include <array>
+#include <chrono>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -30,6 +31,7 @@ public:
         f64 lastExtractMs = 0.0;
         f64 lastRenderMs = 0.0;   // render thread time of the last rendered frame
         f64 lastWaitMs = 0.0;     // game thread time spent waiting for a free slot (render-bound indicator)
+        f64 lastQueuedMs = 0.0;   // time the last rendered frame sat extracted (Ready) before the render thread took it
     };
 
     RenderPipeline() = default;
@@ -48,6 +50,11 @@ public:
     void submit(const World& world, FrameContext ctx);
     // Game thread. Blocks until every submitted frame has been rendered.
     void flush();
+    // Game thread. Blocks until the render thread has taken every submitted frame (no extracted snapshot waits for
+    // it) and returns when it took the last one: the phase anchor of the just-in-time latency limiter. Waits at most
+    // `timeout` (a stalled render thread must not freeze the game thread); "now" in single-threaded mode or when
+    // nothing was submitted yet.
+    std::chrono::steady_clock::time_point waitUntilTaken(std::chrono::milliseconds timeout);
 
     // Any thread; applied on the render thread before the next render().
     void requestResize(glm::uvec2 size);
@@ -59,6 +66,7 @@ private:
     enum class SlotState : u8 { Free, Extracting, Ready, Rendering };
     struct Queued {
         FrameContext ctx;
+        std::chrono::steady_clock::time_point readyAt{};
     };
 
     void renderLoop();
@@ -76,6 +84,7 @@ private:
     std::optional<glm::uvec2> m_pendingResize;
     bool m_pendingSettings = false;
 
+    std::chrono::steady_clock::time_point m_lastTakenAt{}; // guarded by m_mutex
     u32 m_nextSlot = 0; // game thread only
     Stats m_stats;      // guarded by m_mutex
 };

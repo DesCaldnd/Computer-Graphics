@@ -36,6 +36,11 @@ public:
         // Resolves a source file (absolute path) to its asset UUID, creating its meta when missing. The settings
         // hint is merged into the default settings of a newly created meta only.
         std::function<std::optional<Uuid>(const std::filesystem::path&, const nlohmann::ordered_json&)> resolve;
+        // Cooked artifact of another asset (imported on demand), e.g. the textures of a material for neural
+        // texture compression. Unset outside a project (importStandalone without a registry).
+        std::function<Result<std::vector<std::byte>>(const Uuid&)> readArtifact;
+        // Source file (absolute path) and importer settings of another asset of the project.
+        std::function<std::optional<std::pair<std::filesystem::path, nlohmann::ordered_json>>(const Uuid&)> sourceOf;
     };
 
     ImportContext(std::filesystem::path source, std::string assetPath, AssetMeta meta, Callbacks callbacks = {});
@@ -62,6 +67,11 @@ public:
     [[nodiscard]] std::optional<Uuid> resolveAsset(const std::filesystem::path& file,
                                                    const nlohmann::ordered_json& settingsHint = {});
     void warn(std::string message);
+    // Artifact bytes of another asset (Callbacks::readArtifact); an error when no callback is installed.
+    [[nodiscard]] Result<std::vector<std::byte>> readArtifact(const Uuid& uuid) const;
+    [[nodiscard]] std::optional<std::pair<std::filesystem::path, nlohmann::ordered_json>> sourceOf(const Uuid& uuid) const {
+        return m_callbacks.sourceOf ? m_callbacks.sourceOf(uuid) : std::nullopt;
+    }
 
     [[nodiscard]] std::vector<ImportedArtifact>& artifacts() { return m_artifacts; }
     [[nodiscard]] const std::vector<ImportedArtifact>& artifacts() const { return m_artifacts; }

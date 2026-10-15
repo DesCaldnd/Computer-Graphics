@@ -8,7 +8,11 @@ if(NOT TARGET ox_render OR NOT TARGET ox_runtime)
 endif()
 
 include(${OX_ENGINE_SOURCE_DIR}/engine/rhi/cmake/OxwaldVulkanRuntime.cmake)
-find_package(glfw3 CONFIG REQUIRED)   # imgui::imgui links the imported `glfw` target (glfw binding is built in)
+if(ANDROID)
+    find_package(glfw3 CONFIG QUIET)  # no GLFW on Android: imgui is installed without its glfw binding there
+else()
+    find_package(glfw3 CONFIG REQUIRED)   # imgui::imgui links the imported `glfw` target (glfw binding is built in)
+endif()
 find_package(imgui CONFIG REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 find_package(Stb REQUIRED)
@@ -51,8 +55,8 @@ if(OX_BUILD_TESTS AND TARGET ox_ui_tests)
         ox_add_gpu_test_env(ox_ui_gpu_tests)
         gtest_discover_tests(ox_ui_gpu_tests
             DISCOVERY_TIMEOUT 60
-            PROPERTIES LABELS "ui\;gpu"
-                       ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+            PROPERTIES ENVIRONMENT "OXWALD_SOURCE_DIR=${CMAKE_SOURCE_DIR}")
+        ox_gtest_labels(ox_ui_gpu_tests ui gpu)
         add_dependencies(ox_ui_tests ox_ui_gpu_tests)
     endif()
 endif()

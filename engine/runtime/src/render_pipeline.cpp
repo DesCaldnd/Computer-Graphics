@@ -69,7 +69,7 @@ void RenderPipeline::submit(const World& world, FrameContext ctx) {
     {
         std::lock_guard lock(m_mutex);
         m_slots[ctx.slot] = SlotState::Ready;
-        m_queue.push_back(Queued{ctx});
+        m_queue.push_back(Queued{ctx, std::chrono::steady_clock::now()});
         m_stats.framesSubmitted++;
         m_stats.lastExtractMs = extractMs;
     }
@@ -81,6 +81,15 @@ void RenderPipeline::flush() {
     OX_PROFILE_ZONE();
     std::unique_lock lock(m_mutex);
     m_cv.wait(lock, [&] { return m_stats.framesRendered == m_stats.framesSubmitted; });
+}
+
+std::chrono::steady_clock::time_point RenderPipeline::waitUntilTaken(std::chrono::milliseconds timeout) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!m_renderer || m_mode == Mode::SingleThreaded) return now;
+    OX_PROFILE_ZONE();
+    std::unique_lock lock(m_mutex);
+    if (!m_cv.wait_for(lock, timeout, [&] { return m_queue.empty(); })) return std::chrono::steady_clock::now();
+    return m_lastTakenAt == std::chrono::steady_clock::time_point{} ? now : m_lastTakenAt;
 }
 
 void RenderPipeline::requestResize(glm::uvec2 size) {
@@ -121,7 +130,10 @@ void RenderPipeline::renderLoop() {
             item = m_queue.front();
             m_queue.pop_front();
             m_slots[item.ctx.slot] = SlotState::Rendering;
+            m_lastTakenAt = std::chrono::steady_clock::now();
+            m_stats.lastQueuedMs = std::chrono::duration<f64, std::milli>(m_lastTakenAt - item.readyAt).count();
         }
+        m_cv.notify_all(); // waitUntilTaken
         applyPendingCommands();
         Stopwatch sw(true);
         {

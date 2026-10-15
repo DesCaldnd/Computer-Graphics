@@ -61,6 +61,14 @@ struct SettingsMenuHooks {
     // Ray tracing / upscaler availability (render caps). Default: RT unavailable, FSR1 only.
     std::function<bool(std::string& reason)> rayTracingAvailable;
     std::function<std::vector<UpscalerAvailability>()> upscalers;
+    // NVIDIA Reflex (VK_NV_low_latency2) on the running swapchain; without it r.Reflex uses the engine limiter.
+    std::function<bool()> reflexSupported;
+    // Reflex exists but is unavailable while FSR 3 frame generation owns the swapchain.
+    std::function<bool()> reflexBehindFrameGeneration;
+    // r.FrameGeneration (FSR 3) availability on the running renderer; default: unavailable.
+    std::function<bool(std::string& reason)> frameGenerationAvailable;
+
+
     // Resolution list ("1920x1080"); default: common 16:9 modes.
     std::function<std::vector<glm::ivec2>()> resolutions;
     // Save after every change (user://settings.json).

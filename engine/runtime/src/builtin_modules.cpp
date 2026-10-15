@@ -122,6 +122,9 @@ public:
         } else if (engine.project()) {
             assets::AssetRegistry::Options o;
             o.assetsDir = assetDir;
+            // Hot reimport scans the asset tree on a background thread: a synchronous walk in poll() ran every
+            // frame on the game thread (editor UI thread) and cost ~40 ms per frame for ~750 files on Windows.
+            o.watchScanInterval = std::chrono::milliseconds(250);
             m_registry = &services.emplace<assets::AssetRegistry>(engine.project()->root(), o);
 #if OX_HAS_GAMEPLAY && OX_GAMEPLAY_HAS_ASSETS
             gameplay::registerGameplayImporters(m_registry->importers());
@@ -278,8 +281,26 @@ public:
     [[nodiscard]] std::string_view name() const override { return "script"; }
     Status init(Engine& engine, Services& services) override {
         script::ScriptVMConfig c;
-        if (engine.project()) c.searchRoots.push_back(engine.project()->root() / "scripts");
+        // Cooked games without a project directory (pak only, e.g. Android) use project:// search roots.
+        c.searchRoots.push_back(engine.project() ? engine.project()->root() / "scripts"
+                                                 : std::filesystem::path("project://scripts"));
         m_vm = &services.emplace<script::ScriptVM>(c);
+        // Modules that are not on disk are read through the VFS: "project://..." search roots as they are, paths
+        // under the project root as project://<relative path> (cooked assets of a pak mounted over the project).
+        std::optional<std::filesystem::path> root;
+        if (engine.project()) root = engine.project()->root();
+        m_vm->setModuleFileReader([&engine, root](const std::filesystem::path& path) -> std::optional<std::string> {
+            std::string uri = path.generic_string();
+            if (!uri.starts_with("project://")) {
+                if (!root) return std::nullopt;
+                const std::filesystem::path rel = path.lexically_relative(*root);
+                if (rel.empty() || *rel.begin() == "..") return std::nullopt;
+                uri = "project://" + rel.generic_string();
+            }
+            auto text = engine.vfs().readText(uri);
+            if (!text) return std::nullopt;
+            return std::move(*text);
+        });
         bindInputLuaApi(*m_vm, engine.input());
 #if OX_SCRIPT_HAS_ASYNC
         // One bridge per VM (Lua `await` on ox::Future); destroyed before the VM (reverse service order).

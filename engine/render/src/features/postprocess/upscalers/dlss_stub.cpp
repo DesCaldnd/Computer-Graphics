@@ -15,12 +15,16 @@ std::string buildUnavailableReason() {
 #endif
 }
 
-Status probe(rhi::Device&) { return {false, buildUnavailableReason()}; }
+Status probe(rhi::Device&) { return {false, buildUnavailableReason(), false, buildUnavailableReason()}; }
 bool knownUnavailable() { return true; }
+bool rrKnownUnavailable() { return true; }
 void requiredExtensions(std::vector<std::string>&, std::vector<std::string>&) {}
 OptimalSettings optimalSettings(rhi::Device&, u32, u32, UpscalerQuality) { return {}; }
 bool evaluate(rhi::Device&, rhi::CommandList&, ViewFeature&, const EvaluateParams&) { return false; }
+OptimalSettings rrOptimalSettings(rhi::Device&, u32, u32, UpscalerQuality) { return {}; }
+bool evaluateRR(rhi::Device&, rhi::CommandList&, ViewFeature&, const RrEvaluateParams&) { return false; }
 void release(ViewFeature& feature) { feature = {}; }
+u32 liveFeatureCount() { return 0; }
 void shutdown(rhi::Device&) {}
 
 } // namespace ox::render::dlss

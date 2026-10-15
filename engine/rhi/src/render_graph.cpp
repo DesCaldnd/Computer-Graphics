@@ -123,6 +123,20 @@ PassBuilder& PassBuilder::resolve(RGTexture msaaColor, RGTexture target) {
     OX_ASSERT(false, "resolve(): '{}' is not a color attachment of pass '{}'", g.resources[msaaColor.id].name, pass.name);
     return *this;
 }
+PassBuilder& PassBuilder::shadingRate(RGTexture t, VkExtent2D texelSize) {
+    OX_ASSERT(t.valid() && texelSize.width > 0 && texelSize.height > 0);
+    auto& g = *m_graph->m_impl;
+    auto& pass = g.passes[m_pass];
+    if (pass.shadingRate == t.id) {
+        pass.shadingRateTexel = texelSize;
+        return *this;
+    }
+    OX_ASSERT(pass.shadingRate == ~0u, "pass '{}' already has a shading rate image", pass.name);
+    addAccess(pass, t.id, true, Access::ShadingRateRead, true, g.resources[t.id].name);
+    pass.shadingRate = t.id;
+    pass.shadingRateTexel = texelSize;
+    return *this;
+}
 PassBuilder& PassBuilder::queue(QueueType hint) {
     m_graph->m_impl->passes[m_pass].queueHint = hint;
     return *this;
@@ -210,8 +224,25 @@ PassBuilder RenderGraph::addPass(std::string name, PassType type) {
 
 u32 RenderGraph::passCount() const { return u32(m_impl->passes.size()); }
 const std::string& RenderGraph::passName(u32 pass) const { return m_impl->passes.at(pass).name; }
+PassType RenderGraph::passType(u32 pass) const { return m_impl->passes.at(pass).type; }
+PassBuilder RenderGraph::pass(u32 index) {
+    OX_ASSERT(index < m_impl->passes.size());
+    return PassBuilder(*this, index);
+}
+VkExtent2D RenderGraph::passRenderExtent(u32 pass) const {
+    const RGPassDecl& p = m_impl->passes.at(pass);
+    const RGAttachmentDecl* a = !p.colors.empty() ? &p.colors[0] : p.depth ? &*p.depth : nullptr;
+    if (!a) return {0, 0};
+    const TextureDesc& d = m_impl->resources.at(a->resource).textureDesc;
+    return {std::max(1u, d.width >> a->mip), std::max(1u, d.height >> a->mip)};
+}
+RGTexture RenderGraph::passShadingRate(u32 pass) const {
+    const u32 id = m_impl->passes.at(pass).shadingRate;
+    return id == ~0u ? RGTexture{} : RGTexture{id};
+}
 u32 RenderGraph::resourceCount() const { return u32(m_impl->resources.size()); }
 const std::string& RenderGraph::resourceName(u32 r) const { return m_impl->resources.at(r).name; }
+const TextureDesc& RenderGraph::textureDesc(RGTexture t) const { return m_impl->resources.at(t.id).textureDesc; }
 const RenderGraphPlan& RenderGraph::plan() const { return m_impl->plan; }
 u32 RenderGraph::compileCount() const { return m_impl->compileCount; }
 
@@ -245,6 +276,7 @@ TextureUsage textureUsageFor(Access a) {
     case Access::TransferRead: return TextureUsage::TransferSrc;
     case Access::TransferWrite: return TextureUsage::TransferDst;
     case Access::General: return TextureUsage::Sampled | TextureUsage::Storage | TextureUsage::TransferSrc | TextureUsage::TransferDst;
+    case Access::ShadingRateRead: return TextureUsage::ShadingRateAttachment;
     default: return TextureUsage::None;
     }
 }

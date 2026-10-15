@@ -3,6 +3,8 @@
 
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
+#include <type_traits>
 
 namespace ox {
 
@@ -11,9 +13,21 @@ namespace {
 template <class T>
 std::optional<T> parseNumber(std::string_view s) {
     T v{};
-    auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
-    if (ec != std::errc() || p != s.data() + s.size()) return std::nullopt;
-    return v;
+#if !defined(__cpp_lib_to_chars)
+    // libc++ of NDK 28 (LLVM 19) has no floating-point std::from_chars: strtod (the player sets no locale).
+    if constexpr (std::is_floating_point_v<T>) {
+        const std::string str(s);
+        char* end = nullptr;
+        v = T(std::strtod(str.c_str(), &end));
+        if (str.empty() || end != str.c_str() + str.size()) return std::nullopt;
+        return v;
+    } else
+#endif
+    {
+        auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
+        if (ec != std::errc() || p != s.data() + s.size()) return std::nullopt;
+        return v;
+    }
 }
 
 std::optional<QualityLevel> parseQuality(std::string_view s) {
@@ -133,6 +147,42 @@ Result<LaunchOptions> parseLaunchOptions(std::span<const std::string> args) {
 #undef OX_TRY
     }
     return o;
+}
+
+std::vector<std::string> splitCommandLine(std::string_view line) {
+    std::vector<std::string> out;
+    std::string cur;
+    bool inArg = false;
+    char quote = 0;
+    for (usize i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+        if (quote) {
+            if (c == quote) {
+                quote = 0;
+            } else if (c == '\\' && quote == '"' && i + 1 < line.size()) {
+                cur += line[++i];
+            } else {
+                cur += c;
+            }
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            if (inArg) out.push_back(std::move(cur));
+            cur.clear();
+            inArg = false;
+            continue;
+        }
+        inArg = true;
+        if (c == '"' || c == '\'') {
+            quote = c;
+        } else if (c == '\\' && i + 1 < line.size()) {
+            cur += line[++i];
+        } else {
+            cur += c;
+        }
+    }
+    if (inArg) out.push_back(std::move(cur));
+    return out;
 }
 
 Result<LaunchOptions> parseLaunchOptions(int argc, const char* const* argv) {

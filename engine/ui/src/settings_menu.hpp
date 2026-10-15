@@ -5,8 +5,12 @@
 //
 // Variables: qualities[], quality, autoStatus, windowModes[], windowMode, resolutions[], resolution, vsync,
 //            rayTracing, rtAvailable, rtReason, upscalers[] {name, available, reason}, upscaler, upscalerReason,
+//            denoisers[] {name, available, reason} (SVGF, DLSSRR, Auto), denoiser,
+//            reflexModes[] {name, available, reason} (Off, On, OnBoost), reflex, reflexReason,
+//            frameGenModes[] {name, available, reason} (Off, FSR3), frameGeneration, frameGenReason,
 //            masterVolume, musicVolume, sfxVolume, status
-// Events:    set_quality(name), set_upscaler(name), set_window_mode(index), toggle_vsync, toggle_rt, save, revert
+// Events:    set_quality(name), set_upscaler(name), set_denoiser(name), set_reflex(name), set_frame_generation(name), set_window_mode(index), toggle_vsync,
+//            toggle_rt, save, revert
 
 #include <oxwald/ui/game_ui.hpp>
 
@@ -32,6 +36,9 @@ struct GameUI::SettingsModel {
 
     void setQuality(const std::string& name);
     void setUpscaler(const std::string& name);
+    void setDenoiser(const std::string& name);
+    void setReflex(const std::string& name);
+    void setFrameGeneration(const std::string& name);
 
     GameUI& ui;
     Settings& settings;
@@ -41,6 +48,13 @@ struct GameUI::SettingsModel {
     std::vector<Rml::String> windowModes{"Windowed", "Borderless", "Fullscreen"};
     std::vector<Rml::String> resolutions;
     std::vector<UpscalerRow> upscalers;
+    std::vector<UpscalerRow> denoisers; // ray traced effects: SVGF, DLSSRR (needs RT + DLSS), Auto
+    std::vector<UpscalerRow> reflexModes{{"Off", true, {}}, {"On", true, {}}, {"OnBoost", true, {}}}; // r.Reflex
+    Rml::String reflexReason; // empty with Reflex, else "engine latency limiter" hint
+    std::vector<UpscalerRow> frameGenModes{{"Off", true, {}}, {"FSR3", false, "Renderer not running"}}; // r.FrameGeneration
+    Rml::String frameGenReason;
+
+
     bool rtAvailable = false;
     Rml::String rtReason;
     Rml::String autoStatus;

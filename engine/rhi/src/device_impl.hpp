@@ -155,6 +155,8 @@ struct DeviceState {
     VkAccessFlags2 supportedAccess = ~0ull;
     std::vector<std::string> instanceExtensions, deviceExtensions; // enabled at creation
     std::vector<std::function<void()>> shutdownCallbacks;          // Device::addShutdownCallback
+    FrameGenerationQueues frameGenerationQueues;                   // DeviceDesc::frameGenerationQueues
+
 
     // Resources
     std::recursive_mutex resourceMutex;

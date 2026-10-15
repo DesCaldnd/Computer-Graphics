@@ -225,7 +225,8 @@ Status Engine::createServices() {
     // Registration order = dependency order; Services destroys in reverse.
     m_jobs = &m_services.emplace<JobSystem>(m_config.workerThreads);
     m_services.emplace<EventBus>();
-    m_services.emplace<FileWatcher>();
+    // Directory scans run on the watcher's own thread; the per-frame poll() only delivers queued changes.
+    if (auto& watcher = m_services.emplace<FileWatcher>(); m_config.fileWatching) watcher.start(std::chrono::milliseconds(250));
     m_vfs = &m_services.emplace<Vfs>();
     mountFileSystems();
     m_services.emplace<DebugDraw>();
@@ -595,9 +596,57 @@ void Engine::run(u64 maxFrames) {
     }
 }
 
+void Engine::latencyBeginFrame() {
+    m_stats.latencySleepMs = 0.0;
+    if (!m_renderer || !m_pipeline.running()) return;
+    OX_PROFILE_ZONE_N("LatencySleep");
+    const i32 mode = cvars::reflex().get();
+    Stopwatch sw(true);
+    // Called with Off too, so the renderer switches the driver's low latency mode off.
+    const f64 driverSleep = m_renderer->latencySleep(m_frameIndex, mode);
+    const RenderStats rs = m_renderer->stats();
+    LatencyStats& ls = m_stats.latency;
+    ls = rs.latency;
+    ls.mode = mode;
+    ls.reflexActive = driverSleep >= 0.0;
+    ls.limiterActive = false;
+    const i32 fallback = cvars::reflexFallback().get();
+    if (mode > 0 && !ls.reflexActive && fallback > 0) {
+        ls.limiterActive = true;
+        if (fallback == 2) {
+            // Strict: the previous frame must be rendered and retired by the GPU before this one samples input.
+            if (m_frameIndex > 0) {
+                m_pipeline.flush();
+                m_renderer->waitForFrameGpu(m_frameIndex - 1);
+            }
+        } else {
+            // Just in time. Phase anchor: the moment the render thread took the previous frame (at most one frame in
+            // the pipeline, so the game thread never blocks on a snapshot slot). Relative to that anchor the queueing
+            // a frame sees is a static function of the delay (queue = queue0 - delay), which LatencyLimiter settles at
+            // the headroom; a delay counted from "now" instead only moves the slot wait around and drifts (the
+            // render-bound period hides it) — see docs/dev/modules/runtime.md "Latency".
+            // Queueing: game thread blocked on a slot + the previous snapshot waiting for the render thread + the
+            // render side's own waits (frame fence, swapchain acquire, GPU queue).
+            const Clock::TimePoint anchor = m_pipeline.waitUntilTaken(std::chrono::milliseconds(250));
+            const f64 queueMs = m_stats.waitForRenderMs + m_pipeline.stats().lastQueuedMs +
+                                m_renderer->stats().latency.renderQueueWaitMs;
+            const f64 delayMs = m_latencyLimiter.update(queueMs);
+            if (delayMs > 0.05) {
+                Clock::sleepUntil(anchor + std::chrono::duration_cast<Clock::Duration>(std::chrono::duration<f64, std::milli>(delayMs)));
+            }
+        }
+    } else {
+        m_latencyLimiter.reset();
+    }
+    m_stats.latencySleepMs = sw.elapsedMs();
+    ls.sleepMs = m_stats.latencySleepMs;
+    m_renderer->latencyMarker(m_frameIndex, LatencyMarker::SimulationStart);
+}
+
 bool Engine::frame(f64 realDt, bool) {
     OX_ASSERT(m_initialized, "Engine::tick before init");
     OX_PROFILE_ZONE_N("GameFrame");
+    latencyBeginFrame(); // before input is sampled (not counted in gameMs)
     Stopwatch gameSw(true);
     if (!(realDt >= 0.0)) realDt = 0.0;
     realDt = std::min(realDt, m_config.maxFrameDelta);
@@ -617,6 +666,7 @@ bool Engine::frame(f64 realDt, bool) {
     m_services.get<EventBus>().dispatch();
     updateLevelLoading();
     m_input->update(realDt);
+    if (m_renderer && m_pipeline.running()) m_renderer->latencyMarker(m_frameIndex, LatencyMarker::InputSample);
 
     f64 dt = realDt * m_timeScale;
     if (m_paused) {
@@ -661,11 +711,14 @@ bool Engine::frame(f64 realDt, bool) {
     ctx.loading = loading();
     ctx.viewportSize = m_lastFramebuffer;
     if (m_pipeline.running()) {
+        m_renderer->latencyMarker(m_frameIndex, LatencyMarker::SimulationEnd);
         m_pipeline.submit(world(), ctx);
+
         const auto ps = m_pipeline.stats();
         m_stats.extractMs = ps.lastExtractMs;
         m_stats.renderMs = ps.lastRenderMs;
         m_stats.waitForRenderMs = ps.lastWaitMs;
+        m_stats.snapshotQueuedMs = ps.lastQueuedMs;
     }
 
     m_frameTimer.update(realDt);

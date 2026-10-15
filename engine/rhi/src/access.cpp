@@ -70,6 +70,9 @@ AccessInfo accessInfo(Access a) {
     case Access::General:
         return {VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, true};
+    case Access::ShadingRateRead:
+        return {VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR, VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR,
+                VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR, false};
     case Access::Count: break;
     }
     return {};
@@ -82,7 +85,8 @@ const char* accessName(Access a) {
         "StorageReadGraphics", "StorageReadCompute",   "StorageReadRayTracing", "StorageWriteGraphics", "StorageWriteCompute",
         "StorageWriteRayTracing", "ColorAttachmentWrite", "DepthStencilWrite",  "DepthStencilRead",    "TransferRead",
         "TransferWrite",       "Present",              "HostRead",              "HostWrite",           "AccelStructBuildRead",
-        "AccelStructBuildWrite", "AccelStructRead",    "General"};
+        "AccelStructBuildWrite", "AccelStructRead",    "General",
+        "ShadingRateRead"};
     static_assert(std::size(kNames) == size_t(Access::Count));
     return a < Access::Count ? kNames[size_t(a)] : "?";
 }

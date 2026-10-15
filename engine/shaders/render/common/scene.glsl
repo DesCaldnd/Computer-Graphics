@@ -74,6 +74,7 @@ const uint OX_BLEND_TRANSPARENT = 2u;
 const uint OX_BLEND_REFRACTIVE = 3u;
 const uint OX_MATERIAL_DOUBLE_SIDED = 8u;
 const uint OX_MATERIAL_UNLIT = 16u;
+const uint OX_MATERIAL_NEURAL = 64u; // render/neural/ntc.glsl; slot = flags >> 8
 
 const uint OX_LIGHT_DIRECTIONAL = 0u;
 const uint OX_LIGHT_POINT = 1u;

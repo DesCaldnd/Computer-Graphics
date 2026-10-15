@@ -158,7 +158,7 @@ if(OX_BUILD_TESTS)
                 COMMAND codesign --force -s - $<TARGET_FILE:ox_editor_tests> VERBATIM)
         endif()
         # one ctest entry per QtTest class (the executable takes the class name as first argument)
-        foreach(_cls InspectorTests CommandTests SettingsTests IntegrationTests)
+        foreach(_cls InspectorTests CommandTests SettingsTests IntegrationTests GizmoTests ViewportPacingTests)
             add_test(NAME editor.${_cls} COMMAND ox_editor_tests ${_cls})
             set_tests_properties(editor.${_cls} PROPERTIES
                 LABELS "editor"

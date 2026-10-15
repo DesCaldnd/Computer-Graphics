@@ -121,6 +121,10 @@ struct GraphicsPipelineDesc {
     u32 viewMask = 0; // multiview
     std::vector<SpecializationConstant> specialization;
     u32 pushConstantSize = 0; // > 0: validated against the shader's push-constant block
+    // Usable inside rendering scopes with a shading rate image (PassBuilder::shadingRate): with
+    // DeviceCaps::attachmentShadingRate the pipeline gets VK_PIPELINE_CREATE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT
+    // and the combiner (KEEP, REPLACE): 1×1 without an attachment, the attachment's rate with one.
+    bool variableRateShading = true;
 };
 
 struct ComputePipelineDesc {

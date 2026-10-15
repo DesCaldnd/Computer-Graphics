@@ -70,6 +70,7 @@ public:
 
 private:
     rhi::PipelineHandle m_temporal, m_variance, m_atrous[3], m_upsample[3];
+    rhi::PipelineHandle m_neural[3]; // r.Denoiser Neural: learned À-trous kernel (render/neural/denoise_neural.comp)
 };
 
 [[nodiscard]] VkFormat denoiseOutputFormat(DenoiseOutput o);

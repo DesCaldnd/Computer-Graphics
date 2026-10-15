@@ -139,6 +139,36 @@ TEST(RenderPipeline, GameThreadIsAtMostOneFrameAhead) {
     EXPECT_EQ(r.rendered.size(), 10u);
 }
 
+// The just-in-time latency limiter's anchor: after waitUntilTaken no extracted snapshot waits for the render thread,
+// and lastQueuedMs reports how long the taken one waited (a render-bound game queues a whole frame there).
+TEST(RenderPipeline, WaitUntilTakenAnchorsOnTheRenderThreadTakingTheFrame) {
+    World world;
+    RecordingRenderer r(std::chrono::microseconds(20000));
+    RenderPipeline pipeline;
+    pipeline.start(r, RenderPipeline::Mode::Threaded);
+    FrameContext ctx;
+    ctx.frameIndex = 0;
+    pipeline.submit(world, ctx); // taken right away, renders 20 ms
+    ctx.frameIndex = 1;
+    pipeline.submit(world, ctx); // waits for frame 0
+    const auto before = std::chrono::steady_clock::now();
+    const auto taken = pipeline.waitUntilTaken(std::chrono::milliseconds(2000));
+    const auto after = std::chrono::steady_clock::now();
+    EXPECT_GE(taken, before) << "frame 1 is taken only once frame 0 rendered";
+    EXPECT_LE(taken, after);
+    const double waitedMs = std::chrono::duration<double, std::milli>(after - before).count();
+    EXPECT_GE(waitedMs, 10.0);
+    EXPECT_GE(pipeline.stats().lastQueuedMs, 10.0) << "frame 1 sat extracted while frame 0 rendered";
+    {
+        std::lock_guard lock(r.m_mutex);
+        EXPECT_GE(r.rendered.size(), 1u);
+    }
+    // Nothing queued: returns at once with the time frame 1 was taken.
+    const auto again = pipeline.waitUntilTaken(std::chrono::milliseconds(2000));
+    EXPECT_EQ(again, taken);
+    pipeline.stop();
+}
+
 TEST(RenderPipeline, SingleThreadedRunsInline) {
     World world;
     RecordingRenderer r(std::chrono::microseconds(0));

@@ -88,6 +88,9 @@ public:
     void resize(glm::uvec2 size) override { m_inner->resize(size); }
     void settingsChanged() override { m_inner->settingsChanged(); }
     RenderStats stats() const override { return m_inner->stats(); }
+    f64 latencySleep(u64 frameIndex, i32 mode) override { return m_inner->latencySleep(frameIndex, mode); }
+    void latencyMarker(u64 frameIndex, LatencyMarker marker) override { m_inner->latencyMarker(frameIndex, marker); }
+    bool waitForFrameGpu(u64 frameIndex) override { return m_inner->waitForFrameGpu(frameIndex); }
     bool requestScreenshot(std::filesystem::path path, std::function<void(bool)> done) override {
         return m_inner->requestScreenshot(std::move(path), std::move(done));
     }

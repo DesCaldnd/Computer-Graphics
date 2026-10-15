@@ -257,12 +257,18 @@ void MainWindow::createActions() {
         const char* ids[] = {"viewport.select", "viewport.translate", "viewport.rotate", "viewport.scale"};
         if (QAction* a = m_ctx->actions().action(QString::fromLatin1(ids[int(m)]))) a->setChecked(true);
     });
-    m_localSpace = make("viewport.space", V, "world", tr("World / Local Space"), QKeySequence(Qt::CTRL | Qt::Key_QuoteLeft), [this] {
-        const bool local = m_viewport->gizmo().space() == GizmoSpace::World;
-        m_viewport->setGizmoSpace(local ? GizmoSpace::Local : GizmoSpace::World);
+    m_localSpace = make("viewport.space", V, "local", tr("World / Local Space"), QKeySequence(Qt::CTRL | Qt::Key_QuoteLeft),
+                        [this] { m_viewport->toggleGizmoSpace(); });
+    // icon + tooltip follow the gizmo space whatever changed it (button, Ctrl+`, preferences)
+    auto syncSpace = [this](GizmoSpace sp) {
+        const bool local = sp == GizmoSpace::Local;
         m_localSpace->setIcon(Icons::get(local ? QStringLiteral("local") : QStringLiteral("world")));
         m_localSpace->setToolTip(local ? tr("Local space (click for world)") : tr("World space (click for local)"));
-    });
+        m_localSpace->setStatusTip(local ? tr("Gizmo axes follow the selected object's rotation")
+                                         : tr("Gizmo axes are aligned with the world axes"));
+    };
+    connect(m_viewport, &ViewportPanel::gizmoSpaceChanged, this, syncSpace);
+    syncSpace(m_viewport->gizmo().space());
     m_snap = make("viewport.snap", V, "snap", tr("Snapping"), QKeySequence(), [this](bool on) { m_viewport->setSnapEnabled(on); });
     m_snap->setCheckable(true);
     make("viewport.focus", V, "focus", tr("Focus Selection"), QKeySequence(Qt::Key_F), [this] { m_viewport->focusSelection(); });
@@ -452,7 +458,6 @@ void MainWindow::createToolbar() {
     for (const char* id : {"viewport.select", "viewport.translate", "viewport.rotate", "viewport.scale"}) tb->addAction(r.action(QString::fromLatin1(id)));
     tb->addSeparator();
     tb->addAction(m_localSpace);
-    m_localSpace->setToolTip(tr("World space (click for local)"));
     tb->addAction(m_snap);
     if (auto* snapBtn = qobject_cast<QToolButton*>(tb->widgetForAction(m_snap))) {
         auto* menu = new QMenu(snapBtn);
@@ -605,7 +610,7 @@ void MainWindow::createStatusBar() {
     connect(t, &QTimer::timeout, this, [this] {
         const RenderingCaps c = m_ctx->services().caps().caps();
         m_gpuLabel->setText(c.gpuName + (c.rayTracingSupported ? QStringLiteral("  ·  RT") : QString()));
-        m_fpsLabel->setText(tr("%1 FPS · %2 ms").arg(m_viewport->fps(), 0, 'f', 0).arg(m_viewport->frameMs(), 0, 'f', 2));
+        m_fpsLabel->setText(m_viewport->frameStatsText());
     });
     t->start(500);
     sb->showMessage(tr("Ready"), 3000);

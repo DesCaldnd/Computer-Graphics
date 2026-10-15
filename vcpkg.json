@@ -6,12 +6,18 @@
   "builtin-baseline": "0b88aacde46a853151730fbe7d0b7ee45f4b6864",
   "dependencies": [
     "vulkan-headers",
-    "vulkan-loader",
+    {
+      "name": "vulkan-loader",
+      "platform": "!android"
+    },
     {
       "name": "moltenvk",
       "platform": "osx"
     },
-    "vulkan-validationlayers",
+    {
+      "name": "vulkan-validationlayers",
+      "platform": "!android"
+    },
     "volk",
     "vulkan-memory-allocator",
     "vk-bootstrap",
@@ -39,7 +45,10 @@
       "name": "imgui",
       "features": [
         "docking-experimental",
-        "glfw-binding"
+        {
+          "name": "glfw-binding",
+          "platform": "!android"
+        }
       ]
     },
     "imguizmo",
@@ -49,13 +58,23 @@
         "freetype"
       ]
     },
-    "glfw3",
+    {
+      "name": "glfw3",
+      "platform": "!android"
+    },
     "lua",
     "sol2",
     "miniaudio",
     "recastnavigation",
     "enet",
-    "nvidia-dlss",
+    {
+      "name": "nvidia-dlss",
+      "platform": "!android"
+    },
+    {
+      "name": "amd-fidelityfx-vk",
+      "platform": "windows & x64"
+    },
     "gtest"
   ],
   "overrides": [

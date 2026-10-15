@@ -8,7 +8,9 @@
 #include <oxwald/runtime/input.hpp>
 #include <oxwald/runtime/project.hpp>
 #include <oxwald/runtime/render_pipeline.hpp>
+#include <oxwald/runtime/latency.hpp>
 #include <oxwald/runtime/renderer.hpp>
+
 #include <oxwald/runtime/save_game.hpp>
 #include <oxwald/runtime/settings.hpp>
 #include <oxwald/scene/system.hpp>
@@ -70,7 +72,10 @@ struct EngineStats {
     f64 extractMs = 0.0;
     f64 renderMs = 0.0;       // render thread time of the last rendered frame
     f64 waitForRenderMs = 0.0; // game thread blocked on the render thread
+    f64 snapshotQueuedMs = 0.0; // last rendered frame waited extracted for the render thread (latency, not blocking)
     f64 sleepMs = 0.0;        // frame pacing
+    f64 latencySleepMs = 0.0; // low latency sleep before input sampling (Reflex or the fallback limiter)
+    LatencyStats latency;     // r.Reflex state + driver latency reports (renderer stats of the last frame)
     u32 fixedSteps = 0;       // fixed steps this frame
     u64 totalFixedSteps = 0;
     f64 alpha = 0.0;          // interpolation factor
@@ -230,6 +235,7 @@ private:
     void beginFrame();
     bool frame(f64 realDt, bool pace);
     void pace(Clock::TimePoint frameStart);
+    void latencyBeginFrame(); // r.Reflex: driver sleep or fallback limiter, then SimulationStart
     [[nodiscard]] f64 targetFps() const;
 
     EngineConfig m_config;
@@ -276,6 +282,7 @@ private:
     bool m_hasLastTick = false;
     Clock::TimePoint m_startTime{};
     FrameTimer m_frameTimer;
+    LatencyLimiter m_latencyLimiter;
     EngineStats m_stats;
     FrameTime m_frameTime;
     u64 m_frameIndex = 0;

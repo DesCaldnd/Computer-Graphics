@@ -110,6 +110,10 @@ struct FrameState {
 struct BuiltinPipelines {
     rhi::PipelineHandle prepass[kVariantCount][2]; // [variant][entity id]
     rhi::PipelineHandle forward[kVariantCount];
+    // Variants with the neural texture decoder (r.NeuralTextures InferenceOnSample), created on first use.
+    rhi::PipelineHandle prepassNeural[kVariantCount][2];
+    rhi::PipelineHandle forwardNeural[kVariantCount];
+    bool neuralCreated = false;
     rhi::PipelineHandle lightCull;
     rhi::PipelineHandle hiz;
     rhi::PipelineHandle tonemap;

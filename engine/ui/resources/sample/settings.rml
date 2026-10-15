@@ -49,6 +49,34 @@
             </div>
         </div>
         <div class="row hint" data-if="upscalerReason != ''">{{upscalerReason}}</div>
+        <div class="row">
+            <span class="label">Низкая задержка / Low latency</span>
+            <div class="choices">
+                <button class="choice reflex" data-for="m : reflexModes" data-attr-id="'reflex-' + m.name"
+                        data-class-selected="m.name == reflex" data-attr-title="m.reason"
+                        data-event-click="set_reflex(m.name)">{{m.name}}</button>
+            </div>
+        </div>
+        <div class="row hint" data-if="reflexReason != ''">{{reflexReason}}</div>
+        <div class="row">
+            <span class="label">Генерация кадров / Frame generation</span>
+            <div class="choices">
+                <button class="choice framegen" data-for="m : frameGenModes" data-attr-id="'framegen-' + m.name"
+                        data-class-selected="m.name == frameGeneration" data-class-unavailable="!m.available"
+                        data-attr-title="m.reason" data-event-click="set_frame_generation(m.name)">{{m.name}}</button>
+            </div>
+        </div>
+        <div class="row hint" data-if="frameGenReason != ''">{{frameGenReason}}</div>
+
+
+        <div class="row" data-if="rtAvailable">
+            <span class="label">Шумодав RT / RT denoiser</span>
+            <div class="choices">
+                <button class="choice denoiser" data-for="d : denoisers" data-attr-id="'denoiser-' + d.name"
+                        data-class-selected="d.name == denoiser" data-class-unavailable="!d.available"
+                        data-attr-title="d.reason" data-event-click="set_denoiser(d.name)">{{d.name}}</button>
+            </div>
+        </div>
 
         <h2>Звук / Audio</h2>
         <div class="row">

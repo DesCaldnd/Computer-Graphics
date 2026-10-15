@@ -85,6 +85,20 @@ void UiSystem::attach(Engine& engine) {
             if (b && b->hasRenderInfo()) return b->renderInfo().upscalers;
             return {{"Off", true, {}}, {"FSR1", true, {}}, {"DLSS", false, "Renderer not running"}};
         };
+        hooks.reflexSupported = [this] { return m_engine && m_engine->stats().latency.reflexSupported; };
+        hooks.reflexBehindFrameGeneration = [this] { return m_engine && m_engine->stats().latency.reflexBehindFrameGeneration; };
+        hooks.frameGenerationAvailable = [weak](std::string& reason) {
+            auto b = weak.lock();
+            if (!b || !b->hasRenderInfo()) {
+                reason = "Renderer not running";
+                return false;
+            }
+            const RenderInfo info = b->renderInfo();
+            reason = info.frameGenerationReason;
+            return info.frameGenerationAvailable;
+        };
+
+
 #if OX_HAS_GLFW
         if (auto* glfw = dynamic_cast<GlfwPlatform*>(engine.platform())) {
             hooks.resolutions = [glfw] {

@@ -1,4 +1,5 @@
 #include <oxwald/assets/asset_manager.hpp>
+#include <oxwald/assets/neural/ntc.hpp>
 #include <oxwald/render/asset_provider.hpp>
 
 namespace ox::render {
@@ -16,6 +17,7 @@ AssetProvider makeAssetManagerProvider(assets::AssetManager& manager) {
     p.loadMesh = [&manager](const Uuid& id) { return loadShared<assets::MeshData>(manager, id); };
     p.loadTexture = [&manager](const Uuid& id) { return loadShared<assets::TextureData>(manager, id); };
     p.loadMaterial = [&manager](const Uuid& id) { return loadShared<assets::MaterialAsset>(manager, id); };
+    p.loadNeuralTextures = [&manager](const Uuid& id) { return loadShared<assets::NeuralTextureSet>(manager, id); };
     return p;
 }
 

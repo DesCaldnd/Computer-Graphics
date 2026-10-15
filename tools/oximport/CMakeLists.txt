@@ -15,6 +15,11 @@ if(OX_BUILD_TESTS)
     add_test(NAME oximport.texture COMMAND oximport ${_legacy}/fiit.jpg --settings "{\"maxSize\": 64}")
     set_tests_properties(oximport.texture PROPERTIES LABELS "tools;assets"
         PASS_REGULAR_EXPRESSION "BC7_SRGB")
+    # Neural texture compression of loose images (small and short: the full report is in docs/dev/perf.md).
+    add_test(NAME oximport.ntc COMMAND oximport --ntc --albedo ${_legacy}/beige_leather_5_diffuse.png
+             --normal ${_legacy}/beige_leather_5_normal.png
+             --settings "{\"neuralPreset\": \"Low\", \"neuralSteps\": 150, \"neuralMaxSize\": 128, \"neuralFallbackSize\": 32}")
+    set_tests_properties(oximport.ntc PROPERTIES LABELS "tools;assets" PASS_REGULAR_EXPRESSION "NeuralTextureSet 128x128")
     add_test(NAME oximport.rejects_unknown COMMAND oximport ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt)
     set_tests_properties(oximport.rejects_unknown PROPERTIES LABELS "tools;assets" WILL_FAIL TRUE)
 endif()

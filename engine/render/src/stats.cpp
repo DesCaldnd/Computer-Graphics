@@ -33,6 +33,8 @@ void RenderStats::resetCounters() {
     gpuCulling = {};
     streaming.mipsLoaded = 0;
     streaming.mipsEvicted = 0;
+    split.segments = split.offloaded = split.imported = split.fallbacks = 0;
+    split.waitMs = 0.0;
 }
 
 std::string RenderStats::toString() const {
@@ -64,6 +66,13 @@ std::string RenderStats::toString() const {
                          streaming.streamedTextures, f64(streaming.residentBytes) / (1 << 20),
                          f64(streaming.budgetBytes) / (1 << 20), f64(streaming.wantedBytes) / (1 << 20),
                          streaming.pendingRequests, streaming.mipsLoaded, streaming.mipsEvicted);
+    }
+    if (split.mode != 0) {
+        s += std::format("  split rendering: {} ({}{}, {}), {}/{} segments offloaded, secondary {:.3f} ms (compute "
+                         "{:.3f}), transfers {:.3f} ms, wait {:.3f} ms, ratio {:.2f} - {}\n",
+                         split.active ? "active" : "inactive", split.adapter, split.sameAdapter ? ", same adapter" : "",
+                         split.transfer, split.offloaded, split.segments, split.secondaryGpuMs, split.secondaryComputeMs,
+                         split.transferMs, split.waitMs, split.speedRatio, split.status);
     }
     for (const VramCategory& v : vram) s += std::format("  vram {:<22} {:8.2f} MiB\n", v.name, f64(v.bytes) / (1 << 20));
     for (const PassTiming& p : passes) s += std::format("  {:<28} {:7.3f} ms\n", p.name, p.gpuMs);

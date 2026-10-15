@@ -4,11 +4,16 @@
 
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/scalability.hpp>
+#include <oxwald/render/features/raytracing/raytracing.hpp>
 #include <oxwald/render/quality.hpp>
 #include <oxwald/render/render_settings.hpp>
+#include <oxwald/render/render_view.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <format>
+#include <mutex>
+#include <unordered_map>
 
 namespace ox::render {
 
@@ -118,6 +123,45 @@ RecommendedSettings recommendedSettings(const rhi::DeviceCaps& caps, f64 score, 
     return r;
 }
 
+u32 ngxLiveFeatureCount() { return dlss::liveFeatureCount(); }
+
+RayReconstructionAvailability rayReconstructionAvailability(rhi::Device* device) {
+    RayReconstructionAvailability a;
+    if (!dlss::compiled()) {
+        a.reason = dlss::buildUnavailableReason();
+    } else if (!device) {
+        a.reason = "Ray Reconstruction availability is known once a Vulkan device exists (requires an NVIDIA RTX GPU)";
+    } else if (!device->caps().rayTracingSupported()) {
+        a.reason = "DLSS Ray Reconstruction denoises ray traced effects: " + device->caps().whyRayTracingUnavailable();
+    } else {
+        const dlss::Status s = dlss::probe(*device);
+        a.available = s.rrAvailable;
+        a.reason = s.rrReason;
+    }
+    return a;
+}
+
+bool rayReconstructionSelected(const RenderSettings& s, const rhi::DeviceCaps& caps) {
+    const DenoiserType denoiser = DenoiserType(pp::cvDenoiser.get());
+    if (denoiser == DenoiserType::SVGF || denoiser == DenoiserType::Neural) return false;
+    if (!rt::rayTracingActive(s, caps)) return false;
+    // The path tracer converges on its own; Ray Reconstruction is for the hybrid effects.
+    static CVar<bool>* pathTracing = CVarRegistry::instance().findAs<bool>("r.PathTracing");
+    if (pathTracing && pathTracing->get()) return false;
+    return pp::rayReconstructionUsable(caps);
+}
+
+namespace {
+std::mutex g_rrViewsMutex;
+std::unordered_map<const RenderView*, u64> g_rrViews; // view → frame index RR prepared
+} // namespace
+
+bool rayReconstructionRunsThisFrame(const RenderView& view) {
+    std::lock_guard lock(g_rrViewsMutex);
+    const auto it = g_rrViews.find(&view);
+    return it != g_rrViews.end() && it->second == view.frameIndex();
+}
+
 RecommendedSettings recommendedSettings(rhi::Device& device, f64 score) {
     const bool dlssOk = upscalerAvailability(UpscalerType::DLSS, &device).available;
     return recommendedSettings(device.caps(), score, dlssOk);
@@ -129,6 +173,7 @@ void applyRecommendedSettings(const RecommendedSettings& r) {
     reg.set("r.AntiAliasing", std::to_string(r.antiAliasing), CVarSource::Code);
     reg.set("r.Upscaler", std::to_string(i32(r.upscaler)), CVarSource::Code);
     reg.set("r.Upscaler.Quality", std::to_string(i32(r.upscalerQuality)), CVarSource::Code);
+    reg.set("r.Denoiser", std::to_string(i32(r.denoiser)), CVarSource::Code);
     if (r.upscaler == UpscalerType::Off) reg.set("r.ScreenPercentage", "100", CVarSource::Code);
     OX_LOG_INFO("render", "recommended settings: {}", r.rationale);
 }
@@ -139,7 +184,29 @@ bool dlssUsable(const rhi::DeviceCaps& caps) {
     return dlss::compiled() && caps.vendor == rhi::GpuVendor::Nvidia && !dlss::knownUnavailable();
 }
 
+bool rayReconstructionUsable(const rhi::DeviceCaps& caps) {
+    return dlss::compiled() && caps.vendor == rhi::GpuVendor::Nvidia && caps.rayTracingSupported() &&
+           !dlss::rrKnownUnavailable();
+}
+
+UpscalerQuality rayReconstructionQuality(const RenderSettings& s) {
+    if (UpscalerType(s.upscaler) == UpscalerType::Off) return UpscalerQuality::Native; // DLAA
+    return UpscalerQuality(std::clamp(s.upscalerQuality, 0, 4));
+}
+
+void markRayReconstruction(const RenderView& view) {
+    std::lock_guard lock(g_rrViewsMutex);
+    g_rrViews[&view] = view.frameIndex();
+}
+
+void forgetRayReconstruction(const RenderView& view) {
+    std::lock_guard lock(g_rrViewsMutex);
+    g_rrViews.erase(&view);
+}
+
 UpscalerType effectiveUpscaler(const RenderSettings& s, const rhi::DeviceCaps& caps) {
+    // Ray Reconstruction is DLSS with a denoiser: it replaces whatever upscaler / temporal AA is configured.
+    if (rayReconstructionSelected(s, caps)) return UpscalerType::DLSS;
     switch (UpscalerType(s.upscaler)) {
     case UpscalerType::FSR1: return UpscalerType::FSR1;
     case UpscalerType::TAAU: return UpscalerType::TAAU;

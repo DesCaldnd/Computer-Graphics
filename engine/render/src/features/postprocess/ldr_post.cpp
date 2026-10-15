@@ -4,6 +4,9 @@
 
 #include <oxwald/render/gpu_resource_cache.hpp>
 #include <oxwald/render/renderer.hpp>
+#include <oxwald/render/split_rendering.hpp>
+
+#include <cstddef>
 
 namespace ox::render::pp {
 
@@ -61,25 +64,28 @@ public:
         const u32 steps = fxaa ? kSteps[std::clamp(cvFxaaQuality.get(), 0, 3)] : 0u;
         const f32 lutIntensity = std::clamp(s.lutIntensity, 0.0f, 1.0f);
         const u32 frame = u32(ctx.view().frameIndex());
-        const rhi::PipelineHandle pipe = m_pipeline;
-        ctx.graph()
-            .addPass(fxaa ? "FXAA" : "LdrPost", rhi::PassType::Compute)
-            .read(src, rhi::Access::SampledCompute)
-            .overwrite(out, rhi::Access::StorageWriteCompute)
-            .execute([=](rhi::PassContext& p) {
-                struct {
-                    u32 src, dst, fxaaSteps, lut;
-                    f32 lutSize, lutIntensity;
-                    u32 lutSrgb;
-                    f32 grain;
-                    u32 frame, pad;
-                    glm::vec2 size;
-                } pc{p.sampledIndex(src), p.storageIndex(out), steps, lutIndex, lutSize, lutIntensity,
-                     lutSrgb ? 1u : 0u, grain, frame, 0, {f32(size.width), f32(size.height)}};
-                p.cmd.bindPipeline(pipe);
-                p.cmd.pushConstants(pc);
-                p.cmd.dispatchThreads(size.width, size.height);
-            });
+        // Portable segment (split rendering): an ordinary compute pass unless r.SplitRendering moves it to the
+        // secondary GPU. The user LUT is a texture outside the graph, so the pass is pinned to the primary with one.
+        struct LdrPush {
+            u32 src, dst, fxaaSteps, lut;
+            f32 lutSize, lutIntensity;
+            u32 lutSrgb;
+            f32 grain;
+            u32 frame, pad;
+            glm::vec2 size;
+        };
+        PortablePassDesc pass;
+        pass.name = fxaa ? "FXAA" : "LdrPost";
+        pass.pipeline = m_pipeline;
+        pass.setPush(LdrPush{0, 0, steps, lutIndex, lutSize, lutIntensity, lutSrgb ? 1u : 0u, grain, frame, 0,
+                             {f32(size.width), f32(size.height)}});
+        pass.textures = {{src, u32(offsetof(LdrPush, src)), false}, {out, u32(offsetof(LdrPush, dst)), true}};
+        pass.threads = {size.width, size.height, 1};
+        PortableSegmentDesc segment;
+        segment.name = "LdrPost";
+        segment.passes = {pass};
+        segment.portable = lutIndex == kInvalidIndex;
+        addPortableSegment(ctx, segment);
         R.setTexture(res::kSceneColorLDR, out);
     }
 

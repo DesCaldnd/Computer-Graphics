@@ -52,6 +52,11 @@ std::optional<Uuid> ImportContext::resolveAsset(const std::filesystem::path& fil
     return m_callbacks.resolve(file, settingsHint);
 }
 
+Result<std::vector<std::byte>> ImportContext::readArtifact(const Uuid& uuid) const {
+    if (!m_callbacks.readArtifact) return makeError("{}: artifacts of other assets are only available inside a project", m_assetPath);
+    return m_callbacks.readArtifact(uuid);
+}
+
 void ImportContext::warn(std::string message) {
     OX_LOG_WARN("assets", "{}: {}", m_assetPath, message);
     m_warnings.push_back(std::move(message));

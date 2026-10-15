@@ -10,6 +10,10 @@ void registerPostProcessFeatures(FeatureRegistry& f) {
     f.add(pp::makeTaaFeature());
     f.add(pp::makeTaauFeature());
     f.add(pp::makeDlssFeature());
+    std::unique_ptr<IRenderFeature> rayReconstruction = pp::makeDlssRayReconstructionFeature();
+    IRenderFeature& rr = *rayReconstruction;
+    f.add(std::move(rayReconstruction));
+    f.add(pp::makeDlssRayReconstructionReleaseFeature(rr));
     f.add(pp::makeFsr1Feature());
     f.add(pp::makeDepthOfFieldFeature());
     f.add(pp::makeMotionBlurFeature());

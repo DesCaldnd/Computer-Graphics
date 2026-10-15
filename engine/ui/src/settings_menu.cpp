@@ -63,6 +63,42 @@ void GameUI::SettingsModel::refreshAvailability() {
             handle.DirtyVariable("rayTracing");
         }
     }
+    // Ray Reconstruction needs ray tracing and the DLSS runtime (NVIDIA RTX); Auto falls back to SVGF by itself.
+    std::string rrReason = rt ? std::string() : "needs ray tracing: " + reason;
+    for (const UpscalerRow& r : rows) {
+        if (rrReason.empty() && r.name.find("DLSS") != std::string::npos && !r.available) rrReason = r.reason;
+    }
+    std::vector<UpscalerRow> den{{"SVGF", true, {}}, {"DLSSRR", rrReason.empty(), rrReason}, {"Auto", true, {}}};
+    if (den.size() != denoisers.size() || den[1].available != denoisers[1].available || den[1].reason != denoisers[1].reason) {
+        denoisers = std::move(den);
+        if (handle) handle.DirtyVariable("denoisers");
+    }
+    // r.Reflex: every mode is selectable; without VK_NV_low_latency2 "On" runs the engine's latency limiter.
+    const bool behindFg = hooks.reflexBehindFrameGeneration && hooks.reflexBehindFrameGeneration();
+    const Rml::String rr = !hooks.reflexSupported || hooks.reflexSupported() ? Rml::String()
+                           : behindFg ? Rml::String("NVIDIA Reflex is unavailable while frame generation is on: On uses the "
+                                                    "engine latency limiter")
+                                      : Rml::String("NVIDIA Reflex not supported by this GPU/driver: On uses the engine latency limiter");
+    if (rr != reflexReason) {
+        reflexReason = rr;
+        for (UpscalerRow& r : reflexModes) r.reason = r.name == "Off" ? Rml::String() : rr;
+        if (handle) {
+            handle.DirtyVariable("reflexModes");
+            handle.DirtyVariable("reflexReason");
+        }
+    }
+    std::string fgReason;
+    const bool fg = hooks.frameGenerationAvailable ? hooks.frameGenerationAvailable(fgReason) : false;
+    if (!hooks.frameGenerationAvailable) fgReason = "Renderer not available";
+    if (fg != frameGenModes[1].available || fgReason != frameGenModes[1].reason) {
+        frameGenModes[1].available = fg;
+        frameGenModes[1].reason = fg ? Rml::String() : Rml::String(fgReason);
+        frameGenReason = frameGenModes[1].reason;
+        if (handle) {
+            handle.DirtyVariable("frameGenModes");
+            handle.DirtyVariable("frameGenReason");
+        }
+    }
     if (rowsChanged) {
         upscalers = std::move(rows);
         if (handle) {
@@ -117,6 +153,49 @@ void GameUI::SettingsModel::setUpscaler(const std::string& name) {
     }
 }
 
+void GameUI::SettingsModel::setDenoiser(const std::string& name) {
+    for (const UpscalerRow& r : denoisers) {
+        if (r.name != name) continue;
+        if (!r.available) {
+            status = name + " unavailable: " + r.reason;
+            changed("status");
+            return;
+        }
+        GraphicsSettings g = settings.user().graphics;
+        g.denoiser = name;
+        settings.setGraphics(g);
+        changed("denoiser");
+        return;
+    }
+}
+
+void GameUI::SettingsModel::setReflex(const std::string& name) {
+    if (name != "Off" && name != "On" && name != "OnBoost") {
+        OX_LOG_WARN("ui", "unknown low latency mode '{}'", name);
+        return;
+    }
+    GraphicsSettings g = settings.user().graphics;
+    g.reflex = name;
+    settings.setGraphics(g);
+    changed("reflex");
+}
+
+void GameUI::SettingsModel::setFrameGeneration(const std::string& name) {
+    for (const UpscalerRow& r : frameGenModes) {
+        if (r.name != name) continue;
+        if (!r.available) {
+            status = name + " unavailable: " + r.reason;
+            changed("status");
+            return;
+        }
+        GraphicsSettings g = settings.user().graphics;
+        g.frameGeneration = name;
+        settings.setGraphics(g);
+        changed("frameGeneration");
+        return;
+    }
+}
+
 void GameUI::SettingsModel::onAutoDetectResult(const std::string& summary) {
     settings.captureFromCVars(); // applyQuality() set the scalability groups
     autoSelected = true;
@@ -156,6 +235,11 @@ bool GameUI::SettingsModel::bind() {
     c.Bind("windowModes", &windowModes);
     c.Bind("resolutions", &resolutions);
     c.Bind("upscalers", &upscalers);
+    c.Bind("denoisers", &denoisers);
+    c.Bind("reflexModes", &reflexModes);
+    c.Bind("reflexReason", &reflexReason);
+    c.Bind("frameGenModes", &frameGenModes);
+    c.Bind("frameGenReason", &frameGenReason);
     c.Bind("rtAvailable", &rtAvailable);
     c.Bind("rtReason", &rtReason);
     c.Bind("autoStatus", &autoStatus);
@@ -201,6 +285,9 @@ bool GameUI::SettingsModel::bind() {
             changed("rayTracing");
         });
     c.BindFunc("upscaler", [this](Rml::Variant& v) { v = Rml::String(settings.user().graphics.upscaler); });
+    c.BindFunc("denoiser", [this](Rml::Variant& v) { v = Rml::String(settings.user().graphics.denoiser); });
+    c.BindFunc("reflex", [this](Rml::Variant& v) { v = Rml::String(settings.user().graphics.reflex); });
+    c.BindFunc("frameGeneration", [this](Rml::Variant& v) { v = Rml::String(settings.user().graphics.frameGeneration); });
     c.BindFunc("upscalerReason", [this](Rml::Variant& v) {
         Rml::String r;
         for (const UpscalerRow& row : upscalers)
@@ -230,7 +317,18 @@ bool GameUI::SettingsModel::bind() {
     c.BindEventCallback("set_upscaler", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
         if (!args.empty()) setUpscaler(args[0].Get<Rml::String>());
     });
-    c.BindEventCallback("set_window_mode", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+    c.BindEventCallback("set_denoiser", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+        if (!args.empty()) setDenoiser(args[0].Get<Rml::String>());
+    });
+    c.BindEventCallback("set_reflex", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+        if (!args.empty()) setReflex(args[0].Get<Rml::String>());
+    });
+    c.BindEventCallback("set_frame_generation", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+        if (!args.empty()) setFrameGeneration(args[0].Get<Rml::String>());
+    });
+    c.BindEventCallback("set_window_mode",
+
+ [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
         if (args.empty()) return;
         GraphicsSettings g = settings.user().graphics;
         g.windowMode = WindowMode(std::clamp(args[0].Get<int>(), 0, 2));

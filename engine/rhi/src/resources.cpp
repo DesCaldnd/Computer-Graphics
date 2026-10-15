@@ -32,6 +32,7 @@ VkImageUsageFlags toVkImageUsage(TextureUsage u, VkFormat format) {
     if (any(u & TextureUsage::Storage)) f |= VK_IMAGE_USAGE_STORAGE_BIT;
     if (any(u & TextureUsage::ColorAttachment)) f |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (any(u & TextureUsage::DepthStencilAttachment)) f |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (any(u & TextureUsage::ShadingRateAttachment)) f |= VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
     (void)format;
     return f;
 }

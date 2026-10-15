@@ -65,6 +65,7 @@ enum class TextureUsage : u32 {
     DepthStencilAttachment = 1u << 3,
     TransferSrc = 1u << 4,
     TransferDst = 1u << 5,
+    ShadingRateAttachment = 1u << 6, // VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR (R8_UINT rate images)
 };
 OX_RHI_FLAGS(TextureUsage)
 

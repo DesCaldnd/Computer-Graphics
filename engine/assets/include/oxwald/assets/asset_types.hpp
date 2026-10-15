@@ -24,6 +24,7 @@ enum class AssetType : u16 {
     NavMesh = 11,
     Heightmap = 12,
     Raw = 13,
+    NeuralTextureSet = 14, // neural texture compression of a material's textures (.oxntc, neural/ntc.hpp)
     FirstCustom = 1000, // other modules: AssetType(FirstCustom + n)
 };
 

@@ -26,6 +26,15 @@ CVar<float> cvUpscalerSharpness("r.Upscaler.Sharpness", 0.2f,
                                 "Upscaler sharpening: FSR 1 RCAS / TAAU CAS / DLSS (deprecated in DLSS 3.7+)", 0.0f,
                                 1.0f, CVarFlags::Persist);
 
+// Ray traced effects' denoiser. Not bound to a scalability level (like r.Upscaler): the code default keeps a bare
+// Renderer on SVGF, the Auto quality recommendation (applyRecommendedSettings) and the settings menus select Auto.
+CVar<int> cvDenoiser("r.Denoiser", 0,
+                     "Denoiser of the ray traced effects: SVGF, DLSSRR (NVIDIA DLSS Ray Reconstruction, also replaces "
+                     "the upscaler), Auto (Ray Reconstruction where available, else SVGF), Neural (EXPERIMENTAL: SVGF "
+                     "with a learned A-trous kernel; less noise than SVGF on a fresh history, blurrier once converged, "
+                     "~3x the A-trous cost; not offered in the settings menus)",
+                     CVarEnum{"SVGF", "DLSSRR", "Auto", "Neural"}.alias("RR", 1).alias("RayReconstruction", 1), CVarFlags::Persist);
+
 // --- post processing (sg.PostProcess) ---
 CVar<bool> cvBloom("r.Bloom", false, "Physically based bloom (dual filter, energy conserving)", S::PostProcess,
                    {true, true, true, true});

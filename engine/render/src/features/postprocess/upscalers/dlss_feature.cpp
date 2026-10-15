@@ -37,7 +37,7 @@ public:
         return {"r.Upscaler", "r.Upscaler.Quality", "r.Upscaler.Sharpness"};
     }
     bool isEnabled(const RenderSettings& s, const rhi::DeviceCaps& caps) const override {
-        return effectiveUpscaler(s, caps) == UpscalerType::DLSS;
+        return effectiveUpscaler(s, caps) == UpscalerType::DLSS && !rayReconstructionSelected(s, caps);
     }
 
     bool initialize(FeatureInitContext& ctx) override {

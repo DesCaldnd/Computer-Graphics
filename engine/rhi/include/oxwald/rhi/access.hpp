@@ -35,6 +35,7 @@ enum class Access : u8 {
     AccelStructBuildWrite, // AS destination + scratch
     AccelStructRead,       // ray query / trace rays in any shader stage
     General,               // everything; use sparingly
+    ShadingRateRead,       // fragment shading rate attachment (VK_KHR_fragment_shading_rate), PassBuilder::shadingRate
     Count
 };
 

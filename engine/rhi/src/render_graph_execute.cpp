@@ -237,6 +237,10 @@ void RenderGraph::Impl::recordPass(CommandList& cmd, Device& device, const RGPla
             d.store = d.readOnly ? VK_ATTACHMENT_STORE_OP_NONE : VK_ATTACHMENT_STORE_OP_STORE;
             rd.depth = d;
         }
+        if (decl.shadingRate != ~0u) {
+            rd.shadingRate = textureHandle(decl.shadingRate);
+            rd.shadingRateTexelSize = decl.shadingRateTexel;
+        }
         cmd.beginRendering(rd);
         if (decl.secondary) {
             for (const ColorAttachment& c : rd.colors) secondaryInfo.colorFormats.push_back(device.desc(c.texture).format);

@@ -170,6 +170,14 @@ void CommandList::beginRendering(const RenderingDesc& desc) {
     ri.pDepthAttachment = hasDepth ? &depth : nullptr;
     ri.pStencilAttachment = hasStencil ? &stencil : nullptr;
     if (desc.secondaryContents) ri.flags |= VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
+    VkRenderingFragmentShadingRateAttachmentInfoKHR fsr{VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR};
+    if (desc.shadingRate && s.caps.attachmentShadingRate) {
+        TextureRecord& t = s.textures.at(desc.shadingRate);
+        fsr.imageView = attachmentView(t, 0, 0, t.aspect);
+        fsr.imageLayout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+        fsr.shadingRateAttachmentTexelSize = desc.shadingRateTexelSize;
+        ri.pNext = &fsr;
+    }
     vkCmdBeginRendering(m_cmd, &ri);
     if (desc.setViewportAndScissor && !desc.secondaryContents) {
         setViewport(f32(ri.renderArea.offset.x), f32(ri.renderArea.offset.y), f32(ri.renderArea.extent.width),

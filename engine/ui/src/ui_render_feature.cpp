@@ -2,6 +2,7 @@
 
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/profile.hpp>
+#include <oxwald/render/features/framegen/frame_generation.hpp>
 #include <oxwald/render/render_types.hpp>
 #include <oxwald/render/renderer.hpp>
 #include <oxwald/rhi/device.hpp>
@@ -163,6 +164,10 @@ void UiOverlayFeature::publishInfo(render::FeatureContext& ctx) {
     info.memory = ctx.device().memoryStats();
     info.caps = ctx.caps();
     info.upscalers = upscalerAvailability(ctx.caps());
+    const render::framegen::Availability fg = render::framegen::availability(ctx.device());
+    info.frameGenerationAvailable = fg.available;
+    info.frameGenerationReason = fg.reason;
+
     info.outputSize = {ctx.outputExtent().width, ctx.outputExtent().height};
     info.renderSize = {ctx.renderExtent().width, ctx.renderExtent().height};
     m_bridge->setRenderInfo(std::move(info));

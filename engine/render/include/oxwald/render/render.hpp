@@ -16,3 +16,4 @@
 #include <oxwald/render/renderer.hpp>
 #include <oxwald/render/shadows.hpp>
 #include <oxwald/render/snapshot.hpp>
+#include <oxwald/render/split_rendering.hpp>

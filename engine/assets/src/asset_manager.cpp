@@ -1,6 +1,7 @@
 #include <oxwald/assets/asset_manager.hpp>
 #include <oxwald/assets/material.hpp>
 #include <oxwald/assets/mesh.hpp>
+#include <oxwald/assets/neural/ntc.hpp>
 #include <oxwald/assets/texture.hpp>
 #include <oxwald/core/jobs.hpp>
 #include <oxwald/core/log.hpp>
@@ -176,6 +177,12 @@ void AssetManager::registerBuiltins() {
     registerLoader(AssetType::NavMesh, blobLoader<NavMeshAsset>());
     registerLoader(AssetType::Heightmap, blobLoader<HeightmapAsset>());
     registerLoader(AssetType::Raw, blobLoader<RawAsset>());
+    registerLoader(AssetType::NeuralTextureSet, [](std::vector<std::byte> bytes, const AssetRecord&) -> Result<LoadedAsset> {
+        auto set = deserializeNeuralTextureSet(bytes);
+        if (!set) return set.error();
+        const usize mem = usize(set->payloadBytes()) + sizeof(NeuralTextureSet);
+        return LoadedAsset{share(std::move(*set)), mem, {}};
+    });
 #if OX_ASSETS_HAS_ANIMATION
     registerLoader(AssetType::Skeleton, [](std::vector<std::byte> bytes, const AssetRecord&) -> Result<LoadedAsset> {
         auto s = deserializeSkeletonAsset(bytes);

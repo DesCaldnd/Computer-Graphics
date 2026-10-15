@@ -50,6 +50,13 @@ std::string DeviceCaps::whyRayTracingUnavailable() const {
     return reason;
 }
 
+bool DeviceCaps::shadingRateSupported(u32 width, u32 height) const {
+    auto log2 = [](u32 v) -> i32 { return v == 1 ? 0 : v == 2 ? 1 : v == 4 ? 2 : -1; };
+    const i32 lw = log2(width), lh = log2(height);
+    if (lw < 0 || lh < 0) return false;
+    return (shadingRateMask >> u32((lw << 2) | lh)) & 1u;
+}
+
 std::string DeviceCaps::toString() const {
     auto yn = [](bool b) { return b ? "yes" : "no"; };
     std::string s;
@@ -70,9 +77,24 @@ std::string DeviceCaps::toString() const {
                      yn(meshShader), yn(taskShader), yn(geometryShader), yn(tessellationShader), yn(multiview),
                      yn(shaderOutputLayer), yn(shaderOutputViewportIndex), yn(drawIndirectCount), yn(multiDrawIndirect),
                      yn(fragmentShadingRate));
+    if (fragmentShadingRate) {
+        std::string rates;
+        for (u32 r = 0; r < 16; ++r) {
+            if ((shadingRateMask >> r) & 1u) rates += std::format("{}{}x{}", rates.empty() ? "" : " ", 1u << (r >> 2), 1u << (r & 3u));
+        }
+        s += std::format("Shading rate: pipeline {}, attachment {} (texel {}x{}..{}x{}, aspect {}), primitive {}; rates {}\n",
+                         yn(pipelineShadingRate), yn(attachmentShadingRate), shadingRateTexelMinWidth,
+                         shadingRateTexelMinHeight, shadingRateTexelMaxWidth, shadingRateTexelMaxHeight,
+                         shadingRateMaxAspect, yn(primitiveShadingRate), rates);
+    }
     s += std::format("Shader types: int64 {}, float64 {}, int16 {}, float16 {}; storage image r/w without format {}/{}\n",
                      yn(shaderInt64), yn(shaderFloat64), yn(shaderInt16), yn(shaderFloat16),
                      yn(storageImageReadWithoutFormat), yn(storageImageWriteWithoutFormat));
+    s += std::format("Machine learning: cooperative matrix {} (fp16 accumulate {}, stages 0x{:X}), cooperative vector {} "
+                     "(training {}, stages 0x{:X}), 16-bit storage {}, int64 buffer atomics {}\n",
+                     yn(cooperativeMatrix), yn(cooperativeMatrixFp16Accumulate), cooperativeMatrixStages,
+                     yn(cooperativeVector), yn(cooperativeVectorTraining), cooperativeVectorStages,
+                     yn(storageBuffer16BitAccess), yn(shaderBufferInt64Atomics));
     s += std::format("Textures: anisotropy {} (max {}), BC {}, ASTC {}, ETC2 {}, max 2D {}, max layers {}, color samples 0x{:X}\n",
                      yn(samplerAnisotropy), maxSamplerAnisotropy, yn(textureCompressionBC), yn(textureCompressionASTC),
                      yn(textureCompressionETC2), maxImageDimension2D, maxImageArrayLayers, framebufferColorSampleCounts);
@@ -81,8 +103,10 @@ std::string DeviceCaps::toString() const {
     s += std::format("Subgroups: size {}, stages 0x{:X}, ops 0x{:X}; compute max invocations {}, shared mem {} KiB\n",
                      subgroupSize, subgroupSupportedStages, subgroupSupportedOperations, maxComputeWorkGroupInvocations,
                      maxComputeSharedMemorySize / 1024);
-    s += std::format("Timestamps: {} (period {} ns); memory budget {}; debug utils {}; validation {}",
-                     yn(timestampQueries), timestampPeriodNs, yn(memoryBudget), yn(debugUtils), yn(validationEnabled));
+    s += std::format("Timestamps: {} (period {} ns); memory budget {}; debug utils {}; validation {}; "
+                     "low latency (Reflex) {}; present id {}",
+                     yn(timestampQueries), timestampPeriodNs, yn(memoryBudget), yn(debugUtils), yn(validationEnabled),
+                     yn(lowLatency2), yn(presentId));
     return s;
 }
 

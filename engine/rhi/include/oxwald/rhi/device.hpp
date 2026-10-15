@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -39,6 +40,16 @@ struct DeviceDesc {
     u32 framesInFlight = 2;              // 2..3
     bool enableRayTracing = true;        // enable RT extensions when present
     bool enableMeshShaders = true;
+    // VK_KHR_fragment_shading_rate (variable rate shading). Off: the extension is not enabled and DeviceCaps
+    // reports no shading rate support (VRS becomes a no-op), and graphics pipelines are created without VRS state.
+    bool enableFragmentShadingRate = true;
+    // VK_NV_low_latency2 + VK_KHR_present_id when available and a surface is given (NVIDIA Reflex,
+    // DeviceCaps::lowLatency2 / presentId, Swapchain::setLowLatencyMode).
+    bool enableLowLatency = true;
+    // Three extra queues for AMD FSR 3 frame generation's swapchain proxy (Device::frameGenerationQueues): two in the
+    // graphics/present family (present, image acquire) and one compute queue. The proxy submits on them from its own
+    // threads, so they are never shared with the engine's queues.
+    bool frameGenerationQueues = false;
     bool preferDiscreteGpu = true;
     bool asyncCompute = true;  // request a separate compute queue
     bool asyncTransfer = true; // request a separate transfer queue
@@ -54,6 +65,15 @@ struct DeviceDesc {
     // (render::appendUpscalerVulkanExtensions fills these).
     std::vector<std::string> optionalInstanceExtensions;
     std::vector<std::string> optionalDeviceExtensions;
+};
+
+struct ExternalQueue {
+    VkQueue queue = VK_NULL_HANDLE;
+    u32 family = 0;
+};
+struct FrameGenerationQueues {
+    ExternalQueue present, imageAcquire, asyncCompute;
+    [[nodiscard]] bool valid() const { return present.queue && imageAcquire.queue && asyncCompute.queue; }
 };
 
 struct SemaphoreWait {
@@ -93,8 +113,19 @@ public:
     [[nodiscard]] VkDevice vkDevice() const;
     [[nodiscard]] VkQueue vkQueue(QueueType q) const;
     [[nodiscard]] u32 queueFamily(QueueType q) const;
+    // Queues reserved for a frame generation swapchain proxy (all null unless DeviceDesc::frameGenerationQueues).
+    [[nodiscard]] FrameGenerationQueues frameGenerationQueues() const;
+    // The graphics queue's submission mutex (Device::submit and Swapchain::present take it); for libraries that submit
+    // to or present on the graphics queue themselves.
+    [[nodiscard]] std::mutex& graphicsQueueMutex();
+
     [[nodiscard]] VkSurfaceKHR surface() const;
     [[nodiscard]] ISurfaceProvider* surfaceProvider() const;
+    // Mobile surface loss (ISurfaceProvider::surfaceGeneration): releaseSurface() destroys the VkSurfaceKHR through
+    // the provider (the swapchain must be gone already); recreateSurface() creates a new one for the provider's
+    // current window and checks that the graphics queue can still present to it. Render thread, device idle.
+    void releaseSurface();
+    bool recreateSurface();
     [[nodiscard]] VkPipelineLayout pipelineLayout() const;
     [[nodiscard]] VkDescriptorSet bindlessSet() const;
     // Extensions this device/instance was actually created with (required, optional and DeviceDesc::optional*).

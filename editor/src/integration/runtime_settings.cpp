@@ -53,6 +53,8 @@ QVariant userSetting(EditorContext& ctx, const QString& key) {
     if (key == QLatin1String("graphics.fov")) return double(g.fov);
     if (key == QLatin1String("graphics.rayTracing")) return g.rayTracing;
     if (key == QLatin1String("graphics.upscaler")) return QString::fromStdString(g.upscaler);
+    if (key == QLatin1String("graphics.reflex")) return QString::fromStdString(g.reflex);
+    if (key == QLatin1String("graphics.frameGeneration")) return QString::fromStdString(g.frameGeneration);
     if (key == QLatin1String("audio.masterVolume")) return double(u.audio.masterVolume);
     if (key == QLatin1String("mouseSensitivity")) return double(u.mouseSensitivity);
     if (key == QLatin1String("invertY")) return u.invertY;
@@ -74,6 +76,10 @@ void setUserSetting(EditorContext& ctx, const QString& key, const QVariant& v) {
     else if (key == QLatin1String("graphics.fov")) g.fov = float(v.toDouble());
     else if (key == QLatin1String("graphics.rayTracing")) g.rayTracing = v.toBool();
     else if (key == QLatin1String("graphics.upscaler")) g.upscaler = v.toString().toStdString();
+    else if (key == QLatin1String("graphics.reflex")) g.reflex = v.toString().toStdString();
+    else if (key == QLatin1String("graphics.frameGeneration")) g.frameGeneration = v.toString().toStdString();
+
+
     else if (key == QLatin1String("audio.masterVolume")) u.audio.masterVolume = float(v.toDouble());
     else if (key == QLatin1String("mouseSensitivity")) u.mouseSensitivity = float(v.toDouble());
     else if (key == QLatin1String("invertY")) u.invertY = v.toBool();

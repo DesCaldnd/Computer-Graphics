@@ -266,6 +266,7 @@ QString ScalabilityWidget::autoDetect() {
     setCVar("r.AntiAliasing", res.antiAliasing);
     setCVar("r.Upscaler", res.upscaler);
     setCVar("r.Upscaler.Quality", res.upscalerQuality);
+    setCVar("r.Denoiser", 2); // Auto: DLSS Ray Reconstruction where it can run, SVGF elsewhere
     QStringList summary;
     for (usize gi = 0; gi < kScalabilityGroupCount; ++gi) summary << groupDisplayName(Scalability(gi)) + QStringLiteral(" ") + levelDisplayName(res.levels[gi]);
     const QString text = tr("Detected with %1: %2").arg(m_ctx->services().benchmark().name(), res.details);

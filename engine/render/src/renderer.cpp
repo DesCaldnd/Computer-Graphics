@@ -2,6 +2,7 @@
 
 #include "features/gpu_driven/gpu_driven.hpp"
 #include "features/gpu_driven/texture_streaming.hpp"
+#include "features/destruction/destruction_bridge.hpp"
 
 #include <oxwald/render/features/gpu_driven/gpu_driven.hpp>
 
@@ -14,7 +15,10 @@
 #include <oxwald/render/features/reflections/reflections.hpp>
 #include <oxwald/render/features/translucency/translucency.hpp>
 #include <oxwald/render/features/volumetrics/volumetrics.hpp>
+#include <oxwald/render/features/vrs/vrs.hpp>
 #include <oxwald/render/features/world/world_skinning.hpp>
+#include <oxwald/render/neural/neural.hpp>
+#include <oxwald/render/split_rendering.hpp>
 #include <oxwald/rhi/swapchain.hpp>
 
 #include <algorithm>
@@ -238,16 +242,18 @@ void Renderer::trimMemory() {
     for (auto& [id, v] : m_impl->views) v->graph().releaseResources(*m_impl->device);
 }
 
-void Renderer::Impl::createPipelines() {
-    rhi::Device& dev = *device;
+// Depth prepass + forward pipelines of every material variant; `neural` = with the neural texture decoder
+// (r.NeuralTextures InferenceOnSample, created on first use), otherwise OX_NTC_DISABLED.
+static void createMaterialPipelines(rhi::Device& dev, BuiltinPipelines& p, bool neural) {
     for (u32 variant = 0; variant < kVariantCount; ++variant) {
         for (u32 entity = 0; entity < 2; ++entity) {
             rhi::GraphicsPipelineDesc d;
-            d.name = std::format("render.prepass.v{}{}", variant, entity ? ".id" : "");
+            d.name = std::format("render.prepass{}.v{}{}", neural ? ".ntc" : "", variant, entity ? ".id" : "");
             d.vertex = rhi::ShaderStageDesc::file("render/passes/mesh.vert");
             std::vector<rhi::ShaderDefine> defs;
             if (variant & kVariantAlphaTest) defs.push_back({"OX_ALPHA_TEST"});
             if (entity) defs.push_back({"OX_ENTITY_ID"});
+            for (const rhi::ShaderDefine& nd : neural::materialShaderDefines(dev.caps(), neural)) defs.push_back(nd); // MLP path
             d.fragment = rhi::ShaderStageDesc::file("render/passes/depth_prepass.frag", defs);
             d.colorFormats = {formats::kNormals, formats::kVelocity};
             if (entity) {
@@ -263,19 +269,24 @@ void Renderer::Impl::createPipelines() {
             d.depth = {true, true, VK_COMPARE_OP_GREATER_OR_EQUAL};
             d.raster.cullMode = (variant & kVariantDoubleSided) ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
             d.raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-            pipelines.prepass[variant][entity] = dev.createGraphicsPipeline(d);
+            (neural ? p.prepassNeural : p.prepass)[variant][entity] = dev.createGraphicsPipeline(d);
         }
         rhi::GraphicsPipelineDesc f;
-        f.name = std::format("render.forward.v{}", variant);
+        f.name = std::format("render.forward{}.v{}", neural ? ".ntc" : "", variant);
         f.vertex = rhi::ShaderStageDesc::file("render/passes/mesh.vert");
-        f.fragment = rhi::ShaderStageDesc::file("render/passes/forward.frag");
+        f.fragment = rhi::ShaderStageDesc::file("render/passes/forward.frag", neural::materialShaderDefines(dev.caps(), neural));
         f.colorFormats = {formats::kSceneColor};
         f.depthFormat = formats::kDepth;
         f.depth = {true, false, VK_COMPARE_OP_EQUAL};
         f.raster.cullMode = (variant & kVariantDoubleSided) ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
         f.raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        pipelines.forward[variant] = dev.createGraphicsPipeline(f);
+        (neural ? p.forwardNeural : p.forward)[variant] = dev.createGraphicsPipeline(f);
     }
+}
+
+void Renderer::Impl::createPipelines() {
+    rhi::Device& dev = *device;
+    createMaterialPipelines(dev, pipelines, false);
     pipelines.lightCull = createComputePipeline(dev, "render.lightCull", "render/passes/light_cull.comp");
     pipelines.hiz = createComputePipeline(dev, "render.hiz", "render/passes/hiz.comp");
     pipelines.pick = createComputePipeline(dev, "render.pick", "render/editor/pick.comp");
@@ -662,6 +673,14 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
     const rhi::RGTexture normals = graph.createTexture(targetDesc(formats::kNormals, re, "Normals"));
     const rhi::RGTexture velocity = graph.createTexture(targetDesc(formats::kVelocity, re, "Velocity"));
     rhi::RGTexture entity;
+    // Material pipelines with the neural texture decoder only while r.NeuralTextures is InferenceOnSample.
+    const bool ntcPipelines = neural::neuralTextureMode() == neural::NeuralTextureMode::InferenceOnSample;
+    if (ntcPipelines && !pipelines.neuralCreated) {
+        createMaterialPipelines(*device, pipelines, true);
+        pipelines.neuralCreated = true;
+    }
+    const rhi::PipelineHandle(*prepassSet)[2] = ntcPipelines ? pipelines.prepassNeural : pipelines.prepass;
+    const rhi::PipelineHandle* forwardSet = ntcPipelines ? pipelines.forwardNeural : pipelines.forward;
     {
         rhi::PassBuilder pb = graph.addPass("DepthPrepass");
         pb.color(normals, VK_ATTACHMENT_LOAD_OP_CLEAR, rhi::ClearColor::rgba(0, 0, 0, 1))
@@ -674,10 +693,10 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         if (!fs.gpuDriven && wantsParallelRecording(fs, {&fs.drawLists[DrawBucket::Opaque], &fs.drawLists[DrawBucket::Masked]})) {
             pb.secondaryCommandLists();
         }
-        pb.execute([&fs, viewAddr, sceneAddr, editor, this](rhi::PassContext& ctx) {
+        pb.execute([&fs, viewAddr, sceneAddr, editor, prepassSet, this](rhi::PassContext& ctx) {
             FeatureContext fc(fs, nullptr, InjectionPoint::PreDepth);
-            const rhi::PipelineHandle pipes[4] = {pipelines.prepass[0][editor], pipelines.prepass[1][editor],
-                                                  pipelines.prepass[2][editor], pipelines.prepass[3][editor]};
+            const rhi::PipelineHandle pipes[4] = {prepassSet[0][editor], prepassSet[1][editor], prepassSet[2][editor],
+                                                  prepassSet[3][editor]};
             if (ctx.secondaryRendering) {
                 DrawPush pc;
                 pc.view = viewAddr;
@@ -705,10 +724,10 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         rhi::PassBuilder pb = graph.addPass("DepthPrepass.Late");
         pb.color(normals, VK_ATTACHMENT_LOAD_OP_LOAD).color(velocity, VK_ATTACHMENT_LOAD_OP_LOAD).depth(depth, VK_ATTACHMENT_LOAD_OP_LOAD);
         if (entity.valid()) pb.color(entity, VK_ATTACHMENT_LOAD_OP_LOAD);
-        pb.execute([&fs, viewAddr, sceneAddr, editor, this](rhi::PassContext& ctx) {
+        pb.execute([&fs, viewAddr, sceneAddr, editor, prepassSet, this](rhi::PassContext& ctx) {
             FeatureContext fc(fs, nullptr, InjectionPoint::PreDepth);
-            const rhi::PipelineHandle pipes[4] = {pipelines.prepass[0][editor], pipelines.prepass[1][editor],
-                                                  pipelines.prepass[2][editor], pipelines.prepass[3][editor]};
+            const rhi::PipelineHandle pipes[4] = {prepassSet[0][editor], prepassSet[1][editor], prepassSet[2][editor],
+                                                  prepassSet[3][editor]};
             for (DrawBucket b : {DrawBucket::Opaque, DrawBucket::Masked}) {
                 DrawPush pc;
                 pc.view = viewAddr;
@@ -796,7 +815,7 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
         if (!fs.gpuDriven && wantsParallelRecording(fs, {&fs.drawLists[DrawBucket::Opaque], &fs.drawLists[DrawBucket::Masked]})) {
             pb.secondaryCommandLists();
         }
-        pb.execute([&fs, viewAddr, sceneAddr, inputs, this](rhi::PassContext& ctx) {
+        pb.execute([&fs, viewAddr, sceneAddr, inputs, forwardSet, this](rhi::PassContext& ctx) {
             FeatureContext fc(fs, nullptr, InjectionPoint::Lighting);
             DrawPush pc;
             pc.view = viewAddr;
@@ -804,7 +823,7 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
             for (u32 i = 0; i < 4; ++i) pc.inputs[i] = inputs[i].valid() ? ctx.sampledIndex(inputs[i]) : kInvalidIndex;
             if (ctx.secondaryRendering) {
                 recordParallel(fs, ctx, {&fs.drawLists[DrawBucket::Opaque], &fs.drawLists[DrawBucket::Masked]},
-                               pipelines.forward, &pc, sizeof(pc));
+                               forwardSet, &pc, sizeof(pc));
                 return;
             }
             for (const ViewDrawLists* lists : {fs.gpuDriven ? &fs.gpuEarly : &fs.drawLists, fs.gpuLateActive ? &fs.gpuLate : nullptr}) {
@@ -812,7 +831,7 @@ void Renderer::Impl::buildView(FrameState& fs, const ViewRenderRequest& request,
                 for (DrawBucket b : {DrawBucket::Opaque, DrawBucket::Masked}) {
                     const DrawList& list = (*lists)[b];
                     pc.drawIds = list.instanceIds;
-                    fc.drawBatches(ctx.cmd, list, pipelines.forward, &pc, sizeof(pc));
+                    fc.drawBatches(ctx.cmd, list, std::span<const rhi::PipelineHandle>(forwardSet, kVariantCount), &pc, sizeof(pc));
                 }
             }
             for (bool late : {false, true}) gpuDriven->drawMeshlets(fs, ctx.cmd, late, true, false, &pc, sizeof(pc));
@@ -1115,6 +1134,7 @@ void registerBuiltinFeatures(Renderer& renderer) {
     f.add(makeDebugLinesFeature());
     f.add(makeEditorOverlaysFeature());
     f.add(makeDebugViewsFeature());
+    registerSplitRenderingFeature(f); // r.SplitRendering: portable passes on a secondary GPU (split_rendering.cpp)
 
     // Feature areas register here. Each team owns exactly one line below: replace your marker with a call
     // like `registerReflectionFeatures(f);` (declared in features/<area>/...); keep the other lines untouched.
@@ -1124,7 +1144,10 @@ void registerBuiltinFeatures(Renderer& renderer) {
     registerRayTracingFeatures(f); // [feature-area: raytracing]
     registerPostProcessFeatures(f); // [feature-area: postprocess-upscalers]
     registerGpuDrivenFeatures(f); // [feature-area: gpu-driven]
+    registerVrsFeatures(f); // [feature-area: vrs] variable rate shading (features/vrs/vrs.hpp)
     registerWorldSkinningFeatures(f); // [feature-area: world-skinning]
+    neural::registerNeuralFeatures(renderer); // [feature-area: neural] neural texture compression, neural denoiser (render/neural)
+    registerDestructionFeatures(f); // [feature-area: destruction] chunk meshes of gameplay destructibles
     // [feature-area: ui] added by Oxwald::ui per renderer (ui::attachRenderer / ui::withUi); render does not link ui
 }
 

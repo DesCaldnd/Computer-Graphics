@@ -34,6 +34,20 @@ TEST(Material, JsonRoundTrip) {
     EXPECT_EQ(*back, m);
 }
 
+TEST(Material, JsonWritesNeuralFieldsOnlyWhenSet) {
+    MaterialAsset m = sampleMaterial();
+    const std::string plain = materialToJson(m);
+    EXPECT_EQ(plain.find("neuralTextures"), std::string::npos) << "unset neural fields keep pre-NTC .oxmat text";
+    m.neuralTextures = Uuid::fromName("ntc");
+    m.neuralTexturesOnly = true;
+    const std::string json = materialToJson(m);
+    EXPECT_NE(json.find("\"neuralTextures\": \"" + Uuid::fromName("ntc").toString() + "\""), std::string::npos);
+    EXPECT_NE(json.find("\"neuralTexturesOnly\": true"), std::string::npos);
+    auto back = loadMaterial(std::span(reinterpret_cast<const std::byte*>(json.data()), json.size()));
+    ASSERT_TRUE(back) << back.error().message;
+    EXPECT_EQ(*back, m);
+}
+
 TEST(Material, BinaryRoundTripAndDependencies) {
     const MaterialAsset m = sampleMaterial();
     auto back = loadMaterial(materialToBinary(m));
