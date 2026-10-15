@@ -27,6 +27,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QScreen>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -135,10 +136,13 @@ ViewportPanel::ViewportPanel(EditorContext* ctx, QWidget* parent) : QWidget(pare
     snap.scale = float(prefs.scaleSnap);
     m_gizmo.setSnap(snap);
     m_gizmo.setSizeScale(float(prefs.gizmoSize));
+    m_gizmo.setSpace(prefs.gizmoLocalSpace ? GizmoSpace::Local : GizmoSpace::World);
 
     connect(&m_timer, &QTimer::timeout, this, &ViewportPanel::tick);
     m_timer.setTimerType(Qt::PreciseTimer);
-    m_timer.start(8);
+    m_timer.setSingleShot(true);
+    m_timer.start(0);
+    m_paceClock.start();
     m_clock.start();
     m_fpsClock.start();
     auto redraw = [this] { m_dirty = true; };
@@ -162,6 +166,7 @@ ViewportPanel::ViewportPanel(EditorContext* ctx, QWidget* parent) : QWidget(pare
         s.scale = float(v.scaleSnap);
         m_gizmo.setSnap(s);
         m_gizmo.setSizeScale(float(v.gizmoSize));
+        setGizmoSpace(v.gizmoLocalSpace ? GizmoSpace::Local : GizmoSpace::World);
         m_camera.verticalFovDeg = float(v.cameraFov);
         if (m_speedLabel) m_speedLabel->setText(QStringLiteral("%1 m/s").arg(v.cameraSpeed, 0, 'f', v.cameraSpeed < 10 ? 1 : 0));
         m_dirty = true;
@@ -312,13 +317,27 @@ void ViewportPanel::renderGpuFrame(const ViewportTarget& target, QSize sizePx) {
     frame.lines = &dd;
     frame.time = m_clock.elapsed() / 1000.0;
     m_gpuRenderer->render(frame, target);
+    // The Vulkan window replaces this with the whole frame's CPU time after present (noteFrame).
     m_frameMs = double(t.nsecsElapsed()) / 1e6;
+}
+
+void ViewportPanel::noteFrame(double cpuMs) {
+    m_frameMs = cpuMs;
     ++m_fpsFrames;
     if (m_fpsClock.elapsed() >= 500) {
         m_fps = m_fpsFrames * 1000.0 / double(m_fpsClock.restart());
         m_fpsFrames = 0;
     }
     Q_EMIT frameRendered(m_frameMs);
+}
+
+QString ViewportPanel::frameStatsText() const {
+    const QString gpu = m_gpuMs > 0.0 ? QString::number(m_gpuMs, 'f', 2) : QStringLiteral("—");
+    return tr("%1 FPS · %2 ms · CPU %3 ms · GPU %4 ms")
+        .arg(m_fps, 0, 'f', 0)
+        .arg(frameIntervalMs(), 0, 'f', 1)
+        .arg(m_frameMs, 0, 'f', 2)
+        .arg(gpu);
 }
 
 QString ViewportPanel::rendererName() const { return renderer() ? renderer()->name() : QString(); }
@@ -605,11 +624,16 @@ void ViewportPanel::setGizmoMode(GizmoMode mode) {
 }
 
 void ViewportPanel::setGizmoSpace(GizmoSpace space) {
+    // remembered in the editor preferences (viewport.gizmoSpace)
+    const bool local = space == GizmoSpace::Local;
+    if (m_ctx->preferences().values().gizmoLocalSpace != local) m_ctx->preferences().modify([local](PreferenceValues& v) { v.gizmoLocalSpace = local; });
     if (m_gizmo.space() == space) return;
     m_gizmo.setSpace(space);
     m_dirty = true;
     Q_EMIT gizmoSpaceChanged(space);
 }
+
+void ViewportPanel::toggleGizmoSpace() { setGizmoSpace(m_gizmo.space() == GizmoSpace::Local ? GizmoSpace::World : GizmoSpace::Local); }
 
 void ViewportPanel::setSnapEnabled(bool enabled) {
     auto s = m_gizmo.snap();
@@ -682,7 +706,9 @@ void ViewportPanel::updateGizmoTarget() {
         m_gizmo.setVisible(visible);
         if (visible && !m_gizmo.active()) {
             if (m_gizmo.mode() != GizmoMode::Translate) m_gizmo.setMode(GizmoMode::Translate);
-            m_gizmo.setTarget(pts[usize(tools.splinePoint)], glm::quat(1, 0, 0, 0));
+            // Local space: the spline entity's axes
+            const Entity spline = w.find(tools.target());
+            m_gizmo.setTarget(pts[usize(tools.splinePoint)], spline ? gizmo::frameRotation(spline.worldMatrix()) : glm::quat(1, 0, 0, 0));
         }
         return;
     }
@@ -690,7 +716,9 @@ void ViewportPanel::updateGizmoTarget() {
     const bool visible = primary && !m_ctx->isLocked(primary.uuid()) && m_flags.gizmos;
     m_gizmo.setVisible(visible);
     if (!visible || m_gizmo.active()) return;
-    m_gizmo.setTarget(primary.worldPosition(), primary.worldRotation());
+    // Called every frame: Local space follows rotations from any source (inspector, undo, scripts, parent changes).
+    // The frame comes from the full world matrix, so parents (non-uniform scale included) are taken into account.
+    m_gizmo.setTarget(primary.worldPosition(), gizmo::frameRotation(primary.worldMatrix()));
 }
 
 ViewportFrame ViewportPanel::makeFrame(QSize size) {
@@ -749,13 +777,7 @@ void ViewportPanel::paintCanvas(QPainter& p, QSize size, bool forScreenshot) {
     updateGizmoTarget();
     if (!m_ctx->isPlaying() || forScreenshot) m_gizmo.draw(p, GizmoView::from(m_camera, glm::vec2(size.width(), size.height())));
     paintOverlay(p, size);
-    m_frameMs = double(t.nsecsElapsed()) / 1e6;
-    ++m_fpsFrames;
-    if (m_fpsClock.elapsed() >= 500) {
-        m_fps = m_fpsFrames * 1000.0 / double(m_fpsClock.restart());
-        m_fpsFrames = 0;
-    }
-    Q_EMIT frameRendered(m_frameMs);
+    noteFrame(double(t.nsecsElapsed()) / 1e6);
 }
 
 void ViewportPanel::paintOverlay(QPainter& p, QSize size) {
@@ -820,7 +842,7 @@ void ViewportPanel::paintOverlay(QPainter& p, QSize size) {
     // stats HUD
     if (m_flags.stats) {
         QStringList lines;
-        lines << tr("%1 FPS  ·  %2 ms").arg(m_fps, 0, 'f', 0).arg(m_frameMs, 0, 'f', 2);
+        lines << frameStatsText();
         if (m_painterRenderer) {
             const auto& s = m_painterRenderer->lastStats();
             lines << tr("Meshes %1  ·  Faces %2  ·  Lines %3").arg(s.entities).arg(s.faces).arg(s.lines);
@@ -889,14 +911,34 @@ QImage ViewportPanel::renderToImage(QSize size) {
     return img;
 }
 
+double ViewportPanel::pacingFps(const PreferenceValues& prefs, bool focused, double displayHz) {
+    if (!focused && prefs.throttleWhenUnfocused) return std::max(1, prefs.unfocusedFps);
+    if (prefs.matchDisplayRefresh) return displayHz >= 1.0 ? displayHz : 60.0;
+    return prefs.frameLimit > 0 ? double(prefs.frameLimit) : 0.0; // 0 = unlimited
+}
+
+double ViewportPanel::displayRefreshRate() const {
+    // QWidget::screen() follows the top-level window between monitors; Qt reports the exact mode rate
+    // (59.94, 143.98, ...), so the pacer neither drops below the display rate nor caps 144/165/240 Hz panels.
+    const QScreen* s = screen();
+    return s ? s->refreshRate() : 0.0;
+}
+
+double ViewportPanel::currentTargetFps() const {
+    const bool focused = window() && window()->isActiveWindow();
+    return pacingFps(m_ctx->preferences().values(), focused, displayRefreshRate());
+}
+
 void ViewportPanel::tick() {
     const double dt = std::min(0.1, double(m_clock.restart()) / 1000.0);
+    ++m_ticks;
     // frame limiter / unfocused throttling
     const auto& prefs = m_ctx->preferences().values();
-    const bool focused = window() && window()->isActiveWindow();
-    const int fps = (!focused && prefs.throttleWhenUnfocused) ? std::max(1, prefs.unfocusedFps) : (prefs.frameLimit > 0 ? prefs.frameLimit : 240);
-    const int interval = std::max(1, 1000 / fps);
-    if (m_timer.interval() != interval) m_timer.setInterval(interval);
+    if (const QScreen* s = screen(); s != m_paceScreen) {
+        m_paceScreen = s; // moved to another monitor: restart the schedule at that screen's rate
+        m_pacer.reset();
+    }
+    m_timer.start(m_pacer.next(m_paceClock.nsecsElapsed(), currentTargetFps()));
 
     if (m_flying && !m_captured && !m_keys.isEmpty()) {
         glm::vec3 move(0.0f);
@@ -917,7 +959,7 @@ void ViewportPanel::tick() {
         m_velocityBoost = 1.0f;
     }
     tickTools(dt);
-    if (m_ctx->isPlaying()) m_dirty = true;
+    if (m_ctx->isPlaying() || m_continuousRedraw) m_dirty = true;
     if (m_dirty && isVisible()) {
         m_dirty = false;
 #if OX_EDITOR_HAS_RHI
@@ -985,8 +1027,8 @@ void ViewportPanel::onMousePress(QMouseEvent* e) {
                 if (!ent || m_ctx->isLocked(id)) continue;
                 DragStart s;
                 s.id = id;
-                s.world = ent.worldTransform();
-                s.parentWorld = ent.parent() ? ent.parent().worldMatrix() : glm::mat4(1.0f);
+                s.target.local = ent.localTransform().toTransform();
+                s.target.parentWorld = ent.parent() ? ent.parent().worldMatrix() : glm::mat4(1.0f);
                 m_dragStart.push_back(s);
             }
             // Alt-less duplicate-drag is Shift+drag in many editors; keep it simple: plain drag.
@@ -1164,24 +1206,21 @@ void ViewportPanel::applyGizmoDelta(const TransformGizmo::Delta& d, EditPhase ph
         setSplinePointWorld(*m_ctx, m_ctx->tools().target(), m_ctx->tools().splinePoint, m_splineDragStart + d.translation, phase);
         return;
     }
-    const glm::vec3 pivot0 = m_dragStart.back().world.position;
+    // Rotation and scale act about the gizmo pivot (the primary selection) in the gizmo frame of the drag start: the
+    // primary's orientation in Local space (Scale is always local). Only the changed components are recomputed, so
+    // translating keeps rotation/scale exact even under non-uniformly scaled parents.
+    const glm::vec3 pivot0 = m_gizmo.dragPivot();
+    const glm::quat frame0 = m_gizmo.dragOrientation();
     UuidList ids;
     std::vector<serial::Value> values;
     for (const DragStart& s : m_dragStart) {
-        Transform t = s.world;
+        Transform local = s.target.local;
         switch (m_gizmo.mode()) {
-        case GizmoMode::Translate: t.position += d.translation; break;
-        case GizmoMode::Rotate:
-            t.rotation = glm::normalize(d.rotation * s.world.rotation);
-            t.position = pivot0 + d.rotation * (s.world.position - pivot0);
-            break;
-        case GizmoMode::Scale:
-            t.scale = s.world.scale * d.scale;
-            if (m_dragStart.size() > 1) t.position = pivot0 + (s.world.position - pivot0) * d.scale;
-            break;
+        case GizmoMode::Translate: local = gizmo::applyTranslation(s.target, d.translation); break;
+        case GizmoMode::Rotate: local = gizmo::applyRotation(s.target, pivot0, d.rotation); break;
+        case GizmoMode::Scale: local = gizmo::applyScale(s.target, pivot0, frame0, d.scale, m_dragStart.size() > 1); break;
         default: break;
         }
-        const Transform local = Transform::fromMatrix(glm::inverse(s.parentWorld) * t.toMatrix());
         TransformComponent tc;
         tc.setTransform(local);
         ids.push_back(s.id);

@@ -155,6 +155,8 @@ void PreferencesDialog::buildViewport() {
     p->addNumber(tr("Grid Cell Size"), tr("Spacing of the ground grid lines."), num("viewport.gridSize", &PreferenceValues::gridSize), 0.05, 100, 0.05, 2, QStringLiteral(" m"));
     p->addColor(tr("Grid Color"), {}, col("viewport.gridColor", &PreferenceValues::gridColor));
     p->addNumber(tr("Gizmo Size"), tr("Screen size multiplier of transform gizmos."), num("viewport.gizmoSize", &PreferenceValues::gizmoSize), 0.3, 3, 0.05, 2);
+    p->addToggle(tr("Local Gizmo Axes"), tr("Move and rotate gizmos follow the selected object's rotation (World / Local Space, Ctrl+`). Scale is always local."),
+                 pref("viewport.gizmoSpace", [](const auto& v) { return QVariant(v.gizmoLocalSpace); }, [](auto& v, const QVariant& x) { v.gizmoLocalSpace = x.toBool(); }));
     p->addColor(tr("Selection Outline"), tr("Colour of selected objects' outlines."), col("viewport.selectionColor", &PreferenceValues::selectionColor));
     p->addSection(tr("Snapping"), tr("Hold Ctrl while dragging a gizmo to invert the snapping toggle."));
     p->addNumber(tr("Translate Snap"), {}, num("viewport.translateSnap", &PreferenceValues::translateSnap), 0.001, 100, 0.01, 3, QStringLiteral(" m"));
@@ -261,6 +263,8 @@ void PreferencesDialog::buildTools() {
 void PreferencesDialog::buildPerformance() {
     auto* p = new SettingsPage(QStringLiteral("performance"), tr("Performance"), QStringLiteral("speedometer"), tr("Keep the editor responsive and your laptop cool."), this);
     p->addSection(tr("Frame Rate"));
+    p->addToggle(tr("Match Display Refresh Rate"), tr("Refresh the viewport at the refresh rate of its monitor (the frame limit below is ignored)."),
+                 pref("perf.matchDisplay", [](const auto& v) { return QVariant(v.matchDisplayRefresh); }, [](auto& v, const QVariant& x) { v.matchDisplayRefresh = x.toBool(); }));
     p->addNumber(tr("Editor Frame Limit"), tr("Maximum viewport refresh rate (0 = unlimited)."),
                  pref("perf.frameLimit", [](const auto& v) { return QVariant(v.frameLimit); }, [](auto& v, const QVariant& x) { v.frameLimit = x.toInt(); }),
                  0, 480, 1, 0, QStringLiteral(" fps"));
@@ -296,6 +300,18 @@ void PreferencesDialog::buildGameUserSettings() {
     p->addNumber(tr("Resolution Height"), {}, user(QStringLiteral("graphics.resolutionY")), 0, 16384, 1, 0, QStringLiteral(" px"));
     p->addCombo(tr("Window Mode"), {}, {tr("Windowed"), tr("Borderless"), tr("Fullscreen")}, {0, 1, 2}, user(QStringLiteral("graphics.windowMode")));
     p->addToggle(tr("VSync"), {}, user(QStringLiteral("graphics.vsync")));
+    p->addCombo(tr("Low Latency"),
+                tr("r.Reflex: NVIDIA Reflex (VK_NV_low_latency2) where the GPU and driver support it, otherwise the "
+                   "engine's latency limiter (r.Reflex.Fallback). On + Boost also keeps the GPU clocks up."),
+                {tr("Off"), tr("On"), tr("On + Boost")},
+                {QStringLiteral("Off"), QStringLiteral("On"), QStringLiteral("OnBoost")}, user(QStringLiteral("graphics.reflex")));
+    p->addCombo(tr("Frame Generation"),
+                tr("AMD FSR 3 frame interpolation in the player (Windows, amd_fidelityfx_vk.dll). The editor viewport "
+                   "never generates frames."),
+                {tr("Off"), QStringLiteral("FSR 3")}, {QStringLiteral("Off"), QStringLiteral("FSR3")},
+                user(QStringLiteral("graphics.frameGeneration")));
+
+
     p->addNumber(tr("Frame Rate Limit"), tr("0 = unlimited"), user(QStringLiteral("graphics.maxFps")), 0, 1000, 1, 0, QStringLiteral(" fps"));
     p->addNumber(tr("Field of View"), {}, user(QStringLiteral("graphics.fov")), 40, 140, 1, 0, QStringLiteral("°"));
     p->addSection(tr("Quality"));
@@ -318,6 +334,17 @@ void PreferencesDialog::buildGameUserSettings() {
             model->item(int(i))->setFlags(model->item(int(i))->flags() & ~(Qt::ItemIsEnabled | Qt::ItemIsSelectable));
             model->item(int(i))->setToolTip(caps.upscalers[i].reason);
         }
+    }
+    QComboBox* den = p->addCombo(tr("Ray Tracing Denoiser"),
+                                 tr("Auto uses NVIDIA DLSS Ray Reconstruction where it can run (it then also replaces the "
+                                    "upscaler) and the SVGF denoisers elsewhere."),
+                                 {QStringLiteral("SVGF"), tr("DLSS Ray Reconstruction"), tr("Auto")},
+                                 {QStringLiteral("SVGF"), QStringLiteral("DLSSRR"), QStringLiteral("Auto")},
+                                 user(QStringLiteral("graphics.denoiser")));
+    if (auto* model = qobject_cast<QStandardItemModel*>(den->model()); model && model->rowCount() > 1 &&
+                                                                      !(caps.rayTracingSupported && caps.dlssSupported)) {
+        model->item(1)->setFlags(model->item(1)->flags() & ~(Qt::ItemIsEnabled | Qt::ItemIsSelectable));
+        model->item(1)->setToolTip(!caps.rayTracingSupported ? caps.rayTracingUnavailableReason : caps.dlssUnavailableReason);
     }
     p->addSection(tr("Audio & Controls"));
     p->addNumber(tr("Master Volume"), {}, user(QStringLiteral("audio.masterVolume")), 0, 1, 0.01, 2);

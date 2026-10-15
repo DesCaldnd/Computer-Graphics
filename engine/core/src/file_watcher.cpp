@@ -89,11 +89,14 @@ std::map<fs::path, FileWatcher::FileState> FileWatcher::scan(const Watch& w) {
         if (ec || !regular) {
             return s;
         }
-        const auto size = fs::file_size(p, ec);
+        // directory_entry caches size and mtime from the directory listing (FindNextFile on Windows): no extra
+        // syscalls per file. Two stat calls per file made a scan of ~750 files cost ~40 ms on Windows, and the
+        // editor polls every engine tick.
+        const auto size = entry ? entry->file_size(ec) : fs::file_size(p, ec);
         if (ec) {
             return s;
         }
-        const auto time = fs::last_write_time(p, ec);
+        const auto time = entry ? entry->last_write_time(ec) : fs::last_write_time(p, ec);
         if (ec) {
             return s;
         }

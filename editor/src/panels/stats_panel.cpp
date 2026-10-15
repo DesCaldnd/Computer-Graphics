@@ -193,6 +193,32 @@ StatsPanel::StatsPanel(EditorContext* ctx, ViewportPanel* viewport, QWidget* par
 }
 
 void StatsPanel::fillTable(QGridLayout* grid, const QVector<QPair<QString, double>>& rows, const QString& emptyText) {
+    double maxv = 0.001;
+    for (const auto& r : rows) maxv = std::max(maxv, r.second);
+    // The same number of rows as last time (the usual case: the pass and system lists rarely change): update the
+    // widgets in place. Recreating ~75 rows of labels and bars every 500 ms cost ~40 ms on the UI thread (polish,
+    // deferred deletes), which delayed the viewport timer and held a 100 Hz viewport at ~93 fps.
+    if (!rows.isEmpty() && grid->count() == int(rows.size()) * 3) {
+        bool updated = true;
+        for (int row = 0; row < int(rows.size()) && updated; ++row) {
+            auto widgetAt = [&](int col) -> QWidget* {
+                QLayoutItem* it = grid->itemAtPosition(row, col);
+                return it ? it->widget() : nullptr;
+            };
+            auto* name = qobject_cast<QLabel*>(widgetAt(0));
+            auto* bar = qobject_cast<QProgressBar*>(widgetAt(1));
+            auto* val = qobject_cast<QLabel*>(widgetAt(2));
+            if (!name || !bar || !val) {
+                updated = false;
+                break;
+            }
+            const auto& r = rows[row];
+            name->setText(r.first);
+            bar->setValue(int(r.second / maxv * 1000));
+            val->setText(QStringLiteral("%1 ms").arg(r.second, 0, 'f', 3));
+        }
+        if (updated) return;
+    }
     while (QLayoutItem* it = grid->takeAt(0)) {
         if (it->widget()) it->widget()->deleteLater();
         delete it;
@@ -204,8 +230,6 @@ void StatsPanel::fillTable(QGridLayout* grid, const QVector<QPair<QString, doubl
         grid->addWidget(l, 0, 0, 1, 3);
         return;
     }
-    double maxv = 0.001;
-    for (const auto& r : rows) maxv = std::max(maxv, r.second);
     int row = 0;
     for (const auto& r : rows) {
         auto* name = new QLabel(r.first);

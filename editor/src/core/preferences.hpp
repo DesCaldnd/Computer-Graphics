@@ -38,6 +38,7 @@ struct PreferenceValues {
     double gridSize = 1.0;
     QColor gridColor = QColor(255, 255, 255, 40);
     double gizmoSize = 1.0;
+    bool gizmoLocalSpace = true; // transform gizmo axes follow the selection (Local) or the world axes (World)
     QColor selectionColor = QColor(255, 158, 26);
     QString viewportBackend = QStringLiteral("Auto"); // Auto | Software | Vulkan
     // snapping
@@ -53,7 +54,8 @@ struct PreferenceValues {
     QString codeEditorPath;
     QString codeEditorArgs = QStringLiteral("\"%f\":%l");
     // performance
-    int frameLimit = 120; // 0 = unlimited
+    bool matchDisplayRefresh = true; // viewport refresh = refresh rate of the viewport's screen (else frameLimit)
+    int frameLimit = 120;            // 0 = unlimited
     bool throttleWhenUnfocused = true;
     int unfocusedFps = 10;
     // shortcuts (action id -> sequence), only overrides of the defaults

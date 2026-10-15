@@ -41,9 +41,11 @@ public:
     StatsPanel(EditorContext* ctx, ViewportPanel* viewport, QWidget* parent = nullptr);
     [[nodiscard]] FrameGraph* graph() const { return m_graph; }
 
+    // One row per entry (name, bar, "x ms"); rows with the same count are updated in place.
+    static void fillTable(QGridLayout* grid, const QVector<QPair<QString, double>>& rows, const QString& emptyText);
+
 private:
     void refresh();
-    void fillTable(QGridLayout* grid, const QVector<QPair<QString, double>>& rows, const QString& emptyText);
 
     EditorContext* m_ctx;
     ViewportPanel* m_viewport;

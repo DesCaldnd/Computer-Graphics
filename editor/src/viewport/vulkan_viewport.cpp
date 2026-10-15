@@ -51,6 +51,9 @@ void VulkanViewportHub::setDevice(rhi::Device* d) { g_device = d; }
 #include <QMimeData>
 #include <QPainter>
 
+#include <algorithm>
+#include <chrono>
+#include <format>
 #include <cstring>
 
 // Native surface glue. volk is built without VK_USE_PLATFORM_*, so the platform headers are included here and the
@@ -212,6 +215,27 @@ public:
         u64 size = 0;
     };
 
+    // OX_EDITOR_VIEWPORT_STATS=1: per-second averages of the viewport frame in the log (the panel also redraws
+    // continuously then, so the numbers are the viewport's throughput, not its redraw-on-change rate).
+    struct FrameStats {
+        bool enabled = qEnvironmentVariableIntValue("OX_EDITOR_VIEWPORT_STATS") != 0;
+        std::chrono::steady_clock::time_point windowStart = std::chrono::steady_clock::now();
+        int frames = 0;
+        double slotWait = 0, acquire = 0, cpu = 0, present = 0, gpu = 0;
+        bool add(double w, double a, double c, double p, double g, u32 width, u32 height) {
+            ++frames;
+            slotWait += w, acquire += a, cpu += c, present += p, gpu += g;
+            const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - windowStart).count();
+            if (elapsed < 1.0) return false;
+            const double n = frames;
+            OX_LOG_INFO("editor", "viewport stats {}x{}: fps={:.1f} frame={:.2f}ms [gpuSlotWait={:.2f} acquire={:.2f} "
+                        "cpu={:.2f} present={:.2f}] gpu={:.2f}ms", width, height, n / elapsed, 1000.0 * elapsed / n,
+                        slotWait / n, acquire / n, cpu / n, present / n, gpu / n);
+            *this = FrameStats{};
+            return true;
+        }
+    } stats;
+
     QWindow* m_window;
     std::unique_ptr<rhi::Device> device;
     std::unique_ptr<rhi::Swapchain> swapchain;
@@ -257,11 +281,15 @@ void VulkanViewportWindow::renderFrame() {
     }
     rhi::Device& dev = *m_bridge->device;
     rhi::Swapchain& sc = *m_bridge->swapchain;
-    dev.beginFrame();
+    using Clock = std::chrono::steady_clock;
+    const auto t0 = Clock::now();
+    dev.beginFrame(); // waits for the GPU to retire this frame slot
+    const auto tSlot = Clock::now();
     if (!sc.acquire()) {
         dev.endFrame();
         return;
     }
+    const auto tAcquired = Clock::now();
     const VkExtent2D ext = sc.extent();
     const qreal dpr = devicePixelRatio();
     IViewportRenderer* gpu = m_panel->gpuRenderer();
@@ -306,8 +334,33 @@ void VulkanViewportWindow::renderFrame() {
     rhi::SubmitInfo si;
     si.swapchain = &sc;
     dev.submit(cmd, si);
+    const auto tRecorded = Clock::now();
     sc.present();
     dev.endFrame();
+    using Ms = std::chrono::duration<double, std::milli>;
+    double gpuMs = 0.0;
+    for (const rhi::GpuTiming& t : dev.gpuTimings()) { // last retired frame
+        if (t.depth == 0) gpuMs += t.milliseconds;
+    }
+    if (gpu && !gpu->usesPainter()) {
+        // CPU = the whole frame minus the waits for the GPU (frame slot) and the presentation engine (acquire).
+        m_panel->m_gpuMs = gpuMs;
+        m_panel->noteFrame(Ms(Clock::now() - tAcquired).count());
+    }
+    if (m_bridge->stats.enabled) {
+        auto& st = m_bridge->stats;
+        if (st.add(Ms(tSlot - t0).count(), Ms(tAcquired - tSlot).count(), Ms(tRecorded - tAcquired).count(),
+                   Ms(Clock::now() - tRecorded).count(), gpuMs, ext.width, ext.height)) {
+            std::vector<rhi::GpuTiming> top;
+            for (const rhi::GpuTiming& t : dev.gpuTimings()) {
+                if (t.depth == 0) top.push_back(t);
+            }
+            std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.milliseconds > b.milliseconds; });
+            std::string line;
+            for (usize i = 0; i < std::min<usize>(top.size(), 8); ++i) line += std::format(" {} {:.2f}", top[i].name, top[i].milliseconds);
+            OX_LOG_INFO("editor", "viewport top passes:{}", line);
+        }
+    }
 }
 
 void VulkanViewportWindow::exposeEvent(QExposeEvent*) {

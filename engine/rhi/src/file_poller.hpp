@@ -38,11 +38,15 @@ private:
         u64 size = ~0ull;
     };
     static Stamp stamp(const std::filesystem::path& p) {
+        // One directory_entry query fetches and caches both values (one syscall on Windows instead of two; the
+        // poll runs every hotReloadPollMs on the render / editor UI thread for every shader file).
         std::error_code ec;
         Stamp s;
-        s.time = std::filesystem::last_write_time(p, ec);
+        const std::filesystem::directory_entry e(p, ec);
         if (ec) return {};
-        s.size = std::filesystem::file_size(p, ec);
+        s.time = e.last_write_time(ec);
+        if (ec) return {};
+        s.size = e.file_size(ec);
         if (ec) s.size = ~0ull;
         return s;
     }

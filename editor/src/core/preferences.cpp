@@ -36,6 +36,7 @@ QJsonObject PreferenceValues::toJson() const {
     vp["gridSize"] = gridSize;
     vp["gridColor"] = colorStr(gridColor);
     vp["gizmoSize"] = gizmoSize;
+    vp["gizmoSpace"] = gizmoLocalSpace ? QStringLiteral("Local") : QStringLiteral("World");
     vp["selectionColor"] = colorStr(selectionColor);
     vp["backend"] = viewportBackend;
     vp["translateSnap"] = translateSnap;
@@ -53,6 +54,7 @@ QJsonObject PreferenceValues::toJson() const {
     sc["codeEditorArgs"] = codeEditorArgs;
     o["sourceControl"] = sc;
     QJsonObject perf;
+    perf["matchDisplayRefresh"] = matchDisplayRefresh;
     perf["frameLimit"] = frameLimit;
     perf["throttleWhenUnfocused"] = throttleWhenUnfocused;
     perf["unfocusedFps"] = unfocusedFps;
@@ -98,6 +100,7 @@ void PreferenceValues::fromJson(const QJsonObject& o) {
     gridSize = num(vp, "gridSize", d.gridSize);
     gridColor = col(vp, "gridColor", d.gridColor);
     gizmoSize = num(vp, "gizmoSize", d.gizmoSize);
+    gizmoLocalSpace = str(vp, "gizmoSpace", d.gizmoLocalSpace ? QStringLiteral("Local") : QStringLiteral("World")) != QLatin1String("World");
     selectionColor = col(vp, "selectionColor", d.selectionColor);
     viewportBackend = str(vp, "backend", d.viewportBackend);
     translateSnap = num(vp, "translateSnap", d.translateSnap);
@@ -112,6 +115,7 @@ void PreferenceValues::fromJson(const QJsonObject& o) {
     codeEditorPath = str(sc, "codeEditor", d.codeEditorPath);
     codeEditorArgs = str(sc, "codeEditorArgs", d.codeEditorArgs);
     const QJsonObject perf = o["performance"].toObject();
+    matchDisplayRefresh = boolean(perf, "matchDisplayRefresh", d.matchDisplayRefresh);
     frameLimit = int(num(perf, "frameLimit", d.frameLimit));
     throttleWhenUnfocused = boolean(perf, "throttleWhenUnfocused", d.throttleWhenUnfocused);
     unfocusedFps = int(num(perf, "unfocusedFps", d.unfocusedFps));

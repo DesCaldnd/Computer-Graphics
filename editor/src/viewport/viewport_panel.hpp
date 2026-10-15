@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/common.hpp"
+#include "viewport/frame_pacer.hpp"
 #include "viewport/gizmo.hpp"
 #include "viewport/painter_renderer.hpp"
 #include "viewport/viewport_renderer.hpp"
@@ -16,6 +17,7 @@
 #include <optional>
 
 class QLabel;
+class QScreen;
 class QToolButton;
 class QMenu;
 
@@ -26,6 +28,7 @@ class Device;
 namespace ox::editor {
 
 class EditorContext;
+struct PreferenceValues;
 class ViewportPanel;
 class VulkanViewportWindow;
 
@@ -62,7 +65,9 @@ public:
     [[nodiscard]] ViewportCamera& camera() { return m_camera; }
     [[nodiscard]] TransformGizmo& gizmo() { return m_gizmo; }
     void setGizmoMode(GizmoMode mode);
+    // World/Local gizmo axes (persisted as the viewport.gizmoSpace preference; default Local).
     void setGizmoSpace(GizmoSpace space);
+    void toggleGizmoSpace();
     void setSnapEnabled(bool enabled);
     [[nodiscard]] bool snapEnabled() const { return m_gizmo.snap().enabled; }
     [[nodiscard]] ViewMode viewMode() const { return m_viewMode; }
@@ -72,8 +77,26 @@ public:
     void focusSelection();
     // Renders the current view into an image (screenshots, project thumbnails).
     [[nodiscard]] QImage renderToImage(QSize size);
+    // Frame statistics over the last ~0.5 s of rendered frames: fps / frameIntervalMs are wall clock (what the user
+    // sees), frameMs is the CPU time of one frame (snapshot + recording + submit/present), gpuMs the GPU time from
+    // the render graph timestamps (0 = unknown, e.g. the software renderer).
     [[nodiscard]] double fps() const { return m_fps; }
+    [[nodiscard]] double frameIntervalMs() const { return m_fps > 0.0 ? 1000.0 / m_fps : 0.0; }
     [[nodiscard]] double frameMs() const { return m_frameMs; }
+    [[nodiscard]] double gpuMs() const { return m_gpuMs; }
+    // "60 FPS · 16.7 ms · CPU 1.2 ms · GPU 4.0 ms" (status bar, viewport stats overlay).
+    [[nodiscard]] QString frameStatsText() const;
+    // Tick rate the viewport paces to: the unfocused throttle, else the refresh rate of the viewport's screen
+    // (matchDisplayRefresh; 60 when the screen reports none) or the frame limit (0 = unlimited). Pure: tests.
+    [[nodiscard]] static double pacingFps(const PreferenceValues& prefs, bool focused, double displayHz);
+    // Refresh rate of the screen the viewport is on right now (follows moves between monitors); 0 = unknown.
+    [[nodiscard]] double displayRefreshRate() const;
+    // pacingFps() for the current preferences, focus and screen.
+    [[nodiscard]] double currentTargetFps() const;
+    // Viewport timer ticks so far (tests: the tick rate is the frame-rate ceiling).
+    [[nodiscard]] quint64 ticks() const { return m_ticks; }
+    // Redraw on every tick even when nothing changed (OX_EDITOR_VIEWPORT_STATS=1, benchmarks, tests).
+    void setContinuousRedraw(bool on) { m_continuousRedraw = on; }
     [[nodiscard]] QString rendererName() const;
     // The active renderer: the GPU one (render module) when a device exists, else the software renderer.
     [[nodiscard]] IViewportRenderer* renderer() const;
@@ -147,13 +170,21 @@ private:
     float m_manualEv = 15.0f;
     [[nodiscard]] float viewEv100() const;
     ShowFlags m_flags;
-    QTimer m_timer;
+    QTimer m_timer; // single shot, rescheduled by m_pacer every tick
+    QElapsedTimer m_paceClock;
+    FramePacer m_pacer;
+    const QScreen* m_paceScreen = nullptr; // screen the pacer schedule belongs to (reset when the viewport moves)
     QElapsedTimer m_clock;
     QElapsedTimer m_fpsClock;
     int m_fpsFrames = 0;
     double m_fps = 0.0;
     double m_frameMs = 0.0;
+    double m_gpuMs = 0.0;
+    quint64 m_ticks = 0;
+    void noteFrame(double cpuMs);
     bool m_dirty = true;
+    // OX_EDITOR_VIEWPORT_STATS=1: redraw every tick (throughput measurement; the Vulkan window logs the timings).
+    bool m_continuousRedraw = qEnvironmentVariableIntValue("OX_EDITOR_VIEWPORT_STATS") != 0;
     // input state
     QSet<int> m_keys;
     bool m_flying = false;
@@ -169,8 +200,7 @@ private:
     // gizmo drag
     struct DragStart {
         Uuid id;
-        Transform world;
-        glm::mat4 parentWorld{1.0f};
+        gizmo::EditTarget target; // local transform + parent world matrix at drag start
     };
     std::vector<DragStart> m_dragStart;
     bool m_gizmoDragging = false;
