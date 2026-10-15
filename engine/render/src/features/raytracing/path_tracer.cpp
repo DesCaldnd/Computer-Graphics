@@ -72,7 +72,7 @@ public:
 
     void setup(FeatureContext& ctx) override {
         RtViewInputs in;
-        if (!gather(ctx, in)) return;
+        if (!gather(ctx, in, /*hybrid=*/false)) return;
         rhi::Device& dev = ctx.device();
         const RtSettings& st = rts();
         FrameState& fs = frameState(ctx);

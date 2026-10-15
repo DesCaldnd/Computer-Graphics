@@ -821,6 +821,57 @@ TEST_F(RayTracingTest, PathTracerConvergesAndResetsOnCameraChange) {
     EXPECT_GT(meanAbs(after, afterMany), meanAbs(many, more) * 2.0) << "accumulation reset (no smeared history)";
 }
 
+// The path tracer replaces SceneColorHDR: every hybrid effect (and its SVGF stages) skips itself under it — no
+// pass, no target — and comes back when the path tracer is switched off.
+TEST_F(RayTracingTest, HybridEffectsSkipUnderPathTracer) {
+    OX_REQUIRE_RT();
+    const Uuid grey = material({0.8f, 0.8f, 0.8f, 1.0f}, 0.0f, 0.6f);
+    mesh(Primitive::Plane, grey, {0, 0, 0}, glm::vec3(30.0f));
+    mesh(Primitive::Cube, material({0.9f, 0.9f, 0.9f, 1.0f}, 1.0f, 0.1f), {-0.8f, 0.5f, 0.0f}); // mirror-like metal
+    mesh(Primitive::Sphere, grey, {0.2f, 0.4f, 1.0f}, glm::vec3(0.8f));
+    const Uuid glass = material({0.9f, 1.0f, 0.9f, 1.0f}, 0.0f, 0.0f, glm::vec3(0.0f), assets::BlendMode::Refractive);
+    mesh(Primitive::Sphere, glass, {1.2f, 0.6f, 0.0f}, glm::vec3(1.0f));
+    pointLight({-2.0f, 2.0f, 1.0f}, 20000.0f, 8.0f, glm::vec3(1.0f), true); // local light shadows
+    sun({-0.4f, -0.8f, -0.3f}, 20000.0f);
+    Entity env = environment();
+    auto& e = env.get<EnvironmentComponent>();
+    e.fogEnabled = true; // volumetric fog: RT visibility
+    e.fogDensity = 0.02f;
+    const CameraParams cam = camera({0.3f, 2.6f, 4.2f}, {0.2f, 0.3f, 0.0f}, 13.0f, 55.0f);
+    // Hybrid effect passes and the SVGF stages of their signals.
+    const std::vector<std::string_view> hybrid = {"RT.Shadows",     "RtShadowSun",    "RtShadowLocal", "RT.AO", "RtAO",
+                                                  "RT.DDGI",        "RT.Reflections", "RtReflections",
+                                                  "RT.VolumetricVisibility", "RT.Translucency"};
+    CVarScope on("r.RayTracing", "true");
+    rhi::GpuMemoryStats underPathTracer{};
+    {
+        CVarScope pt("r.PathTracing", "true");
+        render(cam, {.frames = 3});
+        EXPECT_TRUE(ranPass("RT.PathTrace")) << "the path tracer runs";
+        for (std::string_view h : hybrid) EXPECT_FALSE(ranPass(h)) << h << " runs under the path tracer";
+        device->waitIdle();
+        underPathTracer = device->memoryStats();
+    }
+    render(cam, {.frames = 3});
+    EXPECT_FALSE(ranPass("RT.PathTrace"));
+    for (std::string_view h : hybrid) EXPECT_TRUE(ranPass(h)) << h << " is missing from the hybrid frame";
+    device->waitIdle();
+    const rhi::GpuMemoryStats hybridMem = device->memoryStats();
+    std::printf("[rt] textures under the path tracer %u (%.1f MB), hybrid %u (%.1f MB)\n", underPathTracer.textureCount,
+                f64(underPathTracer.totalUsageBytes) / 1048576.0, hybridMem.textureCount,
+                f64(hybridMem.totalUsageBytes) / 1048576.0);
+    EXPECT_GT(hybridMem.textureCount, underPathTracer.textureCount)
+        << "the hybrid targets (denoiser histories, local shadow mask) were not allocated under the path tracer";
+    {
+        CVarScope pt("r.PathTracing", "true");
+        render(cam, {.frames = 3});
+        EXPECT_TRUE(ranPass("RT.PathTrace"));
+        for (std::string_view h : hybrid) EXPECT_FALSE(ranPass(h)) << h << " runs after switching back";
+        device->waitIdle();
+        EXPECT_LE(device->memoryStats().textureCount, hybridMem.textureCount);
+    }
+}
+
 TEST_F(RayTracingTest, RestirShadowsManyLights) {
     OX_REQUIRE_RT();
     aoScene(0.003f); // dim sky: the local lights dominate, their shadows are what the test looks at

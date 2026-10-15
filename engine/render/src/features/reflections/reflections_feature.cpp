@@ -524,7 +524,7 @@ private:
         if (!vs.color.previousValid) return {};
 
         const u32 quality = u32(std::clamp(cv::ssrQuality.get(), 0, 3));
-        const u32 ds = cv::ssrHalfRes ? 2u : 1u;
+        const u32 ds = cv::screenSpaceDownsample(cv::ssrHalfRes, cv::ssrHalfResAboveHeight.get(), re);
         const Extent2D te{(re.width + ds - 1) / ds, (re.height + ds - 1) / ds};
         const rhi::RGTexture hits = g.createTexture(textureDesc(kHdr, te, "Reflections.SSRHits"));
         const u32 maxSteps = u32(std::clamp(cv::ssrMaxSteps.get(), 4, 512));

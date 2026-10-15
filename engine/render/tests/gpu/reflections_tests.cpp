@@ -228,6 +228,40 @@ TEST_F(ReflectionsTest, AoMethodsAndResolutionsRun) {
     }
 }
 
+// r.AO.HalfResAboveHeight / r.SSR.HalfResAboveHeight: the screen-space traces switch to half resolution once the
+// render height reaches the threshold (4K by default), so their cost stops growing with the output resolution.
+TEST_F(ReflectionsTest, ScreenSpaceTracesHalveAboveRenderHeight) {
+    CVarScope ssr("r.SSR", "true");
+    CVarScope ssrHalf("r.SSR.HalfRes", "false");
+    CVarScope ao("r.AO.Method", "2");
+    CVarScope aoHalf("r.AO.HalfRes", "false");
+    sphereScene(0.15f);
+    const CameraParams cam = sphereCamera();
+    // Extent of the transient a pass family traced into, from the view's last graph.
+    auto traceExtent = [&](std::string_view resource) {
+        RenderView* v = renderer->view(view);
+        EXPECT_NE(v, nullptr);
+        if (!v) return VkExtent2D{0, 0};
+        rhi::RenderGraph& g = v->graph();
+        for (u32 r = 0; r < g.resourceCount(); ++r) {
+            if (g.resourceName(r) != resource) continue;
+            const rhi::TextureDesc& d = g.textureDesc(rhi::RGTexture{r});
+            return VkExtent2D{d.width, d.height};
+        }
+        ADD_FAILURE() << resource << " not in the graph";
+        return VkExtent2D{0, 0};
+    };
+    for (const char* threshold : {"0", "300", "240"}) {
+        CVarScope a("r.AO.HalfResAboveHeight", threshold);
+        CVarScope b("r.SSR.HalfResAboveHeight", threshold);
+        const Image img = render(cam, {.width = 320, .height = 240, .frames = 4});
+        EXPECT_GT(img.luminance(160, 200), 0.02f) << threshold;
+        const u32 expected = std::string_view(threshold) == "240" ? 120u : 240u; // 240 >= 240: half resolution
+        EXPECT_EQ(traceExtent("AO.Raw").height, expected) << "threshold " << threshold;
+        EXPECT_EQ(traceExtent("Reflections.SSRHits").height, expected) << "threshold " << threshold;
+    }
+}
+
 TEST_F(ReflectionsTest, IrradianceVolumeColourBleeding) {
     const Uuid white = material({0.85f, 0.85f, 0.85f, 1.0f}, 0.0f, 0.9f);
     mesh(Primitive::Plane, white, {0, 0, 0}, glm::vec3(30.0f));

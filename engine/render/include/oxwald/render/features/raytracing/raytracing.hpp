@@ -100,6 +100,11 @@ struct RtSettings {
 // and the device capabilities).
 [[nodiscard]] bool rayTracingActive(const RenderSettings& settings, const rhi::DeviceCaps& caps);
 
+// True when the "PathTracer" feature replaces SceneColorHDR this frame (r.PathTracing, its feature toggle, ray
+// tracing active). The hybrid effects (shadows, AO, GI, reflections, volumetric visibility, refraction, Ray
+// Reconstruction guides) then skip their passes and allocate nothing: their outputs would be overwritten.
+[[nodiscard]] bool pathTracerActive(const RenderSettings& settings, const rhi::DeviceCaps& caps);
+
 // True when "TranslucencyRT" replaces the raster refraction of refractive materials this frame (the raster
 // Translucency feature may skip drawing refractive materials then; transparent ones stay raster).
 [[nodiscard]] bool rayTracedRefractionActive(const RenderSettings& settings, const rhi::DeviceCaps& caps);

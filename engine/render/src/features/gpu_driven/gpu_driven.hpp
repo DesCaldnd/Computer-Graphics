@@ -150,6 +150,9 @@ public:
 
 private:
     void ensurePipelines();
+    // Pipeline set 0: materials without the neural texture decoder (OX_NTC_DISABLED); set 1: with it, created on the
+    // first frame r.NeuralTextures is InferenceOnSample (the decoder's registers slow every material otherwise).
+    static u32 materialSet();
     bool ensureMeshletPipelines();
     bool ensureMeshShaderPipelines();
     DrawSet& drawSet(bool shadow, FrameState& fs);
@@ -168,11 +171,13 @@ private:
     bool m_active = false;
     bool m_pipelinesTried = false;
     rhi::PipelineHandle m_cull, m_hiz, m_meshletCull, m_meshletPrepare;
-    rhi::PipelineHandle m_meshletPrepass[kVariantCount][2];
-    rhi::PipelineHandle m_meshletForward[kVariantCount];
-    rhi::PipelineHandle m_meshPrepass[kVariantCount][2]; // VK_EXT_mesh_shader path
-    rhi::PipelineHandle m_meshForward[kVariantCount];
-    bool m_meshPipelinesTried = false;
+    // [material set][variant]... (materialSet()).
+    rhi::PipelineHandle m_meshletPrepass[2][kVariantCount][2];
+    rhi::PipelineHandle m_meshletForward[2][kVariantCount];
+    bool m_meshletGraphicsCreated[2] = {false, false};
+    rhi::PipelineHandle m_meshPrepass[2][kVariantCount][2]; // VK_EXT_mesh_shader path
+    rhi::PipelineHandle m_meshForward[2][kVariantCount];
+    bool m_meshPipelinesTried[2] = {false, false};
     std::unique_ptr<DrawSet> m_sets[2];
     std::unordered_map<ViewId, std::unique_ptr<ViewState>> m_views;
     std::vector<rhi::BufferHandle> m_readback; // per frame slot: counters (u32 × kCounterSlotsPerKind × kCullKinds)

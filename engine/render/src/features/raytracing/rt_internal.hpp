@@ -6,6 +6,7 @@
 
 #include "../../renderer_impl.hpp"
 
+#include <oxwald/render/features/postprocess/postprocess.hpp>
 #include <oxwald/render/features/raytracing/ddgi.hpp>
 #include <oxwald/render/features/raytracing/denoiser.hpp>
 #include <oxwald/render/features/raytracing/raytracing.hpp>
@@ -76,11 +77,15 @@ protected:
     // r.RayTracing + device support; the effect cvar is checked by the derived class.
     [[nodiscard]] static bool rtOn(const RenderSettings& s, const rhi::DeviceCaps& caps) { return rayTracingActive(s, caps); }
     [[nodiscard]] const RtSettings& rts() const { return m_shared->settings; }
-    // Valid inputs only when the TLAS of this frame exists (else the effect publishes nothing this frame).
-    [[nodiscard]] bool gather(FeatureContext& ctx, RtViewInputs& out) const {
+    // Valid inputs only when the TLAS of this frame exists (else the effect publishes nothing this frame). A hybrid
+    // effect (`hybrid`, every one but the path tracer) also gets nothing while the path tracer replaces the frame:
+    // its output would not be consumed, so it declares no pass and allocates no target. The effects stay enabled
+    // (they keep their exclusive groups, so the raster fallbacks do not run either).
+    [[nodiscard]] bool gather(FeatureContext& ctx, RtViewInputs& out, bool hybrid = true) const {
         rhi::Device& dev = ctx.device();
         m_shared->refresh(dev);
         if (!m_shared->sceneReady(dev)) return false;
+        if (hybrid && pathTracerActive(ctx.settings(), ctx.caps())) return false;
         FrameResources& R = ctx.resources();
         out.depth = R.texture(ox::render::res::kDepth);
         out.normals = R.texture(ox::render::res::kNormals);
@@ -94,6 +99,9 @@ protected:
         out.frame = u32(ctx.view().frameIndex());
         return true;
     }
+    // False while DLSS Ray Reconstruction denoises this view's frame: the effects then publish their noisy signal
+    // (only resolved to the published format / upsampled to render resolution) and RR denoises the lit image.
+    [[nodiscard]] static bool svgfActive(FeatureContext& ctx) { return !rayReconstructionRunsThisFrame(ctx.view()); }
     // Signal extent for a resolution scale in percent (50 = half resolution).
     [[nodiscard]] static Extent2D scaled(Extent2D e, i32 percent) {
         if (percent >= 100) return e;
@@ -143,5 +151,6 @@ std::unique_ptr<IRenderFeature> makeGlobalIlluminationRtFeature(std::shared_ptr<
 std::unique_ptr<IRenderFeature> makeTranslucencyRtFeature(std::shared_ptr<RtShared> shared);
 std::unique_ptr<IRenderFeature> makeVolumetricsRtFeature(std::shared_ptr<RtShared> shared);
 std::unique_ptr<IRenderFeature> makePathTracerFeature(std::shared_ptr<RtShared> shared);
+std::unique_ptr<IRenderFeature> makeRayReconstructionGuidesFeature(std::shared_ptr<RtShared> shared);
 
 } // namespace ox::render::rt

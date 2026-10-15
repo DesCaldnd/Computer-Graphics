@@ -29,6 +29,10 @@ CVar<int> ssrQuality("r.SSR.Quality", 2, "SSR quality: spatial reuse samples 1/4
 CVar<int> ssrMaxSteps("r.SSR.MaxSteps", 64, "Hi-Z ray march iterations", S::Reflections, {24, 40, 64, 96});
 CVar<bool> ssrHalfRes("r.SSR.HalfRes", false, "Trace SSR rays at half resolution", S::Reflections,
                       {true, true, false, false});
+CVar<int> ssrHalfResAboveHeight("r.SSR.HalfResAboveHeight", 1800,
+                                "Trace SSR at half resolution once the render height reaches this (0 = never; r.SSR.HalfRes "
+                                "forces it at any size)",
+                                0, 16384);
 CVar<float> ssrMaxRoughness("r.SSR.MaxRoughness", 0.7f, "Rougher surfaces use probes only", S::Reflections,
                             {0.35f, 0.5f, 0.7f, 0.85f});
 CVar<float> ssrThickness("r.SSR.Thickness", 0.3f, "Assumed depth-buffer thickness for SSR hits (m, grows with distance)",
@@ -49,6 +53,10 @@ CVar<int> aoQuality("r.AO.Quality", 2, "AO quality: GTAO slices × steps 1×4, 2
                     S::GlobalIllumination, {0, 1, 2, 3});
 CVar<bool> aoHalfRes("r.AO.HalfRes", false, "Compute AO at half resolution (bilateral upsample)", S::GlobalIllumination,
                      {true, true, false, false});
+CVar<int> aoHalfResAboveHeight("r.AO.HalfResAboveHeight", 1800,
+                               "Compute AO at half resolution once the render height reaches this (0 = never; r.AO.HalfRes "
+                               "forces it at any size)",
+                               0, 16384);
 CVar<float> aoRadius("r.AO.Radius", 0.75f, "AO world-space radius (m)", 0.05f, 10.0f);
 CVar<float> aoIntensity("r.AO.Intensity", 1.0f, "AO strength (visibility exponent)", 0.0f, 4.0f);
 CVar<bool> aoTemporal("r.AO.Temporal", true, "Temporal accumulation of AO");
@@ -60,12 +68,13 @@ std::vector<std::string> reflectionNames() {
     return {"r.ReflectionProbes", "r.ReflectionProbes.Resolution", "r.ReflectionProbes.Realtime",
             "r.ReflectionProbes.RealtimeFacesPerFrame", "r.ReflectionProbes.MaxPerPixel",
             "r.ReflectionProbes.CapturesPerFrame", "r.SSR", "r.SSR.Quality", "r.SSR.MaxSteps", "r.SSR.HalfRes",
-            "r.SSR.MaxRoughness", "r.SSR.Thickness", "r.SSR.Temporal", "r.PlanarReflections",
+            "r.SSR.HalfResAboveHeight", "r.SSR.MaxRoughness", "r.SSR.Thickness", "r.SSR.Temporal", "r.PlanarReflections",
             "r.PlanarReflections.ResolutionScale", "r.PlanarReflections.MaxReflectors",
             "r.Reflections.CaptureMaxLocalLights"};
 }
 std::vector<std::string> aoNames() {
-    return {"r.AO.Method", "r.AO.Quality", "r.AO.HalfRes", "r.AO.Radius", "r.AO.Intensity", "r.AO.Temporal"};
+    return {"r.AO.Method",    "r.AO.Quality",   "r.AO.HalfRes", "r.AO.HalfResAboveHeight",
+            "r.AO.Radius",    "r.AO.Intensity", "r.AO.Temporal"};
 }
 std::vector<std::string> giNames() { return {"r.GI.IrradianceVolumes", "r.GI.IrradianceVolumes.ProbesPerFrame"}; }
 

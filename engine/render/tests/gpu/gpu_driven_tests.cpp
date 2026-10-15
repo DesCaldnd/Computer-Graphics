@@ -340,7 +340,8 @@ TEST_F(GpuDrivenTest, ToggleAtRuntimeKeepsRendering) {
 
 namespace ox::render::test {
 
-// Stress scene for docs/dev/perf.md (buildStressScene), 1080p.
+// Stress scene for docs/dev/perf.md (buildStressScene), 1080p (OX_RENDER_PERF_RES=<w>x<h>: another size, e.g. 3840x2160
+// for the per-pixel cost of the material shaders on the meshlet path).
 // OX_RENDER_PERF=<instances> overrides the default 10k (the numbers in perf.md use 10000 and 50000).
 TEST_F(GpuDrivenTest, StressSceneTimings) {
     const u32 count = stressInstanceCount();
@@ -379,7 +380,25 @@ TEST_F(GpuDrivenTest, StressSceneTimings) {
                               {"GPU culling (frustum + LOD)", "true", "false", "false"},
                               {"GPU culling + two-phase HiZ", "true", "true", "false"},
                               {"GPU culling + HiZ + meshlets", "true", "true", "true"}};
-    std::printf("\nstress scene: %u instances, 1920x1080\n", count);
+    u32 W = 1920, H = 1080;
+    if (const char* res = std::getenv("OX_RENDER_PERF_RES")) {
+        unsigned w = 0, h = 0;
+        if (std::sscanf(res, "%ux%u", &w, &h) == 2 && w > 0 && h > 0) W = w, H = h;
+    }
+    // OX_RENDER_PERF_CVARS=name=value[,name=value...]: extra cvars for the whole measurement (A/B comparisons).
+    std::vector<std::unique_ptr<CVarScope>> extraCVars;
+    if (const char* list = std::getenv("OX_RENDER_PERF_CVARS")) {
+        std::string all = list;
+        for (usize start = 0; start < all.size();) {
+            const usize end = std::min(all.find(',', start), all.size());
+            const std::string item = all.substr(start, end - start);
+            if (const usize eq = item.find('='); eq != std::string::npos) {
+                extraCVars.push_back(std::make_unique<CVarScope>(item.substr(0, eq), item.substr(eq + 1)));
+            }
+            start = end + 1;
+        }
+    }
+    std::printf("\nstress scene: %u instances, %ux%u\n", count, W, H);
     std::printf("| config | GPU frame ms | CPU renderer ms | draw calls | indirect cmds | visible inst. | key passes |\n");
     std::printf("|---|---|---|---|---|---|---|\n");
     Image first;
@@ -388,7 +407,7 @@ TEST_F(GpuDrivenTest, StressSceneTimings) {
         CVarScope b("r.GpuDriven.Occlusion", c.occlusion);
         CVarScope d("r.GpuDriven.Meshlets", c.meshlets);
         resetView();
-        render(cam, {.width = 1920, .height = 1080, .frames = 4}); // warm-up: pipelines, draw sets, visibility
+        render(cam, {.width = W, .height = H, .frames = 4}); // warm-up: pipelines, draw sets, visibility
         f64 gpu = 0, cpu = 0;
         const u32 frames = 8;
         std::map<std::string, f64> passMs;
@@ -419,8 +438,8 @@ TEST_F(GpuDrivenTest, StressSceneTimings) {
         std::printf("| %s | %.2f | %.2f | %u | %u | %u | %s |\n", c.name, gpu / frames, cpu / frames, s.drawCalls,
                     s.indirectCommands, s.visibleInstances, passes.c_str());
         Image img;
-        img.width = 1920;
-        img.height = 1080;
+        img.width = W;
+        img.height = H;
         img.rgba = device->readTexture(target);
         for (usize i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
         if (first.rgba.empty()) first = img;

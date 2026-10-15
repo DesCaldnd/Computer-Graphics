@@ -25,6 +25,7 @@ extern CVar<bool> ssr;
 extern CVar<int> ssrQuality;
 extern CVar<int> ssrMaxSteps;
 extern CVar<bool> ssrHalfRes;
+extern CVar<int> ssrHalfResAboveHeight;
 extern CVar<float> ssrMaxRoughness;
 extern CVar<float> ssrThickness;
 extern CVar<bool> ssrTemporal;
@@ -36,11 +37,18 @@ extern CVar<int> captureMaxLocalLights;
 extern CVar<int> aoMethod; // 0 off, 1 SSAO, 2 GTAO
 extern CVar<int> aoQuality;
 extern CVar<bool> aoHalfRes;
+extern CVar<int> aoHalfResAboveHeight;
 extern CVar<float> aoRadius;
 extern CVar<float> aoIntensity;
 extern CVar<bool> aoTemporal;
 extern CVar<bool> giVolumes;
 extern CVar<int> giProbesPerFrame;
+// Half-resolution screen-space trace: forced by the cvar, or automatically once the render height reaches
+// `aboveHeight` (> 0): at 4K a half-resolution trace still samples at 1080p density, so the cost follows the
+// output resolution only up to that point (docs/dev/perf.md, station 4 at 4K).
+[[nodiscard]] inline u32 screenSpaceDownsample(bool halfRes, i32 aboveHeight, Extent2D render) {
+    return halfRes || (aboveHeight > 0 && render.height >= u32(aboveHeight)) ? 2u : 1u;
+}
 std::vector<std::string> reflectionNames();
 std::vector<std::string> aoNames();
 std::vector<std::string> giNames();

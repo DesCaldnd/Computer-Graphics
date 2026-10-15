@@ -1,6 +1,7 @@
 // CVars of the ray tracing area (Scalability::RayTracing, Low / Medium / High / Ultra) and availability reporting.
 #include <oxwald/core/cvar.hpp>
 #include <oxwald/render/features/raytracing/raytracing.hpp>
+#include <oxwald/render/render_feature.hpp>
 #include <oxwald/render/render_settings.hpp>
 
 #include <algorithm>
@@ -130,6 +131,10 @@ RtSettings RtSettings::fromCVars() {
 
 bool rayTracingActive(const RenderSettings& settings, const rhi::DeviceCaps& caps) {
     return settings.rayTracing && caps.rayTracingSupported();
+}
+
+bool pathTracerActive(const RenderSettings& settings, const rhi::DeviceCaps& caps) {
+    return rayTracingActive(settings, caps) && cvPathTracing.get() && FeatureRegistry::toggle("PathTracer").get();
 }
 
 RtStatus rayTracingStatus(const rhi::DeviceCaps& caps) {

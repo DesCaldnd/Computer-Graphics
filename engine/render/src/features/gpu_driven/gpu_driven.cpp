@@ -6,6 +6,7 @@
 #include <oxwald/core/log.hpp>
 #include <oxwald/core/profile.hpp>
 #include <oxwald/core/scalability.hpp>
+#include <oxwald/render/neural/neural.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -179,16 +180,18 @@ GpuDriven::~GpuDriven() {
     for (auto p : {m_cull, m_hiz, m_meshletCull, m_meshletPrepare}) {
         if (p) d.destroy(p);
     }
-    for (auto& row : m_meshletPrepass)
-        for (auto p : row)
+    for (u32 set = 0; set < 2; ++set) {
+        for (auto& row : m_meshletPrepass[set])
+            for (auto p : row)
+                if (p) d.destroy(p);
+        for (auto p : m_meshletForward[set])
             if (p) d.destroy(p);
-    for (auto p : m_meshletForward)
-        if (p) d.destroy(p);
-    for (auto& row : m_meshPrepass)
-        for (auto p : row)
+        for (auto& row : m_meshPrepass[set])
+            for (auto p : row)
+                if (p) d.destroy(p);
+        for (auto p : m_meshForward[set])
             if (p) d.destroy(p);
-    for (auto p : m_meshForward)
-        if (p) d.destroy(p);
+    }
 }
 
 void GpuDriven::ensurePipelines() {
@@ -753,33 +756,46 @@ void GpuDriven::recordJobs(rhi::CommandList& cmd, PassJobs& pass, VkDeviceAddres
     cmd.memoryBarrier(rhi::Access::StorageWriteCompute, rhi::Access::General);
 }
 
+u32 GpuDriven::materialSet() {
+    return neural::neuralTextureMode() == neural::NeuralTextureMode::InferenceOnSample ? 1u : 0u;
+}
+
 bool GpuDriven::ensureMeshletPipelines() {
     rhi::Device& dev = *m_device;
+    const u32 set = materialSet();
+    const bool neuralSet = set == 1;
     auto ready = [&] {
         bool all = dev.isPipelineReady(m_meshletCull);
         for (u32 v = 0; v < kVariantCount; ++v) {
-            all = all && dev.isPipelineReady(m_meshletForward[v]) && dev.isPipelineReady(m_meshletPrepass[v][0]) &&
-                  dev.isPipelineReady(m_meshletPrepass[v][1]);
+            all = all && dev.isPipelineReady(m_meshletForward[set][v]) && dev.isPipelineReady(m_meshletPrepass[set][v][0]) &&
+                  dev.isPipelineReady(m_meshletPrepass[set][v][1]);
         }
         return all;
     };
-    if (m_meshletCull) return ready();
-    // 13 pipelines: compiled on the job system when available; the instanced path is the placeholder until then.
+    if (m_meshletGraphicsCreated[set]) return ready();
+    m_meshletGraphicsCreated[set] = true;
+    // 13 pipelines (12 for the neural set): compiled on the job system when available; the instanced path is the
+    // placeholder until then.
     auto graphics = [&](const rhi::GraphicsPipelineDesc& d) {
         return m_jobs ? dev.createGraphicsPipelineAsync(d, *m_jobs) : dev.createGraphicsPipeline(d);
     };
-    rhi::ComputePipelineDesc cd;
-    cd.name = "gpuDriven.meshletCull";
-    cd.shader = rhi::ShaderStageDesc::file("render/gpu_driven/meshlet_cull.comp");
-    m_meshletCull = m_jobs ? dev.createComputePipelineAsync(cd, *m_jobs) : dev.createComputePipeline(cd);
+    if (!m_meshletCull) {
+        rhi::ComputePipelineDesc cd;
+        cd.name = "gpuDriven.meshletCull";
+        cd.shader = rhi::ShaderStageDesc::file("render/gpu_driven/meshlet_cull.comp");
+        m_meshletCull = m_jobs ? dev.createComputePipelineAsync(cd, *m_jobs) : dev.createComputePipeline(cd);
+    }
+    const std::vector<rhi::ShaderDefine> materialDefs = neural::materialShaderDefines(dev.caps(), neuralSet);
+    const char* suffix = neuralSet ? ".ntc" : "";
     for (u32 variant = 0; variant < kVariantCount; ++variant) {
         for (u32 entity = 0; entity < 2; ++entity) {
             rhi::GraphicsPipelineDesc d;
-            d.name = std::format("gpuDriven.meshletPrepass.v{}{}", variant, entity ? ".id" : "");
+            d.name = std::format("gpuDriven.meshletPrepass{}.v{}{}", suffix, variant, entity ? ".id" : "");
             d.vertex = rhi::ShaderStageDesc::file("render/gpu_driven/meshlet.vert");
             std::vector<rhi::ShaderDefine> defs;
             if (variant & kVariantAlphaTest) defs.push_back({"OX_ALPHA_TEST"});
             if (entity) defs.push_back({"OX_ENTITY_ID"});
+            defs.insert(defs.end(), materialDefs.begin(), materialDefs.end());
             d.fragment = rhi::ShaderStageDesc::file("render/passes/depth_prepass.frag", defs);
             d.colorFormats = {formats::kNormals, formats::kVelocity};
             if (entity) {
@@ -794,37 +810,41 @@ bool GpuDriven::ensureMeshletPipelines() {
             d.depth = {true, true, VK_COMPARE_OP_GREATER_OR_EQUAL};
             d.raster.cullMode = (variant & kVariantDoubleSided) ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
             d.raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-            m_meshletPrepass[variant][entity] = graphics(d);
+            m_meshletPrepass[set][variant][entity] = graphics(d);
         }
         rhi::GraphicsPipelineDesc f;
-        f.name = std::format("gpuDriven.meshletForward.v{}", variant);
+        f.name = std::format("gpuDriven.meshletForward{}.v{}", suffix, variant);
         f.vertex = rhi::ShaderStageDesc::file("render/gpu_driven/meshlet.vert");
-        f.fragment = rhi::ShaderStageDesc::file("render/passes/forward.frag");
+        f.fragment = rhi::ShaderStageDesc::file("render/passes/forward.frag", materialDefs);
         f.colorFormats = {formats::kSceneColor};
         f.depthFormat = formats::kDepth;
         f.depth = {true, false, VK_COMPARE_OP_EQUAL};
         f.raster.cullMode = (variant & kVariantDoubleSided) ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
         f.raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        m_meshletForward[variant] = graphics(f);
+        m_meshletForward[set][variant] = graphics(f);
     }
     return ready();
 }
 
 bool GpuDriven::ensureMeshShaderPipelines() {
     rhi::Device& dev = *m_device;
-    if (!m_meshPipelinesTried) {
-        m_meshPipelinesTried = true;
+    const u32 set = materialSet();
+    if (!m_meshPipelinesTried[set]) {
+        m_meshPipelinesTried[set] = true;
+        const std::vector<rhi::ShaderDefine> materialDefs = neural::materialShaderDefines(dev.caps(), set == 1);
         for (u32 variant = 0; variant < kVariantCount; ++variant) {
             for (u32 entity = 0; entity < 3; ++entity) { // 0, 1: prepass (+ entity id), 2: forward
                 rhi::GraphicsPipelineDesc d;
-                d.name = std::format("gpuDriven.mesh{}.v{}", entity == 2 ? "Forward" : entity ? "Prepass.id" : "Prepass", variant);
+                d.name = std::format("gpuDriven.mesh{}{}.v{}", entity == 2 ? "Forward" : entity ? "Prepass.id" : "Prepass",
+                                     set == 1 ? ".ntc" : "", variant);
                 d.task = rhi::ShaderStageDesc::file("render/gpu_driven/meshlet.task");
                 d.mesh = rhi::ShaderStageDesc::file("render/gpu_driven/meshlet.mesh");
                 std::vector<rhi::ShaderDefine> defs;
                 if (entity < 2 && (variant & kVariantAlphaTest)) defs.push_back({"OX_ALPHA_TEST"});
                 if (entity == 1) defs.push_back({"OX_ENTITY_ID"});
+                defs.insert(defs.end(), materialDefs.begin(), materialDefs.end());
                 if (entity == 2) {
-                    d.fragment = rhi::ShaderStageDesc::file("render/passes/forward.frag");
+                    d.fragment = rhi::ShaderStageDesc::file("render/passes/forward.frag", materialDefs);
                     d.colorFormats = {formats::kSceneColor};
                     d.depth = {true, false, VK_COMPARE_OP_EQUAL};
                 } else {
@@ -844,15 +864,15 @@ bool GpuDriven::ensureMeshShaderPipelines() {
                 d.raster.cullMode = (variant & kVariantDoubleSided) ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
                 d.raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
                 const rhi::PipelineHandle p = m_jobs ? dev.createGraphicsPipelineAsync(d, *m_jobs) : dev.createGraphicsPipeline(d);
-                if (entity == 2) m_meshForward[variant] = p;
-                else m_meshPrepass[variant][entity] = p;
+                if (entity == 2) m_meshForward[set][variant] = p;
+                else m_meshPrepass[set][variant][entity] = p;
             }
         }
     }
     bool all = true;
     for (u32 v = 0; v < kVariantCount; ++v) {
-        all = all && dev.isPipelineReady(m_meshForward[v]) && dev.isPipelineReady(m_meshPrepass[v][0]) &&
-              dev.isPipelineReady(m_meshPrepass[v][1]);
+        all = all && dev.isPipelineReady(m_meshForward[set][v]) && dev.isPipelineReady(m_meshPrepass[set][v][0]) &&
+              dev.isPipelineReady(m_meshPrepass[set][v][1]);
     }
     return all;
 }
@@ -864,6 +884,7 @@ void GpuDriven::drawMeshlets(FrameState& fs, rhi::CommandList& cmd, bool late, b
     if (it == m_views.end()) return;
     const ViewState::MeshletDraw& md = it->second->meshlets[late ? 1 : 0];
     if (!md.valid) return;
+    const u32 set = materialSet(); // the set whose readiness setupView() checked this frame
     if (md.meshShaders) {
         struct MeshPush {
             u8 draw[48]; // DrawPush (view, scene, drawIds, inputs[6])
@@ -881,7 +902,7 @@ void GpuDriven::drawMeshlets(FrameState& fs, rhi::CommandList& cmd, bool late, b
         mp.hizSize = md.hizSize;
         mp.late = late ? 1u : 0u;
         for (u32 v = 0; v < kVariantCount; ++v) {
-            const rhi::PipelineHandle p = forward ? m_meshForward[v] : m_meshPrepass[v][entity ? 1 : 0];
+            const rhi::PipelineHandle p = forward ? m_meshForward[set][v] : m_meshPrepass[set][v][entity ? 1 : 0];
             if (!p) continue;
             mp.variant = v;
             cmd.bindPipeline(p);
@@ -900,7 +921,7 @@ void GpuDriven::drawMeshlets(FrameState& fs, rhi::CommandList& cmd, bool late, b
     cmd.bindIndexBuffer(md.indices.buffer, md.indices.offset);
     constexpr u32 stride = sizeof(VkDrawIndexedIndirectCommand);
     for (u32 v = 0; v < kVariantCount; ++v) {
-        const rhi::PipelineHandle p = forward ? m_meshletForward[v] : m_meshletPrepass[v][entity ? 1 : 0];
+        const rhi::PipelineHandle p = forward ? m_meshletForward[set][v] : m_meshletPrepass[set][v][entity ? 1 : 0];
         if (!p) continue;
         cmd.bindPipeline(p);
         cmd.pushConstants(pcData, pushSize);

@@ -39,7 +39,7 @@ public:
         FrameResources& R = ctx.resources();
         rhi::RenderGraph& g = ctx.graph();
         const Extent2D re = ctx.renderExtent();
-        const u32 ds = cv::aoHalfRes ? 2u : 1u;
+        const u32 ds = cv::screenSpaceDownsample(cv::aoHalfRes, cv::aoHalfResAboveHeight.get(), re);
         const Extent2D ae{(re.width + ds - 1) / ds, (re.height + ds - 1) / ds};
         const rhi::RGTexture depth = R.texture(render::res::kDepth), normals = R.texture(render::res::kNormals);
         const rhi::RGTexture velocity = R.texture(render::res::kVelocity);
