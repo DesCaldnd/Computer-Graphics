@@ -20,61 +20,22 @@ GizmoView GizmoView::from(const ViewportCamera& cam, glm::vec2 sizePx) {
     return v;
 }
 
-Ray GizmoView::ray(QPointF pixel) const {
-    const glm::vec2 ndc{float(pixel.x()) / size.x * 2.0f - 1.0f, 1.0f - float(pixel.y()) / size.y * 2.0f};
-    const glm::mat4 inv = glm::inverse(viewProj);
-    // reversed Z: depth 1 = near, ~0 = far
-    glm::vec4 n = inv * glm::vec4(ndc, 1.0f, 1.0f);
-    glm::vec4 f = inv * glm::vec4(ndc, 0.01f, 1.0f);
-    n /= n.w;
-    f /= f.w;
-    Ray r;
-    r.origin = glm::vec3(n);
-    r.direction = glm::normalize(glm::vec3(f) - glm::vec3(n));
-    return r;
-}
+Ray GizmoView::ray(QPointF pixel) const { return projection().ray(glm::vec2(float(pixel.x()), float(pixel.y()))); }
 
 bool GizmoView::project(glm::vec3 p, QPointF& out) const {
-    const glm::vec4 c = viewProj * glm::vec4(p, 1.0f);
-    if (c.w <= 1e-4f) return false;
-    const glm::vec3 ndc = glm::vec3(c) / c.w;
-    out = QPointF((ndc.x * 0.5 + 0.5) * size.x, (1.0 - (ndc.y * 0.5 + 0.5)) * size.y);
+    glm::vec2 q;
+    if (!projection().project(p, q)) return false;
+    out = QPointF(q.x, q.y);
     return true;
 }
 
 namespace {
 
-float distToSegment(QPointF p, QPointF a, QPointF b) {
-    const QPointF ab = b - a;
-    const double len2 = ab.x() * ab.x() + ab.y() * ab.y();
-    double t = len2 > 1e-9 ? ((p - a).x() * ab.x() + (p - a).y() * ab.y()) / len2 : 0.0;
-    t = std::clamp(t, 0.0, 1.0);
-    const QPointF q = a + ab * t;
-    return float(std::hypot(p.x() - q.x(), p.y() - q.y()));
-}
+using gizmo::closestOnLine;
+using gizmo::rayPlane;
+using gizmo::snapTo;
 
-// Parameter t along the line (o + t*d) closest to the ray.
-bool closestOnLine(const Ray& ray, glm::vec3 o, glm::vec3 d, float& t) {
-    const glm::vec3 w0 = o - ray.origin;
-    const float b = glm::dot(ray.direction, d);
-    const float denom = 1.0f - b * b;
-    if (std::abs(denom) < 1e-5f) return false;
-    const float dd = glm::dot(ray.direction, w0);
-    const float e = glm::dot(d, w0);
-    t = (b * dd - e) / denom;
-    return true;
-}
-
-bool rayPlane(const Ray& ray, glm::vec3 p0, glm::vec3 n, glm::vec3& out) {
-    const float denom = glm::dot(n, ray.direction);
-    if (std::abs(denom) < 1e-5f) return false;
-    const float t = glm::dot(p0 - ray.origin, n) / denom;
-    if (t < 0.0f) return false;
-    out = ray.origin + ray.direction * t;
-    return true;
-}
-
-float snapTo(float v, float step) { return step > 0.0f ? std::round(v / step) * step : v; }
+glm::vec2 toVec(QPointF p) { return {float(p.x()), float(p.y())}; }
 
 QColor axisColor(int i, bool hot, bool dim) {
     QColor c = Theme::axisColor(i);
@@ -85,16 +46,19 @@ QColor axisColor(int i, bool hot, bool dim) {
 
 } // namespace
 
-void TransformGizmo::setTarget(glm::vec3 pivot, glm::quat orientation) {
+void TransformGizmo::setTarget(glm::vec3 pivot, glm::quat targetOrientation) {
+    if (active()) return; // the drag owns pivot and frame
     m_pivot = pivot;
-    m_orient = m_space == GizmoSpace::Local ? glm::normalize(orientation) : glm::quat(1, 0, 0, 0);
+    m_localOrient = glm::normalize(targetOrientation);
 }
 
-glm::vec3 TransformGizmo::axisDir(int i) const {
-    glm::vec3 e(0.0f);
-    e[i] = 1.0f;
-    return glm::normalize(m_orient * e);
+glm::quat TransformGizmo::orientation() const {
+    return active() ? m_dragOrient : gizmo::effectiveOrientation(m_mode, m_space, m_localOrient);
 }
+
+glm::vec3 TransformGizmo::axisDir(int i) const { return gizmo::axisOf(orientation(), i); }
+
+gizmo::Frame TransformGizmo::frame(const GizmoView& view) const { return {m_pivot, orientation(), worldLength(view)}; }
 
 float TransformGizmo::worldLength(const GizmoView& view) const {
     if (view.camera.orthographic) return view.camera.orthoHeight * 0.14f * m_sizeScale;
@@ -105,72 +69,7 @@ float TransformGizmo::worldLength(const GizmoView& view) const {
 
 GizmoAxis TransformGizmo::hitTest(const GizmoView& view, QPointF mouse) const {
     if (!visible()) return AxisNone;
-    const float len = worldLength(view);
-    QPointF c;
-    if (!view.project(m_pivot, c)) return AxisNone;
-    if (m_mode == GizmoMode::Translate) {
-        // plane handles
-        const GizmoAxis planes[3] = {AxisYZ, AxisXZ, AxisXY};
-        for (int i = 0; i < 3; ++i) {
-            const glm::vec3 a = axisDir((i + 1) % 3), b = axisDir((i + 2) % 3);
-            QPolygonF quad;
-            for (glm::vec2 k : {glm::vec2(0.22f, 0.22f), glm::vec2(0.42f, 0.22f), glm::vec2(0.42f, 0.42f), glm::vec2(0.22f, 0.42f)}) {
-                QPointF q;
-                if (!view.project(m_pivot + (a * k.x + b * k.y) * len, q)) return AxisNone;
-                quad << q;
-            }
-            if (quad.containsPoint(mouse, Qt::OddEvenFill)) return planes[i];
-        }
-        if (std::hypot(mouse.x() - c.x(), mouse.y() - c.y()) < 7.0) return AxisAll;
-    }
-    if (m_mode == GizmoMode::Translate || m_mode == GizmoMode::Scale) {
-        if (m_mode == GizmoMode::Scale && std::hypot(mouse.x() - c.x(), mouse.y() - c.y()) < 9.0) return AxisAll;
-        float best = 9.0f;
-        GizmoAxis hit = AxisNone;
-        for (int i = 0; i < 3; ++i) {
-            QPointF tip;
-            if (!view.project(m_pivot + axisDir(i) * len * 1.12f, tip)) continue;
-            const float d = distToSegment(mouse, c, tip);
-            if (d < best) {
-                best = d;
-                hit = GizmoAxis(1 << i);
-            }
-        }
-        return hit;
-    }
-    if (m_mode == GizmoMode::Rotate) {
-        float best = 8.0f;
-        GizmoAxis hit = AxisNone;
-        for (int i = 0; i < 3; ++i) {
-            const glm::vec3 u = axisDir((i + 1) % 3), v = axisDir((i + 2) % 3);
-            QPointF prev;
-            bool havePrev = false;
-            for (int s = 0; s <= 64; ++s) {
-                const float a = float(s) / 64.0f * kTwoPi;
-                QPointF q;
-                const bool ok = view.project(m_pivot + (u * std::cos(a) + v * std::sin(a)) * len, q);
-                if (ok && havePrev) {
-                    const float d = distToSegment(mouse, prev, q);
-                    if (d < best) {
-                        best = d;
-                        hit = GizmoAxis(1 << i);
-                    }
-                }
-                prev = q;
-                havePrev = ok;
-            }
-        }
-        if (hit == AxisNone) {
-            // outer view ring
-            const double r = std::hypot(mouse.x() - c.x(), mouse.y() - c.y());
-            QPointF edge;
-            view.project(m_pivot + view.camera.right() * len * 1.2f, edge);
-            const double ringR = std::hypot(edge.x() - c.x(), edge.y() - c.y());
-            if (std::abs(r - ringR) < 7.0) hit = AxisAll;
-        }
-        return hit;
-    }
-    return AxisNone;
+    return gizmo::pick(m_mode, view.projection(), frame(view), toVec(mouse), view.camera.right());
 }
 
 glm::vec3 TransformGizmo::dragPoint(const GizmoView& view, QPointF mouse, bool& ok) const {
@@ -182,6 +81,7 @@ glm::vec3 TransformGizmo::dragPoint(const GizmoView& view, QPointF mouse, bool& 
 
 bool TransformGizmo::begin(const GizmoView& view, QPointF mouse, GizmoAxis axis) {
     if (axis == AxisNone) return false;
+    m_dragOrient = orientation(); // before m_activeAxis: orientation() reads the drag frame while active
     m_activeAxis = axis;
     m_startPivot = m_pivot;
     m_startMouse = mouse;
@@ -189,16 +89,14 @@ bool TransformGizmo::begin(const GizmoView& view, QPointF mouse, GizmoAxis axis)
     m_label.clear();
     const glm::vec3 toCam = view.camera.orthographic ? -view.camera.forward() : glm::normalize(view.camera.position - m_pivot);
     if (m_mode == GizmoMode::Translate || m_mode == GizmoMode::Scale) {
-        if (axis == AxisX || axis == AxisY || axis == AxisZ) {
-            const int i = axis == AxisX ? 0 : axis == AxisY ? 1 : 2;
+        if (const int i = gizmo::axisIndex(axis); i >= 0) {
             float t = 0.0f;
             closestOnLine(view.ray(mouse), m_pivot, axisDir(i), t);
             m_startAxisT = t;
         } else if (axis == AxisAll) {
             m_planeNormal = toCam;
         } else {
-            const int n = axis == AxisYZ ? 0 : axis == AxisXZ ? 1 : 2;
-            m_planeNormal = axisDir(n);
+            m_planeNormal = axisDir(gizmo::planeNormalIndex(axis));
         }
     } else if (m_mode == GizmoMode::Rotate) {
         m_planeNormal = axis == AxisAll ? toCam : axisDir(axis == AxisX ? 0 : axis == AxisY ? 1 : 2);
@@ -214,39 +112,32 @@ TransformGizmo::Delta TransformGizmo::update(const GizmoView& view, QPointF mous
     const bool snap = m_snap.enabled != snapOverride;
     const Ray r = view.ray(mouse);
     const GizmoAxis a = m_activeAxis;
-    const bool single = a == AxisX || a == AxisY || a == AxisZ;
-    const int ai = a == AxisX ? 0 : a == AxisY ? 1 : 2;
+    const int ai = gizmo::axisIndex(a);
+    const bool single = ai >= 0;
     if (m_mode == GizmoMode::Translate) {
         glm::vec3 delta(0.0f);
         if (single) {
             float t = m_startAxisT;
-            if (closestOnLine(r, m_startPivot, axisDir(ai), t)) {
-                float dt = t - m_startAxisT;
-                if (snap) dt = snapTo(dt, m_snap.translate);
-                delta = axisDir(ai) * dt;
-            }
+            if (closestOnLine(r, m_startPivot, axisDir(ai), t)) delta = gizmo::axisTranslation(axisDir(ai), m_startAxisT, t, snap ? m_snap.translate : 0.0f);
         } else {
             bool ok = false;
             const glm::vec3 p = dragPoint(view, mouse, ok);
-            if (ok) delta = p - m_startPoint;
-            if (snap) {
-                // snap in the gizmo's frame
-                glm::vec3 local = glm::inverse(m_orient) * delta;
-                for (int i = 0; i < 3; ++i) local[i] = snapTo(local[i], m_snap.translate);
-                delta = m_orient * local;
-            }
+            // snapped per axis in the gizmo frame (local axes in Local space)
+            if (ok) delta = gizmo::planeTranslation(m_startPoint, p, m_dragOrient, snap ? m_snap.translate : 0.0f);
         }
         d.translation = delta;
         m_pivot = m_startPivot + delta;
-        m_label = QStringLiteral("Δ %1, %2, %3").arg(delta.x, 0, 'f', 2).arg(delta.y, 0, 'f', 2).arg(delta.z, 0, 'f', 2);
+        // the label shows the delta along the gizmo axes (local axes in Local space)
+        const glm::vec3 shown = glm::inverse(m_dragOrient) * delta;
+        m_label = QStringLiteral("Δ %1, %2, %3").arg(shown.x, 0, 'f', 2).arg(shown.y, 0, 'f', 2).arg(shown.z, 0, 'f', 2);
+        if (m_space == GizmoSpace::Local) m_label += QStringLiteral(" (local)");
     } else if (m_mode == GizmoMode::Rotate) {
         float angle = 0.0f;
         bool ok = false;
         const glm::vec3 p = dragPoint(view, mouse, ok);
         const float facing = std::abs(glm::dot(r.direction, m_planeNormal));
         if (ok && facing > 0.12f) {
-            const glm::vec3 v0 = m_startPoint - m_startPivot, v1 = p - m_startPivot;
-            angle = std::atan2(glm::dot(m_planeNormal, glm::cross(v0, v1)), glm::dot(v0, v1));
+            angle = gizmo::signedAngle(m_startPoint - m_startPivot, p - m_startPivot, m_planeNormal);
         } else {
             angle = float(mouse.x() - m_startMouse.x()) * 0.01f;
         }
@@ -400,9 +291,15 @@ void TransformGizmo::emitLines(DebugDraw& dd, const GizmoView& view) const {
             dd.circle(m_pivot, axisDir(i), len, col, 0.0f, false, 64);
         } else if (m_mode == GizmoMode::Translate) {
             dd.arrow(m_pivot, m_pivot + axisDir(i) * len, len * 0.2f, col, 0.0f, false);
+            // plane handle outline (rotated with the gizmo frame in Local space)
+            const GizmoAxis planes[3] = {AxisYZ, AxisXZ, AxisXY};
+            const QColor pq = axisColor(i, (active() ? m_activeAxis : m_hover) == planes[i], false);
+            const glm::vec4 pc(pq.redF(), pq.greenF(), pq.blueF(), pq.alphaF());
+            const auto quad = gizmo::planeHandle(frame(view), i);
+            for (usize k = 0; k < 4; ++k) dd.line(quad[k], quad[(k + 1) % 4], pc, 0.0f, false);
         } else {
             dd.line(m_pivot, m_pivot + axisDir(i) * len, col, 0.0f, false);
-            dd.box(m_pivot + axisDir(i) * len, glm::vec3(len * 0.05f), m_orient, col, 0.0f, false);
+            dd.box(m_pivot + axisDir(i) * len, glm::vec3(len * 0.05f), orientation(), col, 0.0f, false);
         }
     }
 }

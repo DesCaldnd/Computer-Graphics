@@ -1,5 +1,6 @@
 #pragma once
 
+#include "viewport/gizmo_math.hpp"
 #include "viewport/viewport_renderer.hpp"
 
 #include <oxwald/core/debug_draw.hpp>
@@ -12,20 +13,6 @@ class QPainter;
 
 namespace ox::editor {
 
-enum class GizmoMode { Select, Translate, Rotate, Scale };
-enum class GizmoSpace { World, Local };
-
-enum GizmoAxis : u8 {
-    AxisNone = 0,
-    AxisX = 1,
-    AxisY = 2,
-    AxisZ = 4,
-    AxisXY = AxisX | AxisY,
-    AxisXZ = AxisX | AxisZ,
-    AxisYZ = AxisY | AxisZ,
-    AxisAll = AxisX | AxisY | AxisZ, // screen-space translate / uniform scale / view-axis rotate
-};
-
 // Camera state the gizmo needs for projection and picking rays.
 struct GizmoView {
     ViewportCamera camera;
@@ -35,6 +22,7 @@ struct GizmoView {
     glm::vec2 size{1.0f};
 
     static GizmoView from(const ViewportCamera& cam, glm::vec2 sizePx);
+    [[nodiscard]] gizmo::Projection projection() const { return {viewProj, size}; }
     [[nodiscard]] Ray ray(QPointF pixel) const;
     // false when behind the camera
     bool project(glm::vec3 p, QPointF& out) const;
@@ -53,18 +41,27 @@ public:
     struct Delta {
         glm::vec3 translation{0.0f};
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f}; // world-space rotation about the pivot
-        glm::vec3 scale{1.0f};                       // multiplicative, in the gizmo's axes
+        glm::vec3 scale{1.0f};                       // multiplicative, along the target's local axes
         float angleDeg = 0.0f;
     };
 
     void setMode(GizmoMode m) { m_mode = m; }
     [[nodiscard]] GizmoMode mode() const { return m_mode; }
+    // Local: the gizmo follows the target's orientation (frameRotation of its world matrix); Scale is always local.
     void setSpace(GizmoSpace s) { m_space = s; }
     [[nodiscard]] GizmoSpace space() const { return m_space; }
     void setSnap(const Snap& s) { m_snap = s; }
     [[nodiscard]] const Snap& snap() const { return m_snap; }
     void setSizeScale(float s) { m_sizeScale = s; }
-    void setTarget(glm::vec3 pivot, glm::quat orientation);
+    // `targetOrientation` = the target's world orientation (used in Local space and for Scale). Ignored while dragging.
+    void setTarget(glm::vec3 pivot, glm::quat targetOrientation);
+    // Orientation of the drawn/dragged axes (frozen for the duration of a drag).
+    [[nodiscard]] glm::quat orientation() const;
+    [[nodiscard]] glm::vec3 pivot() const { return m_pivot; }
+    [[nodiscard]] gizmo::Frame frame(const GizmoView& view) const;
+    // Pivot and orientation at drag start (applyGizmoDelta rotates/scales about them).
+    [[nodiscard]] glm::vec3 dragPivot() const { return m_startPivot; }
+    [[nodiscard]] glm::quat dragOrientation() const { return m_dragOrient; }
     void setVisible(bool v) { m_visible = v; }
     [[nodiscard]] bool visible() const { return m_visible && m_mode != GizmoMode::Select; }
 
@@ -90,12 +87,13 @@ private:
     [[nodiscard]] glm::vec3 dragPoint(const GizmoView& view, QPointF mouse, bool& ok) const;
 
     GizmoMode m_mode = GizmoMode::Translate;
-    GizmoSpace m_space = GizmoSpace::World;
+    GizmoSpace m_space = GizmoSpace::Local;
     Snap m_snap;
     float m_sizeScale = 1.0f;
     bool m_visible = false;
     glm::vec3 m_pivot{0.0f};
-    glm::quat m_orient{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::quat m_localOrient{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::quat m_dragOrient{1.0f, 0.0f, 0.0f, 0.0f};
     GizmoAxis m_hover = AxisNone;
     // drag state
     GizmoAxis m_activeAxis = AxisNone;
