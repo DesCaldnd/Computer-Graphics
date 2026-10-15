@@ -1,0 +1,10 @@
+# Build: markdown -> HTML (+ headless Chrome/Edge/Chromium for the PDF, found automatically or via --browser).
+markdown>=3.4
+pygments>=2.14
+# Optional: TOC page numbers (second pass reads the PDF outline).
+pypdf>=4.0
+# Tests only.
+pytest>=7
+pypdfium2>=4.0
+# Optional: downscale/recode large screenshots (HTML stays small).
+pillow>=10
