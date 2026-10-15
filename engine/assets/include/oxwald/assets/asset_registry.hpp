@@ -62,7 +62,14 @@ public:
     struct Options {
         bool deleteOrphanMetas = true; // metas whose source vanished (and was not matched to a moved file)
         bool importOnDemand = true;    // record()/readArtifact() import stale assets
+        // false: the source tree is read-only (verification tools such as `oxshowcase_generate --check`): metas are
+        // never written or removed, identities of meta-less or re-identified sources live in memory only, and
+        // setSettings() fails. The import cache is still written.
+        bool writeMetas = true;
         std::chrono::milliseconds watchDebounce{100};
+        // > 0: startWatching() scans on a background thread at this interval and poll() only delivers changes
+        // (no directory walk on the caller's thread); 0: poll() scans synchronously.
+        std::chrono::milliseconds watchScanInterval{0};
         std::filesystem::path assetsDir = "Assets"; // source directory, relative to the project (or absolute)
     };
 

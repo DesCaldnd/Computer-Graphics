@@ -253,3 +253,114 @@ TEST(AssetRegistry, PassthroughImporters) {
     EXPECT_EQ(hm->info["width"], 64);
     EXPECT_EQ(reg.record(*reg.uuidForPath("font.ttf"))->type, AssetType::Font);
 }
+
+// A meta that exists but does not parse (mid-write by git or another process, or broken by hand) is never replaced by
+// a fresh random UUID: that would silently break every reference to the asset (the showcase guard.oxbt lost its
+// committed id this way).
+TEST(AssetRegistry, UnreadableMetaIsNeverReplaced) {
+    TempDir dir;
+    writeText(dir / "Assets/Scripts/main.lua", "print('hi')");
+    const fs::path metaPath = dir / "Assets/Scripts/main.lua.meta";
+    AssetRegistry reg(dir.path());
+    reg.scan();
+    const Uuid id = reg.uuidForPath("Scripts/main.lua").value_or(Uuid{});
+    ASSERT_TRUE(id.isValid());
+    const std::string good = readText(metaPath);
+    const std::string broken = good.substr(0, good.size() / 2); // a truncated, half-written meta
+    writeText(metaPath, broken);
+
+    const ScanResult r = reg.scan();
+    EXPECT_EQ(r.metasCreated, 0u);
+    EXPECT_EQ(r.removed, 0u) << "a known asset keeps its identity while its meta is unreadable";
+    EXPECT_EQ(reg.uuidForPath("Scripts/main.lua"), id);
+    EXPECT_EQ(readText(metaPath), broken) << "the meta file must be left alone";
+    {
+        AssetRegistry fresh(dir.path());
+        EXPECT_EQ(fresh.scan().metasCreated, 0u);
+        EXPECT_FALSE(fresh.uuidForPath("Scripts/main.lua")) << "skipped until its meta is readable";
+        EXPECT_EQ(readText(metaPath), broken);
+    }
+    writeText(metaPath, good); // the writer finished (or the user fixed it)
+    AssetRegistry again(dir.path());
+    again.scan();
+    EXPECT_EQ(again.uuidForPath("Scripts/main.lua"), id);
+}
+
+// A model that names its texture with a different letter case resolves the same file on a case-insensitive file
+// system: that is the known asset, not a copy that needs a new identity (its meta must not be rewritten).
+TEST(AssetRegistry, DifferentlySpelledPathToKnownFileKeepsItsUuid) {
+    TempDir dir;
+    const fs::path gltf = writeTestGltf(dir / "Assets/Models", "box");
+    std::string json = readText(gltf);
+    for (usize p = json.find("box_albedo.png"); p != std::string::npos; p = json.find("box_albedo.png"))
+        json.replace(p, 14, "BOX_Albedo.png");
+    writeText(gltf, json);
+    if (!fs::exists(dir / "Assets/Models/BOX_Albedo.png")) GTEST_SKIP() << "case-sensitive file system";
+    AssetRegistry reg(dir.path());
+    reg.scan();
+    const Uuid albedo = reg.uuidForPath("Models/box_albedo.png").value_or(Uuid{});
+    ASSERT_TRUE(albedo.isValid());
+    const Uuid model = *reg.uuidForPath("Models/box.gltf");
+    ASSERT_TRUE(reg.import(model));
+    EXPECT_EQ(reg.uuidForPath("Models/box_albedo.png"), albedo);
+    EXPECT_EQ(readMeta(dir / "Assets/Models/box_albedo.png.meta")->uuid, albedo);
+    const auto mat0 = reg.uuidForPath("Models/box.gltf#Material/0");
+    ASSERT_TRUE(mat0);
+    const auto deps = reg.dependencies(*mat0);
+    EXPECT_NE(std::find(deps.begin(), deps.end(), albedo), deps.end()) << "the material references the known texture";
+    AssetRegistry again(dir.path());
+    EXPECT_EQ(again.scan().duplicatesFixed, 0u);
+    EXPECT_EQ(again.uuidForPath("Models/box_albedo.png"), albedo);
+}
+
+// A registry without the importer for a file type (oxpack has no gameplay importers for .oxbt) must keep the meta
+// of such a file: the source is still there, so the meta is not an orphan (oxpack deleted AI/guard.oxbt.meta).
+TEST(AssetRegistry, MetaOfSourceWithoutImporterIsKept) {
+    TempDir dir;
+    writeText(dir / "Assets/AI/guard.oxbt", "{\"root\": {}}");
+    writeText(dir / "Assets/AI/guard.oxbt.meta",
+              "{\n  \"formatVersion\": 1,\n  \"uuid\": \"f0eadad5-9e1d-8949-9966-c395d546d9a1\",\n"
+              "  \"importer\": \"behavior_tree\",\n  \"importerVersion\": 1,\n  \"settings\": {}\n}\n");
+    writeText(dir / "Assets/Scripts/gone.lua", "print('gone')");
+    {
+        AssetRegistry writer(dir.path());
+        writer.scan();
+    }
+    ASSERT_TRUE(fs::exists(dir / "Assets/Scripts/gone.lua.meta"));
+    fs::remove(dir / "Assets/Scripts/gone.lua");
+    AssetRegistry reg(dir.path()); // default options: writeMetas and deleteOrphanMetas on
+    const ScanResult r = reg.scan();
+    EXPECT_EQ(r.found, 0u);
+    EXPECT_FALSE(reg.uuidForPath("AI/guard.oxbt")) << "no importer for .oxbt in this registry";
+    EXPECT_TRUE(fs::exists(dir / "Assets/AI/guard.oxbt.meta")) << "the source exists: its meta is not an orphan";
+    EXPECT_FALSE(fs::exists(dir / "Assets/Scripts/gone.lua.meta")) << "a real orphan meta is still deleted";
+}
+
+// writeMetas = false (oxshowcase_generate --check): the source tree stays untouched; a meta-less source gets an
+// in-memory identity that is stable across rescans.
+TEST(AssetRegistry, ReadOnlyRegistryNeverWritesMetas) {
+    TempDir dir;
+    writeText(dir / "Assets/Scripts/main.lua", "print('hi')");
+    writeText(dir / "Assets/Scripts/known.lua", "print('known')");
+    {
+        AssetRegistry writer(dir.path());
+        writer.scan();
+    }
+    fs::remove(dir / "Assets/Scripts/main.lua.meta");
+    const Uuid known = readMeta(dir / "Assets/Scripts/known.lua.meta")->uuid;
+    fs::copy_file(dir / "Assets/Scripts/known.lua.meta", dir / "Assets/Scripts/orphan.lua.meta"); // source missing
+    AssetRegistry::Options o;
+    o.writeMetas = false;
+    AssetRegistry reg(dir.path(), o);
+    const ScanResult r = reg.scan();
+    EXPECT_EQ(r.metasCreated, 1u);
+    const Uuid id = reg.uuidForPath("Scripts/main.lua").value_or(Uuid{});
+    EXPECT_TRUE(id.isValid());
+    EXPECT_EQ(reg.uuidForPath("Scripts/known.lua"), known);
+    EXPECT_FALSE(fs::exists(dir / "Assets/Scripts/main.lua.meta"));
+    EXPECT_TRUE(fs::exists(dir / "Assets/Scripts/orphan.lua.meta")) << "orphan metas are not deleted either";
+    reg.scan();
+    EXPECT_EQ(reg.uuidForPath("Scripts/main.lua"), id) << "stable in memory";
+    EXPECT_FALSE(reg.setSettings(known, {{"x", 1}}));
+    EXPECT_FALSE(fs::exists(dir / "Assets/Scripts/main.lua.meta"));
+}

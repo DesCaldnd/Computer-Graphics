@@ -9,6 +9,7 @@
 #include <fstream>
 #include <map>
 #include <queue>
+#include <thread>
 #include <tuple>
 
 namespace fs = std::filesystem;
@@ -45,6 +46,34 @@ u64 hashFile(const fs::path& p) {
 }
 
 u64 settingsHash(const nlohmann::ordered_json& settings) { return fnv1a64(settings.dump()); }
+
+// A meta that exists but does not parse is never replaced by a fresh one: it may be mid-write by another tool (git
+// checkout, an editor, another engine process sharing the project) or broken by hand, and a new random UUID would
+// silently break every reference to the asset. Short retries ride out writers; a still-broken meta is reported and
+// the source is left alone until the file is readable again.
+enum class MetaState { Missing, Ok, Unreadable };
+MetaState readMetaPatiently(const fs::path& metaPath, AssetMeta& out) {
+    std::error_code ec;
+    if (!fs::exists(metaPath, ec)) return MetaState::Missing;
+    for (int attempt = 0;; ++attempt) {
+        auto meta = readMeta(metaPath);
+        if (meta) {
+            out = std::move(*meta);
+            return MetaState::Ok;
+        }
+        if (!fs::exists(metaPath, ec)) return MetaState::Missing; // deleted meanwhile
+        if (attempt == 4) {
+            OX_LOG_ERROR("assets", "{} (left unchanged; fix or delete it to re-identify the asset)", meta.error().message);
+            return MetaState::Unreadable;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+Status storeMeta(const AssetRegistry::Options& options, const fs::path& metaPath, const AssetMeta& meta) {
+    if (!options.writeMetas) return {};
+    return writeMeta(metaPath, meta);
+}
 
 bool isHiddenComponent(const fs::path& rel) {
     for (const auto& part : rel) {
@@ -232,10 +261,15 @@ AssetRegistry::Entry* AssetRegistry::addSourceLocked(const fs::path& absPath, bo
     const fs::path metaPath = metaPathFor(absPath);
     AssetMeta meta;
     bool write = false;
-    if (auto existing = readMeta(metaPath)) {
-        meta = std::move(*existing);
-        if (m_entries.count(meta.uuid)) { // copied file + meta: new identity
-            meta.uuid = Uuid::generate();
+    const MetaState state = readMetaPatiently(metaPath, meta);
+    if (state == MetaState::Unreadable) return nullptr;
+    if (state == MetaState::Ok) {
+        if (Entry* known = findEntry(meta.uuid)) {
+            // The same file reached through a differently spelled path (case on Windows, a junction) is not a
+            // copy: keep its identity instead of rewriting its meta.
+            std::error_code ec;
+            if (fs::equivalent(m_assetsDir / known->info.path, absPath, ec)) return known;
+            meta.uuid = Uuid::generate(); // copied file + meta: new identity
             write = true;
         }
     } else {
@@ -250,7 +284,7 @@ AssetRegistry::Entry* AssetRegistry::addSourceLocked(const fs::path& absPath, bo
         meta.importer = std::string(importer->name());
         write = true;
     }
-    if (write && !writeMeta(metaPath, meta)) OX_LOG_ERROR("assets", "cannot write {}", metaPath.string());
+    if (write && !storeMeta(m_options, metaPath, meta)) OX_LOG_ERROR("assets", "cannot write {}", metaPath.string());
     auto entry = std::make_unique<Entry>();
     entry->info.uuid = meta.uuid;
     entry->info.type = importer->mainType();
@@ -276,6 +310,7 @@ ScanResult AssetRegistry::scan() {
             fs::path abs;
             std::string rel;
             std::optional<AssetMeta> meta;
+            bool unreadableMeta = false;
         };
         std::vector<Found> sources;
         std::vector<fs::path> metas;
@@ -312,6 +347,11 @@ ScanResult AssetRegistry::scan() {
             fs::path src = m;
             src.replace_extension();
             if (sourceSet.count(src)) continue;
+            // The source is still there, but no importer of this registry handles it (a tool such as oxpack
+            // registers only the built-in importers, not the gameplay ones for .oxbt / .oxanimctrl): not an
+            // orphan. Deleting its meta would give the asset a new UUID in the editor and break references.
+            std::error_code existsEc;
+            if (fs::is_regular_file(src, existsEc)) continue;
             if (auto meta = readMeta(m)) {
                 Orphan o{m, *meta, 0, false};
                 auto rec = detail::readFile(m_cacheDir / "imports" / (meta->uuid.toString() + ".json"));
@@ -326,9 +366,10 @@ ScanResult AssetRegistry::scan() {
         // Pass 1: read metas; detect duplicates (copied file + meta).
         std::unordered_map<Uuid, usize> owner;
         for (usize i = 0; i < sources.size(); ++i) {
-            auto meta = readMeta(metaPathFor(sources[i].abs));
-            if (!meta) continue;
-            sources[i].meta = std::move(*meta);
+            AssetMeta meta;
+            const MetaState state = readMetaPatiently(metaPathFor(sources[i].abs), meta);
+            if (state == MetaState::Ok) sources[i].meta = std::move(meta);
+            sources[i].unreadableMeta = state == MetaState::Unreadable;
         }
         // Keep the UUID for the file whose path matches the known/record path, re-identify the others.
         for (usize i = 0; i < sources.size(); ++i) {
@@ -343,23 +384,29 @@ ScanResult AssetRegistry::scan() {
             if (Entry* e = findEntry(id); e && e->info.path == sources[i].rel) std::swap(keep, other);
             owner[id] = keep;
             sources[other].meta->uuid = Uuid::generate();
-            (void)writeMeta(metaPathFor(sources[other].abs), *sources[other].meta);
+            (void)storeMeta(m_options, metaPathFor(sources[other].abs), *sources[other].meta);
             owner[sources[other].meta->uuid] = other;
             ++result.duplicatesFixed;
         }
         // Pass 2: meta-less sources: adopt an orphan meta with the same content (moved without its meta).
         for (auto& s : sources) {
-            if (s.meta) continue;
+            if (s.meta || s.unreadableMeta) continue;
             if (!orphans.empty()) {
                 const u64 h = hashFile(s.abs);
                 for (auto& o : orphans) {
                     if (o.used || o.sourceHash == 0 || o.sourceHash != h || owner.count(o.meta.uuid)) continue;
                     o.used = true;
                     s.meta = o.meta;
-                    (void)writeMeta(metaPathFor(s.abs), *s.meta);
+                    (void)storeMeta(m_options, metaPathFor(s.abs), *s.meta);
                     std::error_code rmEc;
-                    fs::remove(o.metaPath, rmEc);
+                    if (m_options.writeMetas) fs::remove(o.metaPath, rmEc);
                     break;
+                }
+            }
+            if (!s.meta && !m_options.writeMetas) {
+                // Read-only: a meta-less source keeps the in-memory identity it got in an earlier scan.
+                if (auto known = m_pathToUuid.find(s.rel); known != m_pathToUuid.end() && !owner.count(known->second)) {
+                    if (Entry* e = findEntry(known->second)) s.meta = e->meta;
                 }
             }
             if (!s.meta) {
@@ -369,13 +416,13 @@ ScanResult AssetRegistry::scan() {
                 meta.importer = std::string(importer->name());
                 meta.importerVersion = importer->version();
                 meta.settings = importer->defaultSettingsFor(s.abs);
-                (void)writeMeta(metaPathFor(s.abs), meta);
+                (void)storeMeta(m_options, metaPathFor(s.abs), meta);
                 s.meta = std::move(meta);
                 ++result.metasCreated;
             }
         }
         for (auto& o : orphans) {
-            if (o.used || !m_options.deleteOrphanMetas) continue;
+            if (o.used || !m_options.deleteOrphanMetas || !m_options.writeMetas) continue;
             std::error_code rmEc;
             fs::remove(o.metaPath, rmEc);
         }
@@ -385,9 +432,18 @@ ScanResult AssetRegistry::scan() {
         for (auto& [id, e] : m_entries) {
             if (!e->info.parent.isValid()) old[id] = std::move(e);
         }
+        // A source whose meta is unreadable keeps its previous identity (if it had one) until the meta is fixed.
+        for (auto& s : sources) {
+            if (!s.unreadableMeta) continue;
+            const auto known = m_pathToUuid.find(s.rel);
+            if (known == m_pathToUuid.end()) continue;
+            const auto it = old.find(known->second);
+            if (it != old.end() && !owner.count(known->second)) s.meta = it->second->meta;
+        }
         m_entries.clear();
         m_pathToUuid.clear();
         for (auto& s : sources) {
+            if (!s.meta) continue; // unreadable meta of a source never seen before: skipped until it is readable
             auto e = std::make_unique<Entry>();
             IAssetImporter* importer = m_importers.find(s.meta->importer);
             if (!importer) importer = m_importers.findForPath(s.abs);
@@ -477,7 +533,7 @@ std::optional<Uuid> AssetRegistry::resolveForImport(const fs::path& file, const 
         merged.merge_patch(hint);
         if (merged != e->meta.settings) {
             e->meta.settings = merged;
-            (void)writeMeta(metaPathFor(m_assetsDir / e->info.path), e->meta);
+            (void)storeMeta(m_options, metaPathFor(m_assetsDir / e->info.path), e->meta);
         }
     }
     return e->info.uuid;
@@ -502,6 +558,13 @@ Status AssetRegistry::importLocked(Entry& entry, bool force, std::vector<Uuid>* 
 
     ImportContext::Callbacks callbacks;
     callbacks.resolve = [this](const fs::path& p, const nlohmann::ordered_json& hint) { return resolveForImport(p, hint); };
+    // The registry mutex is recursive: importers may read (and import on demand) other assets' artifacts.
+    callbacks.readArtifact = [this](const Uuid& id) { return readArtifact(id); };
+    callbacks.sourceOf = [this](const Uuid& id) -> std::optional<std::pair<fs::path, nlohmann::ordered_json>> {
+        Entry* e = findEntry(id);
+        if (!e || e->info.parent.isValid()) return std::nullopt;
+        return std::make_pair(m_assetsDir / e->info.path, e->meta.settings);
+    };
     AssetMeta meta = entry.meta;
     meta.importerVersion = importer->version();
     ImportContext ctx(abs, entry.info.path, meta, callbacks);
@@ -632,6 +695,7 @@ Status AssetRegistry::setSettings(const Uuid& uuid, const nlohmann::ordered_json
         std::lock_guard lock(m_mutex);
         Entry* e = findEntry(uuid);
         if (!e || e->info.parent.isValid()) return makeError("unknown main asset {}", uuid.toString());
+        if (!m_options.writeMetas) return makeError("{}: the asset registry is read-only (writeMetas = false)", e->info.path);
         e->meta.settings.merge_patch(settings);
         if (auto st = writeMeta(metaPathFor(m_assetsDir / e->info.path), e->meta); !st) return st;
     }
@@ -781,6 +845,7 @@ void AssetRegistry::startWatching() {
         std::lock_guard l(m_changeMutex);
         m_pendingChanges.push_back(c.path);
     });
+    if (m_options.watchScanInterval.count() > 0) m_watcher->start(m_options.watchScanInterval);
 }
 
 void AssetRegistry::stopWatching() {
