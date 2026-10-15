@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The renderer needs a Vulkan 1.2 driver (descriptor indexing, BDA, timeline semaphores, dynamic rendering). -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x402000" android:required="true" />
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="0" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+
+    <!-- Tracy (port 8086), the remote console (27015) and ENet multiplayer; all reached through `adb forward`. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Oxwald Player"
+        android:appCategory="game"
+        android:isGame="true"
+        android:hasFragileUserData="false"
+        android:allowBackup="false"
+        android:theme="@style/Theme.Oxwald">
+
+        <!-- Perfetto / Android GPU Inspector / Snapdragon Profiler on release builds. -->
+        <profileable android:shell="true" />
+
+        <activity
+            android:name=".OxwaldActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:theme="@style/Theme.Oxwald">
+            <meta-data android:name="android.app.lib_name" android:value="oxwald_player" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

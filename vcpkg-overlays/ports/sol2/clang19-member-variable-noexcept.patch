@@ -1,0 +1,20 @@
+--- a/include/sol/function_types_stateless.hpp
++++ b/include/sol/function_types_stateless.hpp
+@@ -320,7 +320,7 @@
+ 		}
+ 
+ 		template <bool is_yielding, bool no_trampoline>
+-		static int call(lua_State* L) noexcept(std::is_nothrow_copy_assignable_v<T>) {
++		static int call(lua_State* L) noexcept(noexcept(real_call(L))) {
+ 			int nr;
+ 			if constexpr (no_trampoline) {
+ 				nr = real_call(L);
+@@ -360,7 +360,7 @@
+ 		}
+ 
+ 		template <bool is_yielding, bool no_trampoline>
+-		static int call(lua_State* L) noexcept(std::is_nothrow_copy_assignable_v<T>) {
++		static int call(lua_State* L) noexcept(noexcept(real_call(L))) {
+ 			int nr;
+ 			if constexpr (no_trampoline) {
+ 				nr = real_call(L);
