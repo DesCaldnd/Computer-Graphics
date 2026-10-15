@@ -88,6 +88,12 @@
       "title": "Сохранения",
       "scene": "project://Assets/Scenes/Stations/14_SaveGames.oxscene",
       "guide": "docs/guide/07-savegames.md"
+    },
+    {
+      "id": "destruction",
+      "title": "Разрушаемость",
+      "scene": "project://Assets/Scenes/Stations/15_Destruction.oxscene",
+      "guide": "docs/guide/34-destruction.md"
     }
   ]
 }

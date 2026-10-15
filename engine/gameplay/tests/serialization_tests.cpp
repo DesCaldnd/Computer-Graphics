@@ -102,6 +102,14 @@ void fillEverything(World& world, Entity e, Entity other) {
     pch.moveSpeed = 6.5f;
     pch.jumpAction = "Leap";
     pch.corrections = 5; // runtime
+    auto& de = e.add<DestructibleComponent>();
+    de.chunkCount = 20;
+    de.seed = 99;
+    de.interiorMaterial = Uuid::generate();
+    de.health = 42.f;
+    de.structural = true;
+    de.anchor = DestructionAnchor::Static;
+    de.breakSound = "Audio/crash.wav";
     (void)world;
 }
 
@@ -111,6 +119,7 @@ std::vector<const ComponentInfo*> gameplayComponents() {
         const std::string& cat = info->category;
         if (cat == "Physics" || cat == "Animation" || cat == "Splines" || cat == "Audio" || cat == "AI" ||
             cat == "Scripting" || cat == "Networking") {
+            if (!info->serializable) continue; // runtime-only (DestructionChunk)
             out.push_back(info);
         }
     }
@@ -122,7 +131,7 @@ std::vector<const ComponentInfo*> gameplayComponents() {
 TEST(GameplaySerialization, SceneRoundTripWithAllGameplayComponents) {
     registerGameplayTypes();
     const auto infos = gameplayComponents();
-    EXPECT_EQ(infos.size(), 21u);
+    EXPECT_EQ(infos.size(), 22u);
     World world;
     Entity other = world.create("Other");
     Entity e = world.create("Everything");

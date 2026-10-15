@@ -44,8 +44,7 @@ int run(int argc, char** argv) {
     assets::registerAssetTypes();
     registerProjectTypes();
 
-    Gen gen(project);
-    gen.checkOnly = check;
+    Gen gen(project, check);
     // Generated sources first (their metas get deterministic ids), then metas for everything else, then content
     // that references imported sub-assets.
     generateTextures(gen);
@@ -69,7 +68,8 @@ int run(int argc, char** argv) {
                             {"physics", buildPhysics},     {"animation", buildAnimation},
                             {"ai", buildAI},               {"splines", buildSplines},
                             {"audio", buildAudio},         {"network", buildNetwork},
-                            {"rtx", buildRtx},             {"saves", buildSaves}};
+                            {"rtx", buildRtx},             {"saves", buildSaves},
+                            {"destruction", buildDestruction}};
     for (const Build& b : builds) {
         if (!only.empty() && only != b.id) continue;
         b.fn(gen);

@@ -1,6 +1,6 @@
 # OxwaldShowcase
 
-Демонстрационный проект OxwaldEngine: хаб с порталами и 14 станций, каждая из которых показывает одну подсистему
+Демонстрационный проект OxwaldEngine: хаб с порталами и 15 станций, каждая из которых показывает одну подсистему
 движка — от теней и материалов до сети и сохранений. Проект играется в OxwaldPlayer, открывается в OxwaldEditor,
 а все сцены воспроизводимо собираются генератором через API движка.
 
@@ -38,7 +38,7 @@ open build/showcase/bin/OxwaldEditor.app --args --project samples/OxwaldShowcase
 | Ходьба, бег, прыжок | WASD, Shift, Space | левый стик, нажатие стика, A |
 | Камера, приближение | мышь, колесо | правый стик |
 | Действие | E | X |
-| Выстрел (станция «Физика») | ЛКМ | RT |
+| Выстрел (станции «Физика», «Разрушаемость») | ЛКМ | RT |
 | Меню / пауза | Esc | Start |
 | Быстрое сохранение / загрузка | F5 / F9 | — |
 | Инфо-панель станции | I | Back |
@@ -68,6 +68,7 @@ open build/showcase/bin/OxwaldEditor.app --args --project samples/OxwaldShowcase
 | 12 | Сеть | listen-сервер и бот-клиент через in-memory транспорт, интерполированные «призраки», статистика | `12_Network.oxscene`, `net_panel.lua`, `bot.lua`, `Source/net_demo.cpp` |
 | 13 | RTX и апскейлеры | RT-переключатели с причиной недоступности, апскейлеры, масштаб рендера, GPU-тайминги | `13_RTX.oxscene`, `rtx_panel.lua` |
 | 14 | Сохранения | точки сохранения, F5/F9, индикатор автосохранения, браузер слотов | `14_SaveGames.oxscene`, `save_point.lua`, `switch.lua`, `terminal.lua` |
+| 15 | Разрушаемость | фрактура Вороного, стена и башня с графом опор, балка рушится над сломанной колонной, ящики бьются от удара, бюджет обломков | `15_Destruction.oxscene`, `destruction_station.lua`, `Prefabs/Cannonball.oxprefab` |
 
 Все сцены лежат в `Assets/Scenes/` (станции — в `Assets/Scenes/Stations/`), скрипты — в `Assets/Scripts/`,
 интерфейс RmlUi — в `Assets/UI/` (`hud.rml`, `main_menu.rml`, `pause.rml`, `settings.rml`, `saves.rml`,
@@ -80,6 +81,7 @@ open build/showcase/bin/OxwaldEditor.app --args --project samples/OxwaldShowcase
 | ![](../../docs/guide/images/showcase/world.png) 6. Открытый мир | ![](../../docs/guide/images/showcase/physics.png) 7. Физика | ![](../../docs/guide/images/showcase/animation.png) 8. Анимация |
 | ![](../../docs/guide/images/showcase/ai.png) 9. ИИ | ![](../../docs/guide/images/showcase/splines.png) 10. Сплайны и корутины | ![](../../docs/guide/images/showcase/audio.png) 11. Звук |
 | ![](../../docs/guide/images/showcase/network.png) 12. Сеть | ![](../../docs/guide/images/showcase/rtx.png) 13. RTX и апскейлеры | ![](../../docs/guide/images/showcase/saves.png) 14. Сохранения |
+| ![](../../docs/guide/images/showcase/destruction.png) 15. Разрушаемость | | |
 
 Хаб в редакторе:
 
@@ -124,7 +126,8 @@ ctest --test-dir build/showcase -L showcase
 
 `Showcase.GeneratorCheck` (содержимое совпадает с генератором), `Showcase.Scene.*` (каждая сцена 120 кадров в
 headless-плеере без ошибок, Lua-ошибок и сообщений валидации), `Showcase.Tour` (экскурсия доходит до конца),
-`ShowcaseScripts.AllCompile`, `ShowcaseSaves.RoundTripInSaveStation` (сохранение и загрузка ящиков и ламп).
+`ShowcaseScripts.AllCompile`, `ShowcaseSaves.RoundTripInSaveStation` (сохранение и загрузка ящиков и ламп),
+`ShowcaseDestruction.StationDemoBreaksAndCollapses` (демо станции 15: колонна, балка, башня, стена, бюджет обломков).
 
 ## Ограничения
 

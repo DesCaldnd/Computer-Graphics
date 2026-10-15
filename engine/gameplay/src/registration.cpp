@@ -545,6 +545,62 @@ void registerNetworking(ComponentRegistry& reg) {
     reg.add<PredictedCharacterComponent>({.icon = "gamepad"});
 }
 
+void registerDestruction(ComponentRegistry& reg) {
+    OX_REFLECT_ENUM(DestructionAnchor, "DestructionAnchor")
+        .value("None", DestructionAnchor::None)
+        .value("Bottom", DestructionAnchor::Bottom)
+        .value("Static", DestructionAnchor::Static);
+    OX_REFLECT_TYPE(DestructibleComponent, "Destructible")
+        .attributes(Category{"Physics"}, Meta{"icon", "particles"},
+                    Tooltip{"Breaks into Voronoi chunks on damage or impact (Collider shape or sourceMesh)"})
+        .field("chunkCount", &DestructibleComponent::chunkCount, Range{1.0, 256.0}, Tooltip{"Number of Voronoi chunks"})
+        .field("seed", &DestructibleComponent::seed, Tooltip{"Fracture seed: same seed, same chunks"})
+        .field("sourceMesh", &DestructibleComponent::sourceMesh, attr::AssetRef{"Mesh"},
+               Tooltip{"Mesh to fracture (closed); empty = the Collider shape"})
+        .field("interiorMaterial", &DestructibleComponent::interiorMaterial, attr::AssetRef{"Material"},
+               Tooltip{"Material of the cut faces; empty = the outer material"})
+        .field("interiorUvScale", &DestructibleComponent::interiorUvScale, Range{0.0, 100.0}, Step{0.05})
+        .field("planarRatio", &DestructibleComponent::planarRatio, Range{0.0, 1.0}, Step{0.05},
+               Tooltip{"Thin objects (smallest/middle extent below this) break into prisms through their thickness; 0 = off"})
+        .field("health", &DestructibleComponent::health, Range{0.0, 1000000.0}, SaveGame{}, Replicated{},
+               Tooltip{"Breaks at <= 0"})
+        .field("damageThreshold", &DestructibleComponent::damageThreshold, Range{0.0, 1000000.0},
+               Tooltip{"Single hits below this damage are ignored"})
+        .field("impulseThreshold", &DestructibleComponent::impulseThreshold, Range{0.0, 1000000.0},
+               Tooltip{"Contact impulse (N*s) that breaks it at once; 0 = never from contacts"})
+        .field("impulseDamageScale", &DestructibleComponent::impulseDamageScale, Range{0.0, 1000.0}, Step{0.01},
+               Tooltip{"Damage per N*s of contact impulse below the threshold"})
+        .field("density", &DestructibleComponent::density, Range{0.0, 100000.0}, Tooltip{"kg/m^3 of chunks; 0 = Collider density"})
+        .field("impactImpulseScale", &DestructibleComponent::impactImpulseScale, Range{0.0, 10.0}, Step{0.05})
+        .field("spread", &DestructibleComponent::spread, Range{0.0, 4.0}, Step{0.05},
+               Tooltip{"Radial part of the push away from the hit"})
+        .field("debrisLifetime", &DestructibleComponent::debrisLifetime, Range{0.0, 3600.0},
+               Tooltip{"Seconds before a resting chunk fades out; 0 = forever"})
+        .field("fadeDuration", &DestructibleComponent::fadeDuration, Range{0.0, 60.0}, Step{0.1})
+        .field("maxActiveDebris", &DestructibleComponent::maxActiveDebris, Range{0.0, 4096.0},
+               Tooltip{"Moving chunks of this object; 0 = global budget only (destruction.MaxActiveDebris)"})
+        .field("debrisLayer", &DestructibleComponent::debrisLayer, Tooltip{"Collision layer of chunks; empty = Dynamic"})
+        .field("structural", &DestructibleComponent::structural,
+               Tooltip{"Chunks stay frozen until hit or disconnected from the anchors (static objects)"})
+        .field("anchor", &DestructibleComponent::anchor, Tooltip{"Which chunks hold the structure"})
+        .field("anchorTolerance", &DestructibleComponent::anchorTolerance, Range{0.0, 10.0}, Step{0.01})
+        .field("breakRadius", &DestructibleComponent::breakRadius, Range{0.0, 100.0}, Step{0.05},
+               Tooltip{"m: chunks knocked out around a hit; impulse falloff"})
+        .field("chunkImpulseThreshold", &DestructibleComponent::chunkImpulseThreshold, Range{0.0, 1000000.0},
+               Tooltip{"Contact impulse releasing a frozen chunk; 0 = impulseThreshold"})
+        .field("breakSound", &DestructibleComponent::breakSound, Tooltip{"Audio clip path played at the hit point"})
+        .field("broken", &DestructibleComponent::broken, SaveGame{}, Replicated{}, ReadOnly{});
+    reg.add<DestructibleComponent>({.icon = "particles"});
+
+    OX_REFLECT_TYPE(DestructionChunkComponent, "DestructionChunk")
+        .attributes(Category{"Physics"}, Meta{"icon", "cube"}, Tooltip{"Runtime chunk of a broken Destructible"})
+        .field("owner", &DestructionChunkComponent::owner, ReadOnly{})
+        .field("index", &DestructionChunkComponent::index, ReadOnly{})
+        .field("frozen", &DestructionChunkComponent::frozen, ReadOnly{})
+        .field("anchored", &DestructionChunkComponent::anchored, ReadOnly{});
+    reg.add<DestructionChunkComponent>({.icon = "cube", .removable = false, .serializable = false});
+}
+
 } // namespace
 
 void registerGameplayTypes() {
@@ -558,6 +614,7 @@ void registerGameplayTypes() {
     registerAI(reg);
     registerScripting(reg);
     registerNetworking(reg);
+    registerDestruction(reg);
 #if defined(OX_GAMEPLAY_HAS_WORLD)
     registerWorldGameplayTypes();
 #endif

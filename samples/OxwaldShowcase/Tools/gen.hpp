@@ -52,7 +52,8 @@ using FloatRanges = std::vector<std::pair<usize, usize>>;
 // Shared generator state: project paths, asset database, generated asset UUIDs.
 class Gen {
 public:
-    explicit Gen(fs::path project);
+    // checkOnly: nothing under the project is written (the registry keeps meta-less identities in memory).
+    explicit Gen(fs::path project, bool checkOnly = false);
     ~Gen();
 
     fs::path project;
@@ -189,6 +190,7 @@ void buildAudio(Gen& gen);
 void buildNetwork(Gen& gen);
 void buildRtx(Gen& gen);
 void buildSaves(Gen& gen);
+void buildDestruction(Gen& gen); // gen_station_destruction.cpp
 
 // Mannequin asset paths (gen_assets.cpp).
 inline constexpr const char* kMannequin = "Models/Mannequin.gltf";

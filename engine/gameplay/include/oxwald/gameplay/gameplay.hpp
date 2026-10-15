@@ -17,6 +17,7 @@
 #include <oxwald/gameplay/audio.hpp>
 #include <oxwald/gameplay/common.hpp>
 #include <oxwald/gameplay/coroutines.hpp>
+#include <oxwald/gameplay/destruction.hpp>
 #include <oxwald/gameplay/events.hpp>
 #include <oxwald/gameplay/net.hpp>
 #include <oxwald/gameplay/physics.hpp>
@@ -46,6 +47,7 @@ struct GameplayConfig {
     bool coroutines = true; // uses the CoroutineScheduler service when one is registered (async module)
     bool world = true;      // world module components/systems (OX_GAMEPLAY_HAS_WORLD builds only)
     bool prediction = true; // client-side prediction with input replay for PredictedCharacter entities
+    bool destruction = true; // DestructionRuntime (needs physics)
 
     // Services created when missing.
     physics::PhysicsWorldDesc physicsWorld;
@@ -73,6 +75,7 @@ inline constexpr std::string_view kPerception = "Gameplay.AI.Perception";
 inline constexpr std::string_view kBehaviorTrees = "Gameplay.AI.BehaviorTrees";
 inline constexpr std::string_view kNavigation = "Gameplay.AI.Navigation";
 inline constexpr std::string_view kPhysicsStep = "Gameplay.Physics.Step";
+inline constexpr std::string_view kDestruction = "Gameplay.Destruction";
 inline constexpr std::string_view kCoroutinesFixed = "Gameplay.Coroutines.Fixed";
 inline constexpr std::string_view kScriptUpdate = "Gameplay.Script.Update";
 inline constexpr std::string_view kSplineFollowers = "Gameplay.Spline.Followers";
@@ -91,7 +94,8 @@ namespace ox {
 void registerGameplayTypes();
 
 // Creates the missing services (PhysicsWorld, ScriptVM, EventBus) and the runtimes (PhysicsRuntime,
-// AnimationRuntime, SplineRuntime, AudioRuntime, AIRuntime, NetworkRuntime, ScriptRuntime, CoroutineRuntime) in
+// AnimationRuntime, SplineRuntime, AudioRuntime, AIRuntime, NetworkRuntime, ScriptRuntime, CoroutineRuntime,
+// DestructionRuntime) in
 // `services`, then adds the gameplay systems to `scheduler`. Call before scheduler.attach().
 void addGameplaySystems(SystemScheduler& scheduler, Services& services, const gameplay::GameplayConfig& config = {});
 

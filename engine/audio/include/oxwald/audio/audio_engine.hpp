@@ -44,6 +44,10 @@ public:
     void shutdown();
     [[nodiscard]] bool initialized() const;
     [[nodiscard]] bool offline() const;
+    // Stops / restarts the output device (mobile apps going to the background: Android AAudio streams must not
+    // keep running while paused). Voices keep their state. No-op in offline mode. Returns the new state.
+    bool setDeviceSuspended(bool suspended);
+    [[nodiscard]] bool deviceSuspended() const;
     [[nodiscard]] u32 sampleRate() const;
     [[nodiscard]] u32 channels() const;
 

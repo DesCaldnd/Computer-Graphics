@@ -26,8 +26,20 @@ set_target_properties(Jolt::Jolt PROPERTIES
 #   $<$<CONFIG:Debug,Release>:JPH_FLOATING_POINT_EXCEPTIONS_ENABLED>
 # so a RelWithDebInfo build would link the Release Jolt.lib without that define and fail VerifyJoltVersionID().
 # Give RelWithDebInfo/MinSizeRel every definition the Release configuration gets.
+#
+# Release-only triplets (vcpkg-overlays/triplets/{x64,arm64}-android.cmake: VCPKG_BUILD_TYPE release) install no debug
+# libJolt.a. A Debug consumer (tools/android/build.ps1 -NativeConfig Debug) then links the release library, so it must
+# also be compiled with the Release definitions (NDEBUG changes JPH_IF_DEBUG members of Jolt classes): map Debug to
+# Release as well. With a debug Jolt available (x64-windows) Debug keeps its own library and definitions.
+set(_ox_jolt_release_like "Release,RelWithDebInfo,MinSizeRel")
+get_target_property(_ox_jolt_configs Jolt::Jolt IMPORTED_CONFIGURATIONS)
+if(NOT "DEBUG" IN_LIST _ox_jolt_configs)
+    set_target_properties(Jolt::Jolt PROPERTIES MAP_IMPORTED_CONFIG_DEBUG "Release")
+    string(APPEND _ox_jolt_release_like ",Debug")
+    message(STATUS "Oxwald: Jolt has no Debug configuration: Debug builds use the Release libJolt and its definitions")
+endif()
 get_target_property(_ox_jolt_defs Jolt::Jolt INTERFACE_COMPILE_DEFINITIONS)
 if(_ox_jolt_defs AND NOT _ox_jolt_defs MATCHES "RelWithDebInfo")
-    string(REGEX REPLACE "([:,])Release([,>])" "\\1Release,RelWithDebInfo,MinSizeRel\\2" _ox_jolt_defs "${_ox_jolt_defs}")
+    string(REGEX REPLACE "([:,])Release([,>])" "\\1${_ox_jolt_release_like}\\2" _ox_jolt_defs "${_ox_jolt_defs}")
     set_property(TARGET Jolt::Jolt PROPERTY INTERFACE_COMPILE_DEFINITIONS "${_ox_jolt_defs}")
 endif()

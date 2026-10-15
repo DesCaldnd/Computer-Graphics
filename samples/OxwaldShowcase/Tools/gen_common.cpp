@@ -93,6 +93,12 @@ const std::vector<Station>& stations() {
          "Состояние ящиков и переключателей возвращается после загрузки.",
          "[F5] — быстрое сохранение · [F9] — загрузка · [E] у терминала — слоты", "docs/guide/07-savegames.md",
          {0.9f, 0.9f, 0.9f}},
+        {"destruction", "15_Destruction", "Разрушаемость",
+         "Объекты заранее раскалываются на ячейки Вороного. Стена и башня держатся за опоры через граф связей: "
+         "то, что теряет связь с основанием, обрушивается. Балка крошится над сломанной колонной, ящики бьются от "
+         "удара, обломки гаснут по бюджету.",
+         "[ЛКМ] или [E] — ядро · [Q] — взрыв · [G] — граф опор · [T] — демо · [R] — заново",
+         "docs/guide/34-destruction.md", {1.0f, 0.42f, 0.5f}},
     };
     return s;
 }
@@ -107,9 +113,12 @@ const Station& station(std::string_view id) {
 // ---------------------------------------------------------------------------------------------------------------
 // Gen
 
-Gen::Gen(fs::path projectDir) : project(std::move(projectDir)), assets(project / "Assets") {
+Gen::Gen(fs::path projectDir, bool check) : project(std::move(projectDir)), assets(project / "Assets"), checkOnly(check) {
     assets::AssetRegistry::Options o;
     o.deleteOrphanMetas = false; // never delete what a human may have added
+    // --check writes nothing: a scan would otherwise give every meta-less source a meta with a random UUID (instead
+    // of the deterministic id the generator writes), which a later run then keeps.
+    o.writeMetas = !check;
     registry = std::make_unique<assets::AssetRegistry>(project, o);
     gameplay::registerGameplayImporters(registry->importers());
 }

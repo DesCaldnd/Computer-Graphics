@@ -476,6 +476,23 @@ void generatePrefabs(Gen& gen) {
         bu.halfExtents = glm::vec3(0.5f);
         writePrefab(gen, "FloatingCrate", w, root);
     }
+    // Cannonball for the destruction station (spawned by destruction_station.lua with an initial velocity).
+    {
+        World w;
+        Entity root = w.create("Cannonball");
+        root.setScale(glm::vec3(0.5f));
+        auto& mr = root.add<MeshRendererComponent>();
+        mr.mesh = render::primitiveUuid(Primitive::Sphere);
+        mr.materials = {gen.mat("DarkMetal")};
+        auto& rb = root.add<gameplay::RigidBodyComponent>();
+        rb.mass = 40.0f;
+        rb.ccd = true;
+        rb.linearDamping = 0.0f;
+        auto& c = root.add<gameplay::ColliderComponent>();
+        c.type = gameplay::ColliderType::Sphere;
+        c.radius = 0.5f;
+        writePrefab(gen, "Cannonball", w, root);
+    }
     OX_LOG_INFO("generate", "prefabs done");
 }
 

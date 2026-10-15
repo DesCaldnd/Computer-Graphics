@@ -32,6 +32,10 @@ foreach(host OxwaldPlayer OxwaldEditor)
     endif()
 endforeach()
 
+if(ANDROID) # the player links the game module; generator and tests are host tools
+    return()
+endif()
+
 # ---- scene generator ----------------------------------------------------------------------------------------
 file(GLOB _gen_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Tools/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Tools/*.hpp)
 add_executable(oxshowcase_generate ${_gen_srcs})

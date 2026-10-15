@@ -427,6 +427,20 @@ void generateAudio(Gen& gen) {
         lowpass(a.s, 900.0f, a.rate);
         writeWav(gen, "Audio/train_loop.wav", a, 0.6f);
     }
+    // Crumble (destruction station): low thump + a decaying gravel rattle of random grains. Generated last so the
+    // shared noise sequence of the clips above stays the same.
+    {
+        Synth a(1.1f);
+        f32 grain = 0.0f;
+        for (usize i = 0; i < a.s.size(); ++i) {
+            const f32 t = a.t(i);
+            if (white() > 0.995f - 0.02f * std::exp(-t * 3.0f)) grain = 1.0f;
+            grain *= 0.993f;
+            a.s[i] = std::sin(2 * kPi * 52.0f * t) * std::exp(-t * 9.0f) * 1.2f + white() * (0.35f * std::exp(-t * 4.0f) + grain * 0.6f);
+        }
+        lowpass(a.s, 3200.0f, a.rate);
+        writeWav(gen, "Audio/crumble.wav", a, 0.85f);
+    }
     OX_LOG_INFO("generate", "audio done");
 }
 

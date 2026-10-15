@@ -49,7 +49,9 @@ Status ShowcaseModule::init(Engine& engine, Services& services) {
 
     m_vm = services.tryGet<script::ScriptVM>();
     if (m_vm) {
-        if (engine.project()) m_vm->addSearchRoot(engine.project()->root() / "Assets" / "Scripts");
+        // Pak-only cooked builds (Android) have no project directory: the scripts are read through project://.
+        m_vm->addSearchRoot(engine.project() ? engine.project()->root() / "Assets" / "Scripts"
+                                             : std::filesystem::path("project://Assets/Scripts"));
         bindShowcaseLua(*this, *m_vm);
     }
     m_net = std::make_unique<NetDemo>(*this);

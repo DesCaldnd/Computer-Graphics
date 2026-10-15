@@ -75,6 +75,7 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
     AIRuntime* aiRt = nullptr;
     NetworkRuntime* netRt = nullptr;
     ScriptRuntime* scriptRt = nullptr;
+    DestructionRuntime* destructionRt = nullptr;
 #if defined(OX_GAMEPLAY_HAS_ASYNC)
     CoroutineRuntime* coRt = nullptr;
 #endif
@@ -97,6 +98,11 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
         scriptRt->bindRuntimes(services);
     }
 
+    if (config.destruction && physicsRt) {
+        destructionRt = &ensureService<DestructionRuntime>(services);
+        if (scriptRt) bindDestructionLua(*scriptRt, *destructionRt);
+    }
+
     if (config.addTransformSystem && !scheduler.find("Transform")) scheduler.emplace<TransformSystem>();
 
     // One lifecycle system attaches/detaches every runtime in dependency order and applies edit <-> play
@@ -109,6 +115,7 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
             if (state->update(playing) == 0) return;
             if (playing) {
                 if (physicsRt) physicsRt->syncPlayState(true);
+                if (destructionRt) destructionRt->syncPlayState(true);
                 if (splineRt) splineRt->syncPlayState(true);
                 if (audioRt) audioRt->syncPlayState(true);
                 if (aiRt) aiRt->syncPlayState(true);
@@ -124,12 +131,14 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
                 if (aiRt) aiRt->syncPlayState(false);
                 if (audioRt) audioRt->syncPlayState(false);
                 if (splineRt) splineRt->syncPlayState(false);
+                if (destructionRt) destructionRt->syncPlayState(false);
                 if (physicsRt) physicsRt->syncPlayState(false);
             }
         },
         [=](World& w, Services& s) {
             state->reset();
             if (physicsRt) physicsRt->attach(w, s);
+            if (destructionRt) destructionRt->attach(w, s);
             if (animRt) animRt->attach(w, s);
             if (splineRt) splineRt->attach(w, s);
             if (audioRt) audioRt->attach(w, s);
@@ -150,6 +159,7 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
             if (audioRt) audioRt->detach();
             if (splineRt) splineRt->detach();
             if (animRt) animRt->detach();
+            if (destructionRt) destructionRt->detach();
             if (physicsRt) physicsRt->detach();
             state->reset();
         });
@@ -237,6 +247,10 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
         add(scheduler, systems::kNavigation, SystemPhase::FixedUpdate, -50, true, [=](SystemContext& c) { aiRt->updateNavigation(c.dt); });
     }
     if (physicsRt) add(scheduler, systems::kPhysicsStep, SystemPhase::FixedUpdate, 0, true, [=](SystemContext& c) { physicsRt->fixedStep(c.dt); });
+    // After the step: contacts of this step -> damage/breaks; chunk bodies are created by the next step.
+    if (destructionRt) {
+        add(scheduler, systems::kDestruction, SystemPhase::FixedUpdate, 5, true, [=](SystemContext& c) { destructionRt->fixedUpdate(c.dt); });
+    }
 #if defined(OX_GAMEPLAY_HAS_ASYNC)
     if (coRt && config.tickCoroutines) {
         add(scheduler, systems::kCoroutinesFixed, SystemPhase::FixedUpdate, 10, false, [=](SystemContext& c) { coRt->fixedTick(c.dt); });
@@ -268,6 +282,7 @@ void addGameplaySystems(SystemScheduler& scheduler, Services& services, const Ga
         auto* draw = c.services.tryGet<DebugDraw>();
         if (!draw) return;
         if (physicsRt) physicsRt->drawDebug(*draw, c.playing);
+        if (destructionRt) destructionRt->drawDebug(*draw);
         if (splineRt) splineRt->drawDebug(*draw, c.playing);
         if (aiRt) aiRt->drawDebug(*draw, c.playing);
         if (animRt) animRt->drawDebug(*draw);

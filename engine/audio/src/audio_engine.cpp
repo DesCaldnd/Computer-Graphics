@@ -261,6 +261,21 @@ void AudioEngine::shutdown() {
 
 bool AudioEngine::initialized() const { return m_impl != nullptr; }
 bool AudioEngine::offline() const { return m_impl && m_impl->config.offline; }
+
+bool AudioEngine::setDeviceSuspended(bool suspended) {
+    if (!m_impl || m_impl->config.offline || !m_impl->engineInit) return false;
+    if (suspended == m_impl->deviceSuspended) return suspended;
+    const ma_result r = suspended ? ma_engine_stop(&m_impl->engine) : ma_engine_start(&m_impl->engine);
+    if (r != MA_SUCCESS) {
+        OX_LOG_WARN("audio", "{} the audio device failed ({})", suspended ? "stopping" : "starting", int(r));
+        return m_impl->deviceSuspended;
+    }
+    m_impl->deviceSuspended = suspended;
+    OX_LOG_INFO("audio", "audio device {}", suspended ? "suspended" : "resumed");
+    return suspended;
+}
+
+bool AudioEngine::deviceSuspended() const { return m_impl && m_impl->deviceSuspended; }
 u32 AudioEngine::sampleRate() const { return m_impl ? m_impl->config.sampleRate : 0; }
 u32 AudioEngine::channels() const { return m_impl ? m_impl->config.channels : 0; }
 

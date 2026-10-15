@@ -1,0 +1,20 @@
+{
+  "formatVersion": 1,
+  "uuid": "c0858c17-801d-83ef-8198-17cc704140fd",
+  "importer": "material",
+  "importerVersion": 2,
+  "settings": {
+    "neuralCompression": "Off",
+    "neuralPreset": "Medium",
+    "neuralTargetBitsPerTexel": 0.0,
+    "neuralLatentStride": 4,
+    "neuralFeatures0": 8,
+    "neuralFeatures1": 8,
+    "neuralLatentFormat": "Q4",
+    "neuralHidden": 64,
+    "neuralSteps": 0,
+    "neuralFallbackSize": 128,
+    "neuralMaxSize": 0,
+    "neuralSeed": 1
+  }
+}

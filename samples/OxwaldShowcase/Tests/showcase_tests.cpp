@@ -1,6 +1,9 @@
-// OxwaldShowcase: Lua scripts compile; the save station survives a save/load round trip in a headless engine.
+// OxwaldShowcase: Lua scripts compile; the save station survives a save/load round trip in a headless engine; the
+// destruction station demo breaks, collapses and stays within the debris budget.
 #include "showcase.hpp"
 
+#include <oxwald/core/cvar.hpp>
+#include <oxwald/gameplay/destruction.hpp>
 #include <oxwald/render/runtime_renderer.hpp>
 #include <oxwald/runtime/runtime.hpp>
 #include <oxwald/script/script_vm.hpp>
@@ -112,5 +115,48 @@ TEST(ShowcaseSaves, RoundTripInSaveStation) {
     bool listed = false;
     for (const SaveSlotInfo& slot : s.engine.saves().listSlots()) listed |= slot.header.slot == "roundtrip";
     EXPECT_TRUE(listed);
+    EXPECT_EQ(s.scriptErrors(), 0u);
+}
+
+// Destruction station: the scripted demo (photo mode) breaks a column -> the beam crumbles above it (Static
+// anchors), a blast at the tower's foot collapses it, a shot holes the wall; chunks are rendered and the moving
+// debris stays within the budget.
+TEST(ShowcaseDestruction, StationDemoBreaksAndCollapses) {
+    const fs::path user = fs::temp_directory_path() / "oxshowcase_tests_destruction";
+    fs::remove_all(user);
+    ShowcaseEngine s("project://Assets/Scenes/Stations/15_Destruction.oxscene", user);
+    ASSERT_TRUE(s.status) << s.status.error().message;
+    auto* rt = s.engine.services().tryGet<gameplay::DestructionRuntime>();
+    ASSERT_NE(rt, nullptr);
+    u32 fractured = 0, collapsed = 0;
+    ScopedConnection c = rt->onDestruction.connect([&](const gameplay::DestructionEvent& ev) {
+        if (ev.type == gameplay::DestructionEvent::Type::Fractured) ++fractured;
+        if (ev.type == gameplay::DestructionEvent::Type::Collapsed) ++collapsed;
+    });
+    s.run(300); // demo: 0.6 s column, 1.3 s tower blast, 2.2 s wall, 3.0 s crates
+
+    World& w = s.engine.world();
+    const Entity column = w.findByName("Column.L");
+    const Entity beam = w.findByName("Beam");
+    const Entity tower = w.findByName("Tower");
+    const Entity wall = w.findByName("Wall");
+    ASSERT_TRUE(column && beam && tower && wall);
+    EXPECT_TRUE(rt->isBroken(column));
+    EXPECT_TRUE(rt->isBroken(beam)) << "the beam lost the column under it";
+    EXPECT_TRUE(rt->isBroken(tower));
+    EXPECT_TRUE(rt->isBroken(wall));
+    EXPECT_GE(fractured, 4u);
+    EXPECT_GE(collapsed, 1u);
+    EXPECT_GT(rt->frozenChunkCount(beam), 0u) << "the end over the right column stays";
+    EXPECT_GT(rt->frozenChunkCount(wall), 0u);
+    EXPECT_LT(rt->frozenChunkCount(tower), 10u) << "the shaft above the blast collapsed";
+    u32 chunksWithMesh = 0;
+    for (auto [e, chunk, mr] : w.view<gameplay::DestructionChunkComponent, MeshRendererComponent>().each()) {
+        (void)e;
+        (void)chunk;
+        chunksWithMesh += mr.mesh.isValid() ? 1u : 0u;
+    }
+    EXPECT_GT(chunksWithMesh, 50u);
+    EXPECT_LE(rt->activeDebrisCount(), u32(std::stoi(CVarRegistry::instance().find("destruction.MaxActiveDebris")->toString())));
     EXPECT_EQ(s.scriptErrors(), 0u);
 }

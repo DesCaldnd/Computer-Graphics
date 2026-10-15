@@ -130,6 +130,7 @@ struct EngineImpl {
     AudioEngineConfig config;
     ma_engine engine{};
     bool engineInit = false;
+    bool deviceSuspended = false; // setDeviceSuspended(true): ma_engine_stop (mobile background)
 
     std::unordered_map<u32, std::unique_ptr<SoundData>> sounds;
     u32 nextSoundId = 1;
